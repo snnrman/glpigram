@@ -94,7 +94,21 @@ def _attach_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=texts.BTN_ATTACH_DONE, callback_data="nt:attach_done"),
-                InlineKeyboardButton(text=texts.BTN_ATTACH_CANCEL, callback_data="nt:cancel"),
+                InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:attach_cancel"),
+            ]
+        ]
+    )
+
+
+def _attach_cancel_keyboard() -> InlineKeyboardMarkup:
+    """Confirm aborting the whole ticket from the attachments step."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=texts.BTN_ATTACH_CANCEL_YES, callback_data="nt:cancel"),
+                InlineKeyboardButton(
+                    text=texts.BTN_ATTACH_CANCEL_NO, callback_data="nt:attach_back"
+                ),
             ]
         ]
     )
@@ -274,6 +288,20 @@ def build_new_ticket_router(
     @router.callback_query(NewTicket.attaching, F.data == "nt:attach_done")
     async def on_attach_done(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.message.edit_text(await _confirm_text(state), reply_markup=_confirm_keyboard())
+        await cb.answer()
+
+    @router.callback_query(NewTicket.attaching, F.data == "nt:attach_cancel")
+    async def on_attach_cancel(cb: CallbackQuery) -> None:
+        # Cancelling the whole ticket is destructive -> confirm first. Files and
+        # state are kept until the user actually confirms.
+        await cb.message.edit_text(
+            texts.ATTACH_CANCEL_CONFIRM, reply_markup=_attach_cancel_keyboard()
+        )
+        await cb.answer()
+
+    @router.callback_query(NewTicket.attaching, F.data == "nt:attach_back")
+    async def on_attach_back(cb: CallbackQuery) -> None:
+        await cb.message.edit_text(texts.NEW_ATTACH_PROMPT, reply_markup=_attach_keyboard())
         await cb.answer()
 
     @router.callback_query(NewTicket.confirming, F.data == "nt:confirm")
