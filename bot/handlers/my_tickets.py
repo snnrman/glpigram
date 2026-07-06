@@ -17,6 +17,9 @@ advance that ticket's followup cursor past the new followup — see the note in
 from __future__ import annotations
 
 import logging
+import math
+import time
+from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -29,6 +32,7 @@ from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
     OPEN_TICKET_STATUSES,
     TICKET_STATUS_CLOSED,
+    TICKET_STATUS_NEW,
     GlpiClient,
     GlpiError,
 )
@@ -57,16 +61,36 @@ def _list_keyboard(summaries: list[TicketSummary]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _detail_keyboard(ticket_id: int, *, closable: bool) -> InlineKeyboardMarkup:
+def _detail_keyboard(ticket_id: int, *, closable: bool, remindable: bool) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=texts.BTN_MYT_COMMENT, callback_data=f"mt:comment:{ticket_id}")]
     ]
+    if remindable:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_MYT_REMIND, callback_data=f"mt:remind:{ticket_id}"
+                )
+            ]
+        )
     if closable:
         rows.append(
             [InlineKeyboardButton(text=texts.BTN_MYT_CLOSE, callback_data=f"mt:close:{ticket_id}")]
         )
     rows.append([InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data="mt:list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _hours_since(dt_str: str | None) -> int | None:
+    """Whole hours since a GLPI 'YYYY-MM-DD HH:MM:SS' timestamp (server = bot tz)."""
+    if not dt_str:
+        return None
+    try:
+        created = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    delta = time.time() - created.timestamp()
+    return max(0, int(delta // 3600))
 
 
 def _close_prompt_keyboard() -> InlineKeyboardMarkup:
@@ -87,6 +111,7 @@ def build_my_tickets_router(
     *,
     tech_group_chat_id: int | None = None,
     ticket_front_base: str | None = None,
+    remind_cooldown_hours: int = 4,
 ) -> Router:
     router = Router(name="my_tickets")
 
@@ -96,11 +121,11 @@ def build_my_tickets_router(
             return texts.MY_TICKETS_EMPTY, None
         return texts.MY_TICKETS_HEADER, _list_keyboard(summaries)
 
-    async def _render_detail(ticket_id: int) -> tuple[str, bool]:
-        """Return (rendered detail text, whether the requester may close it)."""
+    async def _render_detail(ticket_id: int) -> tuple[str, bool, bool]:
+        """Return (detail text, closable, remindable) for the requester's view."""
         ticket = await client.get_ticket(ticket_id)
         if ticket is None:
-            return texts.GLPI_ERROR, False
+            return texts.GLPI_ERROR, False, False
         assignees = await client.get_ticket_assignees(ticket_id)
         followups = await client.list_followups(ticket_id)
         # Last N public followups, chronological, with resolved author names.
@@ -119,7 +144,8 @@ def build_my_tickets_router(
             assignee=", ".join(assignees) if assignees else None,
             followups=lines,
         )
-        return text, ticket.status in OPEN_TICKET_STATUSES
+        # Remind only while New (no technician has taken it yet).
+        return text, ticket.status in OPEN_TICKET_STATUSES, ticket.status == TICKET_STATUS_NEW
 
     async def _author_name(user_id: int, cache: dict[int, str]) -> str | None:
         if not user_id:
@@ -170,13 +196,13 @@ def build_my_tickets_router(
     async def on_open(cb: CallbackQuery) -> None:
         ticket_id = int(cb.data.split(":")[2])
         try:
-            text, closable = await _render_detail(ticket_id)
+            text, closable, remindable = await _render_detail(ticket_id)
         except GlpiError as exc:
             log.warning("my_tickets_detail_failed id=%s error=%s", ticket_id, exc)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
         await cb.message.edit_text(
-            text, reply_markup=_detail_keyboard(ticket_id, closable=closable)
+            text, reply_markup=_detail_keyboard(ticket_id, closable=closable, remindable=remindable)
         )
         await cb.answer()
 
@@ -242,11 +268,13 @@ def build_my_tickets_router(
 
     async def _resend_detail(message: Message, ticket_id: int) -> None:
         try:
-            text, closable = await _render_detail(ticket_id)
+            text, closable, remindable = await _render_detail(ticket_id)
         except GlpiError as exc:
             log.warning("my_tickets_detail_failed id=%s error=%s", ticket_id, exc)
             return
-        await message.answer(text, reply_markup=_detail_keyboard(ticket_id, closable=closable))
+        await message.answer(
+            text, reply_markup=_detail_keyboard(ticket_id, closable=closable, remindable=remindable)
+        )
 
     @router.message(MyTickets.commenting)
     async def on_comment_not_text(message: Message) -> None:
@@ -322,6 +350,36 @@ def build_my_tickets_router(
     @router.message(MyTickets.closing)
     async def on_close_not_text(message: Message) -> None:
         await message.answer(texts.MYT_CLOSE_PROMPT, reply_markup=_close_prompt_keyboard())
+
+    # -- remind about a ticket --------------------------------------------
+    @router.callback_query(F.data.startswith("mt:remind:"))
+    async def on_remind(cb: CallbackQuery, bot: Bot) -> None:
+        ticket_id = int(cb.data.split(":")[2])
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError as exc:
+            log.warning("my_tickets_remind_lookup_failed id=%s error=%s", ticket_id, exc)
+            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            return
+        # A tech may have taken it since the detail was opened -> stale button.
+        if ticket is None or ticket.status != TICKET_STATUS_NEW:
+            await cb.answer(texts.MYT_REMIND_NOT_NEW, show_alert=True)
+            return
+
+        now = int(time.time())
+        cooldown = remind_cooldown_hours * 3600
+        last = await repo.get_last_remind(ticket_id)
+        if last is not None and now - last < cooldown:
+            hours_left = max(1, math.ceil((cooldown - (now - last)) / 3600))
+            await cb.answer(texts.myt_remind_cooldown(hours_left), show_alert=True)
+            return
+
+        if tech_group_chat_id is not None:
+            await notify.notify_reminder(
+                bot, tech_group_chat_id, ticket_id, ticket.name, _hours_since(ticket.date_creation)
+            )
+        await repo.set_last_remind(ticket_id, now)
+        await cb.answer(texts.MYT_REMIND_SENT)
 
     @router.message(StateFilter(MyTickets), Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext) -> None:

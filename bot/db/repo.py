@@ -221,3 +221,21 @@ class Repo:
             (key, value),
         )
         await self._conn.commit()
+
+    # -- reminders (feature 3) --------------------------------------------
+    async def get_last_remind(self, ticket_id: int) -> int | None:
+        async with self._conn.execute(
+            "SELECT last_remind_at FROM ticket_reminders WHERE ticket_id = ?", (ticket_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["last_remind_at"] if row else None
+
+    async def set_last_remind(self, ticket_id: int, when: int) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO ticket_reminders (ticket_id, last_remind_at) VALUES (?, ?)
+            ON CONFLICT(ticket_id) DO UPDATE SET last_remind_at = excluded.last_remind_at
+            """,
+            (ticket_id, when),
+        )
+        await self._conn.commit()

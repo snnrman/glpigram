@@ -72,6 +72,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         repo,
         tech_group_chat_id=settings.tech_group_chat_id,
         ticket_front_base=settings.glpi_front_base,
+        remind_cooldown_hours=settings.remind_cooldown_hours,
     )
     business = build_new_ticket_router(
         client, category_cache, repo, ticket_front_base=settings.glpi_front_base

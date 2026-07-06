@@ -44,6 +44,12 @@ class Settings(BaseSettings):
         description="GLPI polling interval in seconds (new tickets, status, followups).",
     )
 
+    # --- Requester "remind" button (feature 3) ---
+    remind_cooldown_hours: int = Field(
+        default=4,
+        description="Min hours between a requester's reminders about the same ticket.",
+    )
+
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(
         ...,

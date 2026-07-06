@@ -300,12 +300,25 @@ MYT_UNASSIGNED = "не назначен"
 
 BTN_MYT_COMMENT = "💬 Добавить комментарий"
 BTN_MYT_CLOSE = "✅ Закрыть заявку"
+BTN_MYT_REMIND = "🔔 Напомнить о себе"
 BTN_MYT_BACK = "⬅️ К списку"
 # On its own row in the close prompt (full width) — length is not a concern.
 BTN_MYT_CLOSE_NO_COMMENT = "Закрыть без комментария"
 
 MYT_CLOSE_PROMPT = "Напишите причину закрытия или закройте без комментария."
 MYT_CLOSE_DONE = "✅ Заявка закрыта."
+MYT_REMIND_SENT = "🔔 Напоминание отправлено."
+# Toast when the ticket was taken between opening the detail and tapping remind.
+MYT_REMIND_NOT_NEW = "Заявка уже в работе — напоминание не требуется."
+
+
+def myt_remind_cooldown(hours_left: int) -> str:
+    return f"Напоминание уже отправлено. Повторно можно через {hours_left} ч."
+
+
+def notify_reminder(*, ticket_id: int, title: str, hours_ago: int | None) -> str:
+    age = f" (создана {hours_ago} ч назад)" if hours_ago is not None else ""
+    return f"🔔 <b>Заявитель напоминает о заявке №{ticket_id}:</b>\n{html.escape(title)}{age}"
 
 
 def close_followup_body(name: str, reason: str) -> str:

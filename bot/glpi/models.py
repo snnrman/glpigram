@@ -33,6 +33,7 @@ class Ticket:
     status: int
     urgency: int
     itilcategories_id: int | None = None
+    date_creation: str | None = None  # GLPI "YYYY-MM-DD HH:MM:SS" (server tz)
 
     @classmethod
     def from_api(cls, raw: dict) -> Ticket:
@@ -44,6 +45,7 @@ class Ticket:
             status=int(raw.get("status", 0) or 0),
             urgency=int(raw.get("urgency", 0) or 0),
             itilcategories_id=int(cat) if cat else None,
+            date_creation=raw.get("date_creation") or raw.get("date") or None,
         )
 
 
