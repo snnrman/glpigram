@@ -1,0 +1,149 @@
+# GLPI Telegram Bot
+
+Telegram bot for IT service management, integrated with GLPI 11.0.4.
+Company employees create and track tickets from Telegram; technicians
+receive notifications and manage the queue with inline buttons.
+
+## Environment & Constraints
+
+- GLPI 11.0.4, self-hosted. The bot runs **on the same LXC container as GLPI** and talks to
+  the API via localhost (`http://127.0.0.1/apirest.php` or the local vhost URL).
+- Container is behind a firewall: **long polling only**, no inbound ports, no webhooks.
+  Outbound HTTPS to api.telegram.org is required (support optional proxy via the standard
+  `HTTPS_PROXY` env var — httpx and aiogram sessions must respect it).
+- Use the **legacy REST API (v1, `/apirest.php`)** with `App-Token` + `User-Token` (service account).
+  Do NOT use the GLPI 11 High-Level API (`/api.php`, OAuth2) — it is not yet stable for
+  ticket tasks/followups. Isolate all GLPI calls in one client module (`glpi/client.py`)
+  so a future migration to API v2 touches only that module.
+- GLPI ↔ bot sync is done by polling the GLPI API (30–60 s interval). No GLPI-side plugins.
+- **Unprivileged LXC — no mount namespacing.** systemd's namespace-based sandboxing
+  (`ProtectSystem`, `PrivateTmp`, `ProtectHome`, `ProtectKernel*`, `ProtectControlGroups`,
+  `ReadWritePaths`, `RestrictSUIDSGID`, …) fails the unit with `226/NAMESPACE`. The service
+  unit keeps **only `NoNewPrivileges`**; do not re-add other hardening directives.
+
+## Stack
+
+- Python 3.11+ (system Python of the GLPI host; do not require 3.12-only features)
+- aiogram 3.x (FSM for dialogs, inline keyboards)
+- httpx (async) for GLPI API
+- SQLite via aiosqlite — user mapping and sync state. No ORM; plain SQL with a thin helper.
+- Config from environment variables only (pydantic-settings). `.env.example` in repo, `.env` gitignored.
+- Deployment: **systemd unit + venv, no Docker**. Install to `/opt/glpi-tgbot`,
+  venv at `/opt/glpi-tgbot/venv`, data (SQLite, .env) in `/var/lib/glpi-tgbot`,
+  dedicated non-privileged user `glpibot`. Provide `deploy/glpi-tgbot.service`
+  (Restart=always, EnvironmentFile=/var/lib/glpi-tgbot/.env, `NoNewPrivileges` — the only
+  hardening directive that works here; see the LXC namespacing note above) and
+  a short `deploy/install.sh`.
+- Logging: stdlib `logging`, JSON-ish structured lines to stdout (journald/docker logs collect them).
+
+## Architecture
+
+```
+bot/
+  main.py            # entrypoint: dispatcher, polling, background tasks
+  config.py          # pydantic-settings
+  glpi/
+    client.py        # GLPI API client: session init/refresh, retries, all endpoints
+    models.py        # dataclasses for Ticket, Followup, User, Document
+  handlers/
+    new_ticket.py    # /new FSM dialog
+    my_tickets.py    # /tickets list + detail view
+    tech_actions.py  # technician inline-button callbacks
+    linking.py       # TG <-> GLPI account linking
+  services/
+    sync.py          # polling loop: new tickets, status changes, new followups
+    notify.py        # message rendering + sending (users and tech group)
+  db/
+    schema.sql
+    repo.py
+tests/
+deploy/
+  glpi-tgbot.service
+  install.sh
+.env.example
+```
+
+## GLPI API specifics (legacy v1)
+
+- `initSession` with `App-Token` header + `user_token` -> `Session-Token`.
+  Sessions expire; client must transparently re-init on 401 and retry once.
+- Create ticket: `POST /Ticket` with `input: {name, content, itilcategories_id, urgency, ...}`.
+  To set the requester to the real employee (not the service account), pass
+  `_users_id_requester` on creation, or add a `Ticket_User` link (type 1 = requester).
+- Followups: ITILFollowup with `itemtype: "Ticket"`, `items_id: <ticket_id>`.
+- Attachments: `POST /Document` as multipart (`uploadManifest` + file), then link via
+  `Document_Item` to the ticket.
+- Listing/search: `GET /search/Ticket` with `criteria[]` (searchOptions IDs).
+  Common ones: 12 = status, 4 = requester, 5 = technician. Verify IDs via
+  `listSearchOptions/Ticket` before hardcoding, put them in constants with comments.
+- `Range` header pagination on list endpoints; handle 206 responses.
+
+## Features (build in this order)
+
+1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,
+   cached 10 min) -> urgency (3 levels) -> title -> description -> optional photos/files ->
+   confirm -> create ticket. Reply with ticket number and link.
+2. **Account linking (AD-based).** GLPI users are synced from Active Directory via LDAP;
+   `User.name` equals the AD sAMAccountName and is the linking key.
+   `/start` requires linking: the user sends their AD login (the one they use for Windows
+   sign-in; if they type `login@domain`, strip the domain part), bot finds the GLPI user by
+   `name` (must be active: not deleted, is_active=1), an admin confirms with a button in the
+   tech group (anti-spoofing), mapping stored in SQLite (tg_id, glpi_users_id, display name,
+   is_tech). Unlinked users can do nothing except /start.
+   - **Auto-unlink:** on every action by a linked user, verify (with a short cache, ~5 min)
+     that the GLPI account is still active; if deactivated/deleted in GLPI (i.e. disabled
+     in AD), silently unlink and answer as if the user was never linked. This is the
+     offboarding path — no manual cleanup.
+   - **is_tech from GLPI group:** technician rights are determined by membership in a
+     configured GLPI group (env `TECH_GROUP_ID`), checked via API and cached ~5 min —
+     not by a manually maintained flag. The SQLite is_tech column is a cache, refreshed
+     on check.
+   - Admin commands (usable only by techs): `/link <tg_id or @username reply> <ad_login>`
+     to link someone manually, `/unlink <ad_login>` to remove a mapping.
+3. **My tickets.** `/tickets` — open tickets of the linked user: number, title, status, assignee.
+   Tap -> detail view with the last 5 followups. Button "add comment" -> FSM -> followup
+   created on behalf of the requester.
+4. **Sync loop (GLPI -> TG).** Poll every 45 s:
+   - new tickets (id > last_seen_id) -> notify tech group with inline buttons
+   - status changes on tickets created via the bot -> notify the requester
+   - new followups by others on the user's tickets -> forward text to the requester
+   Persist cursor state (last ids / timestamps) in SQLite; survive restarts without
+   duplicate notifications.
+5. **Tech actions.** Inline buttons on the tech-group notification: "Take" (assign to the
+   pressing technician, status -> Processing), "Close" (asks for a solution text via FSM),
+   "Comment". Only users with is_tech may press; others get a toast.
+6. **Attachments both ways.** Photos/documents from TG uploaded to GLPI on ticket creation
+   and in comments. TG file size limits apply (20 MB via Bot API) — reject larger with a
+   clear message.
+
+Out of scope for now: SLA warnings, Claude-based auto-classification, multi-entity support.
+Keep the code structured so these can be added later.
+
+## Conventions
+
+- Russian for all user-facing strings; keep them in one module (`texts.py`), no i18n framework.
+- Every GLPI client method: typed signature, raises `GlpiError` subclass with the raw API
+  response attached; never leaks httpx exceptions to handlers.
+- Retries: 3 attempts with backoff on network errors and 5xx; never retry POSTs that may
+  have side effects unless the error is clearly pre-execution (connect timeout).
+- All secrets (bot token, GLPI tokens) only from env. Fail fast at startup if any missing.
+- Tests: pytest + respx for the GLPI client (mock HTTP), plain unit tests for services.
+  Handlers are tested minimally; the client and sync logic thoroughly.
+- Type hints everywhere, `ruff` + `ruff format`, line length 100.
+- Conventional commits.
+
+## Commands
+
+```
+ruff check . && ruff format --check .   # lint
+pytest -x                               # tests
+sudo systemctl restart glpi-tgbot       # apply after git pull + pip install
+journalctl -u glpi-tgbot -f             # logs
+```
+
+## Definition of done for each feature
+
+- Works against the live GLPI instance (I test manually and paste errors back)
+- Unit tests for the new client methods / service logic pass
+- No unhandled exceptions in the polling loop: any error is logged and the loop continues
+- README section updated if setup steps changed

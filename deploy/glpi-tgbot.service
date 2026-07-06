@@ -1,0 +1,24 @@
+[Unit]
+Description=GLPI Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=glpibot
+Group=glpibot
+WorkingDirectory=/opt/glpi-tgbot
+EnvironmentFile=/var/lib/glpi-tgbot/.env
+ExecStart=/opt/glpi-tgbot/venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+
+# --- Hardening ---
+# NOTE: this runs in an unprivileged LXC where mount namespacing is unavailable,
+# so namespace-based sandboxing (ProtectSystem, PrivateTmp, ProtectHome,
+# ProtectKernel*, ProtectControlGroups, ReadWritePaths, RestrictSUIDSGID, …)
+# makes systemd fail the unit with 226/NAMESPACE. Only NoNewPrivileges is kept.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

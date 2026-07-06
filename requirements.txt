@@ -1,0 +1,4 @@
+aiogram>=3.0,<4
+httpx>=0.27
+pydantic-settings>=2.0
+aiosqlite>=0.19
