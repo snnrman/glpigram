@@ -14,9 +14,10 @@ from aiogram import Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Chat, Message, PhotoSize, Update
+from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update
 from aiogram.types import User as TgUser
 
+from bot import texts
 from bot.handlers.new_ticket import NewTicket, build_new_ticket_router
 
 pytestmark = pytest.mark.asyncio
@@ -74,6 +75,49 @@ def _text_update(bot: FakeBot, uid: int, text: str) -> Update:
     return Update(update_id=uid, message=msg)
 
 
+def _last_text(bot: FakeBot) -> str | None:
+    """Last message carrying text (skips cb.answer(), which has text=None)."""
+    return next((t for t, _ in reversed(bot.sent) if t is not None), None)
+
+
+def _cb_update(bot: FakeBot, uid: int, data: str) -> Update:
+    msg = _bind(
+        Message(
+            message_id=uid,
+            date=_DATE,
+            chat=Chat(id=CHAT, type="private"),
+            from_user=TgUser(id=CHAT, is_bot=False, first_name="U"),
+            text="prompt",
+        ),
+        bot,
+    )
+    cb = CallbackQuery(
+        id=str(uid),
+        from_user=TgUser(id=CHAT, is_bot=False, first_name="U"),
+        chat_instance="ci",
+        message=msg,
+        data=data,
+    ).as_(bot)
+    return Update(update_id=uid, callback_query=cb)
+
+
+async def _attaching_dispatcher(storage: MemoryStorage, ctx: FSMContext) -> Dispatcher:
+    dp = Dispatcher(storage=storage)
+    dp.include_router(build_new_ticket_router(MagicMock(), MagicMock(), MagicMock()))
+    await ctx.set_state(NewTicket.attaching)
+    await ctx.set_data(
+        {
+            "category_id": 1,
+            "category_name": "C",
+            "urgency": 3,
+            "title": "T",
+            "description": "D",
+            "attachments": [{"file_id": "F", "filename": "f.jpg", "mime": "image/jpeg"}],
+        }
+    )
+    return dp
+
+
 async def test_two_attachments_then_done_word_completes():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
@@ -110,3 +154,34 @@ async def test_two_attachments_then_done_word_completes():
     last_text, last_kb = bot.sent[-1]
     assert "Вложений:</b> 2" in last_text  # confirm summary counts both files
     assert last_kb is not None  # confirm keyboard present
+
+
+async def test_attach_cancel_asks_confirmation_and_back_keeps_state():
+    storage = MemoryStorage()
+    ctx = FSMContext(storage=storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
+    dp = await _attaching_dispatcher(storage, ctx)
+    bot = FakeBot()
+
+    # Отмена -> a confirmation question, ticket NOT cancelled yet.
+    await dp.feed_update(bot, _cb_update(bot, 10, "nt:attach_cancel"))
+    assert _last_text(bot) == texts.ATTACH_CANCEL_CONFIRM
+    assert await ctx.get_state() == NewTicket.attaching
+    assert len((await ctx.get_data())["attachments"]) == 1  # files preserved
+
+    # "Нет" -> back to the attach prompt, still attaching.
+    await dp.feed_update(bot, _cb_update(bot, 11, "nt:attach_back"))
+    assert _last_text(bot) == texts.NEW_ATTACH_PROMPT
+    assert await ctx.get_state() == NewTicket.attaching
+
+
+async def test_attach_cancel_confirmed_aborts_ticket():
+    storage = MemoryStorage()
+    ctx = FSMContext(storage=storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
+    dp = await _attaching_dispatcher(storage, ctx)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _cb_update(bot, 12, "nt:attach_cancel"))
+    # "Да, отменить" -> ticket creation aborted, state cleared.
+    await dp.feed_update(bot, _cb_update(bot, 13, "nt:cancel"))
+    assert _last_text(bot) == texts.NEW_CANCELLED
+    assert await ctx.get_state() is None

@@ -17,7 +17,7 @@ BTN_MY_TICKETS = "📋 Мои заявки"
 
 # --- free-text outside a dialog ---
 FREETEXT_OFFER = "Создать заявку с этим текстом в качестве описания?"
-BTN_CREATE_TICKET = "🆕 Создать заявку"
+BTN_CREATE_TICKET = "🆕 Создать"
 
 # --- bot command descriptions (set_my_commands) ---
 CMD_NEW_DESCRIPTION = "Создать новую заявку"
@@ -115,11 +115,13 @@ NEW_EXPECT_TEXT = "Пожалуйста, отправьте текст."
 
 # --- attachments (feature 6) ---
 NEW_ATTACH_PROMPT = (
-    "При необходимости прикрепите фото или документы (по одному сообщению),\n"
-    "затем нажмите «Готово». Или сразу нажмите «Готово», если вложений нет."
+    "Можете прикрепить фото или документы (по одному сообщению), затем нажмите «Готово»."
 )
 BTN_ATTACH_DONE = "✅ Готово"
-BTN_ATTACH_CANCEL = "➡️ Пропустить / Отмена"
+# Confirmation shown when the user taps Отмена during the attachments step.
+ATTACH_CANCEL_CONFIRM = "Отменить создание заявки?"
+BTN_ATTACH_CANCEL_YES = "Да, отменить"
+BTN_ATTACH_CANCEL_NO = "Нет"
 # Case-insensitive text that also finishes the attachments step (keyboard fallback).
 ATTACH_DONE_WORD = "готово"
 ATTACH_TOO_LARGE = "Файл слишком большой (максимум 20 МБ). Отправьте файл поменьше."

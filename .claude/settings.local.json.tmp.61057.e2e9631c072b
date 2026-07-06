@@ -23,7 +23,9 @@
       "Bash(gh auth *)",
       "Bash(env)",
       "Read(//root/**)",
-      "Bash(git ls-remote *)"
+      "Bash(git ls-remote *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }
