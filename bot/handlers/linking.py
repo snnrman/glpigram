@@ -35,6 +35,7 @@ from aiogram.types import (
 from .. import texts
 from ..db.repo import Repo
 from ..glpi.client import GlpiClient, GlpiError
+from ..services import notify
 from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
@@ -268,7 +269,7 @@ def build_linking_router(
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
         if user is None or not user.is_usable:
-            await cb.message.edit_text(texts.LINK_ALREADY_HANDLED)
+            await notify.safe_edit(cb, texts.LINK_ALREADY_HANDLED)
             await cb.answer()
             return
         is_tech = await _resolve_is_tech(glpi_id)
@@ -279,15 +280,20 @@ def build_linking_router(
             is_tech=is_tech,
             now=int(time.time()),
         )
-        await cb.message.edit_text(
+        # The link now exists: notify the employee FIRST, then update the card.
+        # Cards can sit in the group past Telegram's 48h edit limit (a weekend
+        # request confirmed on Monday) — a failed edit must not swallow the
+        # user notification or make the admin think the confirm failed.
+        await _notify_user(bot, tg_id, texts.LINK_CONFIRMED, with_menu=True)
+        await notify.safe_edit(
+            cb,
             texts.link_request_resolved(
                 glpi_name=user.display_name,
                 login=user.name,
                 approved=True,
                 by=_tg_display(cb.from_user),
-            )
+            ),
         )
-        await _notify_user(bot, tg_id, texts.LINK_CONFIRMED, with_menu=True)
         await cb.answer()
 
     @router.callback_query(F.data.startswith("lk:no:"))
@@ -303,12 +309,13 @@ def build_linking_router(
             login = user.name if user else ""
         except GlpiError:
             pass
-        await cb.message.edit_text(
+        await _notify_user(bot, tg_id, texts.LINK_REJECTED, with_menu=False)
+        await notify.safe_edit(
+            cb,
             texts.link_request_resolved(
                 glpi_name="", login=login, approved=False, by=_tg_display(cb.from_user)
-            )
+            ),
         )
-        await _notify_user(bot, tg_id, texts.LINK_REJECTED, with_menu=False)
         await cb.answer()
 
     # -- admin commands (technicians only) --------------------------------

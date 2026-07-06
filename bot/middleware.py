@@ -20,6 +20,7 @@ is kept and the check is retried next time.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -70,21 +71,30 @@ class AuthMiddleware(BaseMiddleware):
         data["link"] = link
         return await handler(event, data)
 
+    # The recheck sits on the hot path of EVERY update; the full client retry
+    # budget (3 attempts x 20 s + backoff) must never stall a user click.
+    _RECHECK_BUDGET = 5.0  # seconds
+
     async def _recheck(self, link: LinkedUser) -> LinkedUser | None:
         """Re-validate a stale link against GLPI; unlink if the account is gone."""
         now = int(time.time())
         if now - link.checked_at < self._recheck_ttl:
             return link
         try:
-            glpi_user = await self._client.get_user(link.glpi_users_id)
-            if glpi_user is None or not glpi_user.is_usable:
-                await self._repo.unlink_tg(link.tg_id)
-                log.info("auto_unlink tg_id=%s glpi_id=%s", link.tg_id, link.glpi_users_id)
-                return None
-            is_tech = await self._is_tech(link.glpi_users_id)
-        except GlpiError as exc:
-            # Transient failure: keep the cached link, retry on the next event.
+            async with asyncio.timeout(self._RECHECK_BUDGET):
+                glpi_user = await self._client.get_user(link.glpi_users_id)
+                if glpi_user is None or not glpi_user.is_usable:
+                    await self._repo.unlink_tg(link.tg_id)
+                    log.info("auto_unlink tg_id=%s glpi_id=%s", link.tg_id, link.glpi_users_id)
+                    return None
+                is_tech = await self._is_tech(link.glpi_users_id)
+        except (GlpiError, TimeoutError) as exc:
+            # Transient failure: keep the cached link and back off for a full
+            # TTL window — otherwise a GLPI outage would tax every update with
+            # the whole retry budget. Auto-unlink is delayed by one TTL at most.
             log.warning("link_recheck_failed glpi_id=%s error=%s", link.glpi_users_id, exc)
+            await self._repo.set_tech_checked(link.tg_id, is_tech=link.is_tech, now=now)
+            link.checked_at = now
             return link
         await self._repo.set_tech_checked(link.tg_id, is_tech=is_tech, now=now)
         link.is_tech = is_tech

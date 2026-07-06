@@ -73,8 +73,8 @@ class SyncService:
         """Background entrypoint: seed the cursor, then poll until cancelled."""
         try:
             await self._seed_cursor()
-        except GlpiError as exc:
-            log.warning("sync_seed_cursor_failed error=%s", exc)
+        except Exception:  # noqa: BLE001 - a seed failure must not kill the task
+            log.exception("sync_seed_cursor_failed")
         log.info("sync_loop_started interval=%ss", self._interval)
         while True:
             try:
@@ -119,11 +119,11 @@ class SyncService:
                 log.info("sync_deferred_new id=%s urgency=%s", ticket.id, ticket.urgency)
         await self._repo.set_cursor(_CURSOR_LAST_TICKET, max(t.id for t in fresh))
 
-    async def _send_new_card(self, ticket) -> None:
+    async def _send_new_card(self, ticket) -> bool:
         if self._tech_chat is None:
-            return
+            return True  # nowhere to send is not a delivery failure
         name, tg_id = await self._requester_card_info(ticket.id)
-        await notify.notify_new_ticket(
+        return await notify.notify_new_ticket(
             self._bot,
             self._tech_chat,
             ticket,
@@ -134,37 +134,63 @@ class SyncService:
 
     # -- deferred (quiet-hours) flush -------------------------------------
     async def _flush_deferred_if_working(self) -> None:
+        """Deliver the overnight backlog once work resumes.
+
+        A queue row is deleted only after its notification was actually sent
+        (or became moot) — a Telegram flood limit / outage keeps the rest
+        queued for the next tick instead of silently dropping cards. The
+        header is sent lazily, before the first real card, so a total outage
+        doesn't spam a lone header every 45 s.
+        """
         if self._tech_chat is None or not self._schedule.is_working(self._now()):
             return
         queued = await self._repo.list_deferred()
         if not queued:
             return
-        await notify.send_text(self._bot, self._tech_chat, texts.deferred_batch_header(len(queued)))
+        header_sent = False
+
+        async def _ensure_header() -> bool:
+            nonlocal header_sent
+            if not header_sent:
+                header_sent = await notify.send_text(
+                    self._bot, self._tech_chat, texts.deferred_batch_header(len(queued))
+                )
+            return header_sent
+
         for row_id, kind, ticket_id in queued:
             try:
-                await self._flush_one(kind, ticket_id)
+                delivered = await self._flush_one(kind, ticket_id, _ensure_header)
             except GlpiError as exc:
+                # GLPI hiccup: keep the row, retry next tick.
                 log.warning("sync_flush_failed id=%s kind=%s error=%s", ticket_id, kind, exc)
-            await self._repo.delete_deferred(row_id)
+                continue
+            if delivered:
+                await self._repo.delete_deferred(row_id)
+            else:
+                # Telegram send failed -> keep the whole tail for the next tick
+                # (sending further cards now would only hit the same limit).
+                break
 
-    async def _flush_one(self, kind: str, ticket_id: int) -> None:
+    async def _flush_one(self, kind: str, ticket_id: int, ensure_header) -> bool:
+        """Deliver one queued item; True when it may leave the queue."""
         ticket = await self._client.get_ticket(ticket_id)
-        if ticket is None:  # deleted in GLPI meanwhile
-            return
+        if ticket is None:  # deleted in GLPI meanwhile -> moot
+            return True
+        if kind == "remind" and ticket.status != TICKET_STATUS_NEW:
+            # Taken/solved overnight -> the nudge is moot, drop it silently.
+            log.info("sync_flush_remind_skipped id=%s status=%s", ticket_id, ticket.status)
+            return True
+        if not await ensure_header():
+            return False
         if kind == "remind":
-            if ticket.status != TICKET_STATUS_NEW:
-                # Taken/solved overnight -> the nudge is moot, drop it silently.
-                log.info("sync_flush_remind_skipped id=%s status=%s", ticket_id, ticket.status)
-                return
-            await notify.notify_reminder(
+            return await notify.notify_reminder(
                 self._bot,
                 self._tech_chat,
                 ticket_id,
                 ticket.name,
                 timeutil.hours_since(ticket.date_creation),
             )
-        else:
-            await self._send_new_card(ticket)
+        return await self._send_new_card(ticket)
 
     async def _requester_card_info(self, ticket_id: int) -> tuple[str | None, int | None]:
         """Requester name for the card, plus their Telegram id if linked in the bot.
@@ -190,6 +216,8 @@ class SyncService:
                 await self._sync_ticket(row)
             except GlpiError as exc:
                 log.warning("sync_ticket_failed id=%s error=%s", row.ticket_id, exc)
+            except Exception:  # noqa: BLE001 - one poisoned ticket must not stop the rest
+                log.exception("sync_ticket_crashed id=%s", row.ticket_id)
 
     async def _sync_ticket(self, row: TrackedTicket) -> None:
         ticket = await self._client.get_ticket(row.ticket_id)

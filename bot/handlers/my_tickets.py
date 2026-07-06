@@ -175,31 +175,39 @@ def build_my_tickets_router(
             return
         await message.answer(text, reply_markup=kb)
 
+    async def _show(cb: CallbackQuery, text: str, kb: InlineKeyboardMarkup | None) -> None:
+        """Edit the callback's message; fall back to a fresh message when the
+        original is deleted / past the 48h edit limit / inaccessible."""
+        if not await notify.safe_edit(cb, text, reply_markup=kb) and isinstance(
+            cb.message, Message
+        ):
+            await cb.message.answer(text, reply_markup=kb)
+
     @router.callback_query(F.data == "mt:list")
     async def on_back_to_list(cb: CallbackQuery, link: LinkedUser) -> None:
+        # Answer first: the rendering below hits GLPI (retries can outlive the
+        # ~15 s callback lifetime, leaving an eternal spinner + double taps).
+        await cb.answer()
         try:
             text, kb = await _render_list(link)
         except GlpiError as exc:
             log.warning("my_tickets_list_failed error=%s", exc)
-            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            await _show(cb, texts.GLPI_ERROR, None)
             return
-        await cb.message.edit_text(text, reply_markup=kb)
-        await cb.answer()
+        await _show(cb, text, kb)
 
     # -- detail ------------------------------------------------------------
     @router.callback_query(F.data.startswith("mt:open:"))
     async def on_open(cb: CallbackQuery) -> None:
+        await cb.answer()  # heavy N+1 rendering below; see on_back_to_list
         ticket_id = int(cb.data.split(":")[2])
         try:
             text, closable, remindable = await _render_detail(ticket_id)
         except GlpiError as exc:
             log.warning("my_tickets_detail_failed id=%s error=%s", ticket_id, exc)
-            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            await _show(cb, texts.GLPI_ERROR, None)
             return
-        await cb.message.edit_text(
-            text, reply_markup=_detail_keyboard(ticket_id, closable=closable, remindable=remindable)
-        )
-        await cb.answer()
+        await _show(cb, text, _detail_keyboard(ticket_id, closable=closable, remindable=remindable))
 
     # /cancel must precede the state text handlers, or the comment/close-reason
     # steps would swallow it as content.
@@ -347,9 +355,9 @@ def build_my_tickets_router(
         await cb.answer()
         if await _do_close(ticket_id, None, link, bot):
             await state.clear()
-            await cb.message.edit_text(texts.MYT_CLOSE_DONE)
+            await _show(cb, texts.MYT_CLOSE_DONE, None)
         else:
-            await cb.message.edit_text(texts.GLPI_ERROR)
+            await _show(cb, texts.GLPI_ERROR, None)
 
     @router.message(MyTickets.closing)
     async def on_close_not_text(message: Message) -> None:
@@ -359,6 +367,29 @@ def build_my_tickets_router(
     @router.callback_query(F.data.startswith("mt:remind:"))
     async def on_remind(cb: CallbackQuery, bot: Bot) -> None:
         ticket_id = int(cb.data.split(":")[2])
+
+        # Fast local checks first (SQLite / schedule), so their toasts are
+        # delivered before any slow GLPI round-trip can expire the callback.
+        now = int(time.time())
+        cooldown = remind_cooldown_hours * 3600
+        last = await repo.get_last_remind(ticket_id)
+        if last is not None and now - last < cooldown:
+            hours_left = max(1, math.ceil((cooldown - (now - last)) / 3600))
+            await cb.answer(texts.myt_remind_cooldown(hours_left), show_alert=True)
+            return
+
+        # Off-hours: defer without touching GLPI at all — the morning flush
+        # re-validates the status anyway. Cooldown counts from the tap.
+        if schedule is not None and not schedule.is_working(schedule.now()):
+            await repo.set_last_remind(ticket_id, now)
+            await repo.enqueue_deferred("remind", ticket_id, now)
+            local_now = schedule.now()
+            await cb.answer(
+                texts.quiet_hours_notice(schedule.next_open(local_now), local_now),
+                show_alert=True,
+            )
+            return
+
         try:
             ticket = await client.get_ticket(ticket_id)
         except GlpiError as exc:
@@ -370,27 +401,7 @@ def build_my_tickets_router(
             await cb.answer(texts.MYT_REMIND_NOT_NEW, show_alert=True)
             return
 
-        now = int(time.time())
-        cooldown = remind_cooldown_hours * 3600
-        last = await repo.get_last_remind(ticket_id)
-        if last is not None and now - last < cooldown:
-            hours_left = max(1, math.ceil((cooldown - (now - last)) / 3600))
-            await cb.answer(texts.myt_remind_cooldown(hours_left), show_alert=True)
-            return
-
-        # Cooldown counts from the tap even if we defer to the morning.
         await repo.set_last_remind(ticket_id, now)
-
-        # Off-hours: hold the card until the next work day; tell the requester when.
-        if schedule is not None and not schedule.is_working(schedule.now()):
-            await repo.enqueue_deferred("remind", ticket_id, now)
-            local_now = schedule.now()
-            await cb.answer(
-                texts.quiet_hours_notice(schedule.next_open(local_now), local_now),
-                show_alert=True,
-            )
-            return
-
         if tech_group_chat_id is not None:
             await notify.notify_reminder(
                 bot,

@@ -79,11 +79,14 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
         dm_key = dataclasses.replace(state.key, chat_id=tech_id, user_id=tech_id)
         dm_state = FSMContext(storage=state.storage, key=dm_key)
         await dm_state.set_state(target_state)
+        # Old callbacks carry an InaccessibleMessage (no text/edit) — isinstance,
+        # not an is-None check, is the real accessibility test.
+        card = cb.message if isinstance(cb.message, Message) else None
         await dm_state.update_data(
             ticket_id=ticket_id,
-            card_chat_id=cb.message.chat.id if cb.message else None,
-            card_message_id=cb.message.message_id if cb.message else None,
-            card_text=cb.message.html_text if cb.message else None,
+            card_chat_id=card.chat.id if card else None,
+            card_message_id=card.message_id if card else None,
+            card_text=card.html_text if card else None,
         )
         await cb.answer()
 
@@ -100,10 +103,11 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
             log.exception("tech_take_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
-        if cb.message is not None:
+        card = cb.message if isinstance(cb.message, Message) else None
+        if card is not None:
             try:
-                await cb.message.edit_text(
-                    f"{cb.message.html_text}\n\n{texts.tech_card_taken(link.display_name)}",
+                await card.edit_text(
+                    f"{card.html_text}\n\n{texts.tech_card_taken(link.display_name)}",
                     reply_markup=_card_keyboard_after_take(ticket_id),
                 )
             except Exception as exc:  # noqa: BLE001 - editing is best-effort
@@ -123,7 +127,7 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
             bot,
             target_state=TechAction.commenting,
             ticket_id=ticket_id,
-            prompt=texts.TECH_ASK_COMMENT,
+            prompt=texts.tech_ask_comment(ticket_id),
         )
 
     @router.callback_query(F.data.startswith("ta:close:"))
@@ -138,7 +142,7 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
             bot,
             target_state=TechAction.closing,
             ticket_id=ticket_id,
-            prompt=texts.TECH_ASK_SOLUTION,
+            prompt=texts.tech_ask_solution(ticket_id),
         )
 
     # /cancel must precede the state text handlers, or the comment/solution

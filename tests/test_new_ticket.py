@@ -44,7 +44,7 @@ def _bind(message: Message, bot: FakeBot) -> Message:
     return message.as_(bot)
 
 
-def _photo_update(bot: FakeBot, uid: int) -> Update:
+def _photo_update(bot: FakeBot, uid: int, media_group_id: str | None = None) -> Update:
     photo = PhotoSize(
         file_id=f"F{uid}", file_unique_id=f"U{uid}", width=90, height=90, file_size=1000
     )
@@ -55,6 +55,7 @@ def _photo_update(bot: FakeBot, uid: int) -> Update:
             chat=Chat(id=CHAT, type="private"),
             from_user=TgUser(id=CHAT, is_bot=False, first_name="U"),
             photo=[photo],
+            media_group_id=media_group_id,
         ),
         bot,
     )
@@ -289,3 +290,21 @@ async def test_text_on_button_steps_prompts_use_buttons(step):
     await dp.feed_update(bot, _text_update(bot, 1, "какой-то текст"))
     assert _last_text(bot) == texts.USE_BUTTONS
     assert await ctx.get_state() == step  # dialog not disturbed
+
+
+async def test_album_stores_all_photos_but_confirms_once():
+    # An album arrives as N messages sharing media_group_id: no reply spam.
+    dp, ctx = await _dispatcher_at(NewTicket.attaching)
+    bot = FakeBot()
+    await dp.feed_update(bot, _photo_update(bot, 1, media_group_id="alb1"))
+    await dp.feed_update(bot, _photo_update(bot, 2, media_group_id="alb1"))
+    await dp.feed_update(bot, _photo_update(bot, 3, media_group_id="alb1"))
+
+    assert len((await ctx.get_data())["attachments"]) == 3  # all stored
+    confirmations = [t for t, _ in bot.sent if t and "Вложение добавлено" in t]
+    assert len(confirmations) == 1  # confirmed once per album
+
+    # a separate single photo afterwards is confirmed normally
+    await dp.feed_update(bot, _photo_update(bot, 4))
+    confirmations = [t for t, _ in bot.sent if t and "Вложение добавлено" in t]
+    assert len(confirmations) == 2

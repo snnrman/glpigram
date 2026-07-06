@@ -351,3 +351,28 @@ async def test_flush_skips_remind_for_taken_ticket(repo):
     await _service(bot, client, repo, now=MONDAY_OPEN).tick()
     assert not any("напоминает" in m.lower() for m in _tech(bot))
     assert await repo.list_deferred() == []  # consumed, not retried
+
+
+class DownBot:
+    """Telegram is down: every send fails."""
+
+    async def send_message(self, chat_id, text, **kwargs):
+        raise RuntimeError("tg down")
+
+
+async def test_flush_keeps_queue_when_telegram_down(repo):
+    # Reviewer finding 5.5: a failed send must NOT drop the queued card.
+    low = _ticket(2, status=1, urgency=2)
+    client = FakeClient(tickets={2: low})
+    await repo.enqueue_deferred("new", 2, 0)
+
+    await _service(DownBot(), client, repo, now=MONDAY_OPEN).tick()
+    assert len(await repo.list_deferred()) == 1  # still queued, not lost
+
+    # Telegram is back: the next tick delivers header + card exactly once.
+    bot = FakeBot()
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
+    msgs = _tech(bot)
+    assert any("нерабочее время поступило" in m for m in msgs)
+    assert any("Новая заявка №2" in m for m in msgs)
+    assert await repo.list_deferred() == []
