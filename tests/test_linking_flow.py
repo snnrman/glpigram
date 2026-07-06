@@ -203,3 +203,34 @@ async def test_confirm_outside_tech_group_is_refused(repo):
     )
     assert await repo.get_by_tg(USER_CHAT) is None  # nothing linked
     assert texts.CB_TECH_GROUP_ONLY in bot.toasts
+
+
+async def test_start_uses_welcome_message_when_set(repo, monkeypatch):
+    monkeypatch.setenv("WELCOME_MESSAGE", "Кастомное <b>приветствие</b>.\\nСтрока два.")
+    dp, ctx = _harness(repo, _client())
+    bot = FakeBot()
+    await dp.feed_update(bot, _user_msg(bot, 1, "/start"))
+    msgs = _chat_msgs(bot, USER_CHAT)
+    # verbatim custom text (with rendered \n), then the functional login prompt
+    assert msgs[0] == "Кастомное <b>приветствие</b>.\nСтрока два."
+    assert texts.LINK_ASK_LOGIN in msgs
+    assert texts.LINK_WELCOME not in msgs
+    assert await ctx.get_state() == Linking.awaiting_login  # flow intact
+
+
+async def test_start_linked_uses_welcome_message_when_set(repo, monkeypatch):
+    monkeypatch.setenv("WELCOME_MESSAGE", "Своё приветствие")
+    await repo.upsert_link(tg_id=USER_CHAT, glpi_users_id=1, display_name="U", is_tech=False, now=0)
+    dp, _ = _harness(repo, _client())
+    bot = FakeBot()
+    await dp.feed_update(bot, _user_msg(bot, 1, "/start"))
+    msgs = _chat_msgs(bot, USER_CHAT)
+    assert msgs == ["Своё приветствие"]
+
+
+async def test_start_falls_back_to_default_when_unset(repo, monkeypatch):
+    monkeypatch.delenv("WELCOME_MESSAGE", raising=False)
+    dp, _ = _harness(repo, _client())
+    bot = FakeBot()
+    await dp.feed_update(bot, _user_msg(bot, 1, "/start"))
+    assert _chat_msgs(bot, USER_CHAT) == [texts.LINK_WELCOME]

@@ -20,3 +20,17 @@ elif _lang in ("ru", ""):
     from .ru import *  # noqa: F401,F403
 else:  # fail fast: a typo would silently fall back otherwise
     raise ValueError(f"BOT_LANGUAGE={_lang!r} is not supported (expected 'ru' or 'en')")
+
+
+def custom_welcome() -> str | None:
+    """Operator-defined /start greeting (``WELCOME_MESSAGE``), or None.
+
+    Read at call time (not import time) so it is testable and reload-friendly.
+    The value is used verbatim in both languages — no translation. aiogram HTML
+    markup passes through, and a literal ``\\n`` becomes a line break (systemd
+    EnvironmentFile values are single-line).
+    """
+    value = os.environ.get("WELCOME_MESSAGE", "").strip()
+    if not value:
+        return None
+    return value.replace("\\n", "\n")

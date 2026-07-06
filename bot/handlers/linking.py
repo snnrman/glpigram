@@ -145,12 +145,19 @@ def build_linking_router(
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await state.clear()
+        custom = texts.custom_welcome()  # WELCOME_MESSAGE overrides the default
         link = await repo.get_by_tg(message.from_user.id)
         if link is not None:
-            await message.answer(texts.START_GREETING, reply_markup=main_menu_keyboard())
+            await message.answer(custom or texts.START_GREETING, reply_markup=main_menu_keyboard())
             return
         await state.set_state(Linking.awaiting_login)
-        await message.answer(texts.LINK_WELCOME)
+        if custom:
+            # Verbatim operator text, then the functional login prompt so the
+            # linking flow still explains itself.
+            await message.answer(custom)
+            await message.answer(texts.LINK_ASK_LOGIN)
+        else:
+            await message.answer(texts.LINK_WELCOME)
 
     async def _send_link_request(bot: Bot, requester, user) -> bool:
         """Post the admin confirmation card into the tech group. Returns success."""

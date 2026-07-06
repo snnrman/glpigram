@@ -51,3 +51,20 @@ def test_en_functions_render():
     assert "<b>Doe</b>" not in en.link_name_pick_one("John <b>Doe</b>")  # escaped
     out = en.notify_closed_by_requester(ticket_id=7, reason=None, assignees=["Jane"])
     assert "without a comment" in out and "Jane" in out
+
+
+# --- WELCOME_MESSAGE override -------------------------------------------------
+def test_custom_welcome_unset_and_blank(monkeypatch):
+    from bot import texts
+
+    monkeypatch.delenv("WELCOME_MESSAGE", raising=False)
+    assert texts.custom_welcome() is None
+    monkeypatch.setenv("WELCOME_MESSAGE", "   ")
+    assert texts.custom_welcome() is None  # blank counts as unset
+
+
+def test_custom_welcome_verbatim_with_html_and_newlines(monkeypatch):
+    from bot import texts
+
+    monkeypatch.setenv("WELCOME_MESSAGE", "Привет, <b>ACME</b>!\\nWe help.")
+    assert texts.custom_welcome() == "Привет, <b>ACME</b>!\nWe help."
