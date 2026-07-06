@@ -104,6 +104,11 @@ def build_my_tickets_router(
 ) -> Router:
     router = Router(name="my_tickets")
 
+    def _ticket_url(ticket_id: int) -> str | None:
+        if not ticket_front_base:
+            return None
+        return f"{ticket_front_base}/front/ticket.form.php?id={ticket_id}"
+
     async def _render_list(link: LinkedUser) -> tuple[str, InlineKeyboardMarkup | None]:
         summaries = await client.search_user_open_tickets(link.glpi_users_id)
         if not summaries:
@@ -132,6 +137,7 @@ def build_my_tickets_router(
             status=ticket.status,
             assignee=", ".join(assignees) if assignees else None,
             followups=lines,
+            url=_ticket_url(ticket_id),
         )
         # Remind only while New (no technician has taken it yet).
         return text, ticket.status in OPEN_TICKET_STATUSES, ticket.status == TICKET_STATUS_NEW
@@ -195,6 +201,13 @@ def build_my_tickets_router(
         )
         await cb.answer()
 
+    # /cancel must precede the state text handlers, or the comment/close-reason
+    # steps would swallow it as content.
+    @router.message(StateFilter(MyTickets), Command("cancel"))
+    async def cmd_cancel(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(texts.NEW_CANCELLED)
+
     # -- add comment -------------------------------------------------------
     @router.callback_query(F.data.startswith("mt:comment:"))
     async def on_comment(cb: CallbackQuery, state: FSMContext) -> None:
@@ -230,7 +243,7 @@ def build_my_tickets_router(
                 ticket_id, pending.filename, content, mime=pending.mime
             )
         except Exception as exc:  # noqa: BLE001 - download or upload failure
-            log.error("my_tickets_attach_failed id=%s error=%s", ticket_id, exc)
+            log.exception("my_tickets_attach_failed id=%s error=%s", ticket_id, exc)
             await message.answer(texts.GLPI_ERROR)
             return
         await _finish_comment(message, state, ticket_id, content=f"{link.display_name}:\n{caption}")
@@ -241,7 +254,9 @@ def build_my_tickets_router(
         try:
             followup_id = await client.add_followup(ticket_id, content)
         except GlpiError as exc:
-            log.error("my_tickets_comment_failed id=%s error=%s raw=%s", ticket_id, exc, exc.raw)
+            log.exception(
+                "my_tickets_comment_failed id=%s error=%s raw=%s", ticket_id, exc, exc.raw
+            )
             await message.answer(texts.GLPI_ERROR)
             return
         await state.clear()
@@ -297,7 +312,7 @@ def build_my_tickets_router(
                 )
             await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
         except GlpiError as exc:
-            log.error("my_tickets_close_failed id=%s error=%s raw=%s", ticket_id, exc, exc.raw)
+            log.exception("my_tickets_close_failed id=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             return False
         # Suppress the sync-loop echo of the requester's own close: advance the
         # followup cursor past the reason and stop watching the (now closed) ticket.
@@ -385,10 +400,5 @@ def build_my_tickets_router(
                 timeutil.hours_since(ticket.date_creation),
             )
         await cb.answer(texts.MYT_REMIND_SENT)
-
-    @router.message(StateFilter(MyTickets), Command("cancel"))
-    async def cmd_cancel(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer(texts.NEW_CANCELLED)
 
     return router

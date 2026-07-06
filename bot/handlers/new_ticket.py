@@ -202,10 +202,31 @@ def build_new_ticket_router(
         await state.clear()
         await _open_category_step(message, state)
 
+    # /cancel must be registered BEFORE the state text handlers, or the title/
+    # description steps would swallow it as content (found by the FSM tests).
+    @router.message(StateFilter(NewTicket), Command("cancel"))
+    async def cmd_cancel(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(texts.NEW_CANCELLED, reply_markup=main_menu_keyboard())
+
+    # Steps that wait for a button press: don't ignore typed text silently.
+    @router.message(
+        StateFilter(NewTicket.choosing_category, NewTicket.choosing_urgency, NewTicket.confirming)
+    )
+    async def on_button_step_message(message: Message) -> None:
+        await message.answer(texts.USE_BUTTONS)
+
     @router.callback_query(NewTicket.choosing_category, F.data.startswith("nt:cat:"))
     async def on_category(cb: CallbackQuery, state: FSMContext) -> None:
         cat_id = int(cb.data.rsplit(":", 1)[1])
-        categories = await category_cache.get()
+        # The cache may have expired since the keyboard was shown; the id is
+        # already in the callback data, the name is display-only -> fall back
+        # instead of letting GlpiError kill the dialog mid-step.
+        try:
+            categories = await category_cache.get()
+        except GlpiError as exc:
+            log.warning("new_ticket_category_name_failed error=%s", exc)
+            categories = []
         name = next((c.completename for c in categories if c.id == cat_id), str(cat_id))
         await state.update_data(category_id=cat_id, category_name=name)
         await state.set_state(NewTicket.choosing_urgency)
@@ -333,7 +354,7 @@ def build_new_ticket_router(
                 requester_users_id=link.glpi_users_id,
             )
         except GlpiError as exc:
-            log.error("new_ticket_create_failed error=%s raw=%s", exc, exc.raw)
+            log.exception("new_ticket_create_failed error=%s raw=%s", exc, exc.raw)
             await cb.message.answer(texts.GLPI_ERROR)
             await state.clear()
             return
@@ -379,17 +400,12 @@ def build_new_ticket_router(
                 )
         return uploaded
 
-    # Cancel from any state (inline button or /cancel command).
+    # Cancel from any state (inline button).
     @router.callback_query(F.data == "nt:cancel")
     async def on_cancel_cb(cb: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await cb.message.edit_text(texts.NEW_CANCELLED)
         await cb.answer()
-
-    @router.message(StateFilter(NewTicket), Command("cancel"))
-    async def cmd_cancel(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer(texts.NEW_CANCELLED, reply_markup=main_menu_keyboard())
 
     # --- free text outside a dialog: offer to turn it into a ticket ----------
     @router.message(StateFilter(None), F.text, ~F.text.startswith("/"))

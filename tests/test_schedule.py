@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from bot import texts
 from bot.schedule import WorkSchedule
@@ -39,6 +41,40 @@ def test_next_open_after_close_is_next_workday():
 
 def test_next_open_weekend_is_monday():
     assert SCHED.next_open(SAT_1200) == datetime(2026, 7, 13, 9, 0, tzinfo=KGD)  # next Mon
+
+
+def test_next_open_friday_evening_is_monday():
+    fri_1830 = datetime(2026, 7, 10, 18, 30, tzinfo=KGD)
+    assert SCHED.next_open(fri_1830) == datetime(2026, 7, 13, 9, 0, tzinfo=KGD)
+
+
+def test_is_working_converts_foreign_tz():
+    # The schedule is Kaliningrad (UTC+2); a UTC-labelled instant must be
+    # converted, not read verbatim.
+    assert SCHED.is_working(datetime(2026, 7, 6, 7, 30, tzinfo=UTC)) is True  # 09:30 local
+    assert SCHED.is_working(datetime(2026, 7, 6, 6, 55, tzinfo=UTC)) is False  # 08:55 local
+    assert SCHED.is_working(datetime(2026, 7, 6, 16, 30, tzinfo=UTC)) is False  # 18:30 local
+
+
+def test_next_open_from_utc_moment():
+    # Mon 06:55 UTC == 08:55 local -> opens today 09:00 local.
+    target = SCHED.next_open(datetime(2026, 7, 6, 6, 55, tzinfo=UTC))
+    assert target == datetime(2026, 7, 6, 9, 0, tzinfo=KGD)
+
+
+def test_from_config_rejects_empty_days():
+    with pytest.raises(ValueError, match="no days"):
+        WorkSchedule.from_config("09:00-18:00", "5-1", tz_name="Europe/Kaliningrad")
+
+
+def test_from_config_rejects_inverted_hours():
+    with pytest.raises(ValueError, match="start must be before end"):
+        WorkSchedule.from_config("18:00-09:00", "1-5", tz_name="Europe/Kaliningrad")
+
+
+def test_parse_days_list_and_range_mix():
+    sched = WorkSchedule.from_config("09:00-18:00", "1-3,6", tz_name="Europe/Kaliningrad")
+    assert sorted(sched.work_days) == [1, 2, 3, 6]
 
 
 def test_next_work_phrase_today():

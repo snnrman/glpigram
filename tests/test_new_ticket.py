@@ -185,3 +185,107 @@ async def test_attach_cancel_confirmed_aborts_ticket():
     await dp.feed_update(bot, _cb_update(bot, 13, "nt:cancel"))
     assert _last_text(bot) == texts.NEW_CANCELLED
     assert await ctx.get_state() is None
+
+
+# --- FSM robustness: cancel at every step, garbage input ---------------------
+_STEP_DATA = {
+    "category_id": 1,
+    "category_name": "C",
+    "urgency": 3,
+    "title": "T",
+    "description": "D",
+    "attachments": [],
+}
+
+
+async def _dispatcher_at(state, data=None):
+    """Dispatcher + FSM context pre-seeded into an arbitrary /new step."""
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+    dp.include_router(build_new_ticket_router(MagicMock(), MagicMock(), MagicMock()))
+    ctx = FSMContext(storage=storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
+    await ctx.set_state(state)
+    await ctx.set_data(dict(_STEP_DATA if data is None else data))
+    return dp, ctx
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        NewTicket.choosing_category,
+        NewTicket.choosing_urgency,
+        NewTicket.entering_title,
+        NewTicket.entering_description,
+        NewTicket.confirming,
+    ],
+)
+async def test_cancel_button_works_at_every_step(step):
+    dp, ctx = await _dispatcher_at(step)
+    bot = FakeBot()
+    await dp.feed_update(bot, _cb_update(bot, 1, "nt:cancel"))
+    assert _last_text(bot) == texts.NEW_CANCELLED
+    assert await ctx.get_state() is None
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        NewTicket.choosing_category,
+        NewTicket.entering_title,
+        NewTicket.entering_description,
+        NewTicket.attaching,
+        NewTicket.confirming,
+    ],
+)
+async def test_cancel_command_works_at_every_step(step):
+    dp, ctx = await _dispatcher_at(step)
+    bot = FakeBot()
+    await dp.feed_update(bot, _text_update(bot, 1, "/cancel"))
+    assert _last_text(bot) == texts.NEW_CANCELLED
+    assert await ctx.get_state() is None
+
+
+async def test_photo_instead_of_title_is_rejected_state_kept():
+    dp, ctx = await _dispatcher_at(NewTicket.entering_title)
+    bot = FakeBot()
+    await dp.feed_update(bot, _photo_update(bot, 1))
+    assert _last_text(bot) == texts.NEW_EXPECT_TEXT
+    assert await ctx.get_state() == NewTicket.entering_title  # still waiting
+
+
+async def test_photo_instead_of_description_is_rejected_state_kept():
+    dp, ctx = await _dispatcher_at(NewTicket.entering_description)
+    bot = FakeBot()
+    await dp.feed_update(bot, _photo_update(bot, 1))
+    assert _last_text(bot) == texts.NEW_EXPECT_TEXT
+    assert await ctx.get_state() == NewTicket.entering_description
+
+
+async def test_too_long_title_rejected_state_kept():
+    dp, ctx = await _dispatcher_at(NewTicket.entering_title)
+    bot = FakeBot()
+    await dp.feed_update(bot, _text_update(bot, 1, "x" * 251))
+    assert _last_text(bot) == texts.NEW_TITLE_TOO_LONG
+    assert await ctx.get_state() == NewTicket.entering_title
+
+
+async def test_random_text_while_attaching_prompts_with_keyboard():
+    dp, ctx = await _dispatcher_at(NewTicket.attaching)
+    bot = FakeBot()
+    await dp.feed_update(bot, _text_update(bot, 1, "просто текст"))
+    assert _last_text(bot) == texts.ATTACH_UNSUPPORTED
+    # the reply must carry the Готово/Отмена keyboard (regression of the old bug)
+    assert bot.sent[-1][1] is not None
+    assert await ctx.get_state() == NewTicket.attaching
+
+
+@pytest.mark.parametrize(
+    "step",
+    [NewTicket.choosing_category, NewTicket.choosing_urgency, NewTicket.confirming],
+)
+async def test_text_on_button_steps_prompts_use_buttons(step):
+    dp, ctx = await _dispatcher_at(step)
+    bot = FakeBot()
+    await dp.feed_update(bot, _text_update(bot, 1, "какой-то текст"))
+    assert _last_text(bot) == texts.USE_BUTTONS
+    assert await ctx.get_state() == step  # dialog not disturbed

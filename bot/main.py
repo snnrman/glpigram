@@ -23,6 +23,7 @@ from .cache import TTLValue
 from .config import Settings, load_settings
 from .db.repo import Repo
 from .glpi.client import GlpiClient
+from .handlers.fallback import build_fallback_router, register_error_handler
 from .handlers.linking import build_linking_router
 from .handlers.my_tickets import build_my_tickets_router
 from .handlers.new_ticket import build_new_ticket_router
@@ -96,6 +97,10 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         router.message.middleware(auth)
         router.callback_query.middleware(auth)
         dp.include_router(router)
+
+    # Last: stale-button catch-all + generic reply on unhandled exceptions.
+    dp.include_router(build_fallback_router())
+    register_error_handler(dp)
     return dp
 
 

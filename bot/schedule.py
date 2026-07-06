@@ -42,9 +42,20 @@ class WorkSchedule:
     def from_config(
         cls, work_hours: str, work_days: str, *, tz_name: str | None = None
     ) -> WorkSchedule:
+        """Build from env-style strings; raises ``ValueError`` on nonsense config.
+
+        Fail fast at startup (CLAUDE.md): an empty day set or inverted hours
+        would silently defer every notification forever.
+        """
         start_s, end_s = work_hours.split("-")
+        start, end = _parse_hm(start_s), _parse_hm(end_s)
+        days = _parse_days(work_days)
+        if not days:
+            raise ValueError(f"WORK_DAYS={work_days!r} selects no days")
+        if start >= end:
+            raise ValueError(f"WORK_HOURS={work_hours!r}: start must be before end")
         tz = ZoneInfo(tz_name) if tz_name else datetime.now().astimezone().tzinfo
-        return cls(_parse_hm(start_s), _parse_hm(end_s), _parse_days(work_days), tz)
+        return cls(start, end, days, tz)
 
     def now(self) -> datetime:
         return datetime.now(self.tz)

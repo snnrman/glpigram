@@ -29,7 +29,7 @@ from aiogram import Bot
 
 from .. import texts, timeutil
 from ..db.repo import Repo, TrackedTicket
-from ..glpi.client import TICKET_STATUS_CLOSED, GlpiClient, GlpiError
+from ..glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, GlpiClient, GlpiError
 from ..schedule import WorkSchedule
 from . import notify
 
@@ -152,6 +152,10 @@ class SyncService:
         if ticket is None:  # deleted in GLPI meanwhile
             return
         if kind == "remind":
+            if ticket.status != TICKET_STATUS_NEW:
+                # Taken/solved overnight -> the nudge is moot, drop it silently.
+                log.info("sync_flush_remind_skipped id=%s status=%s", ticket_id, ticket.status)
+                return
             await notify.notify_reminder(
                 self._bot,
                 self._tech_chat,

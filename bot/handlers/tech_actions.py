@@ -97,7 +97,7 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
         try:
             await client.assign_ticket(ticket_id, link.glpi_users_id)
         except GlpiError as exc:
-            log.error("tech_take_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
+            log.exception("tech_take_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
         if cb.message is not None:
@@ -141,6 +141,13 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
             prompt=texts.TECH_ASK_SOLUTION,
         )
 
+    # /cancel must precede the state text handlers, or the comment/solution
+    # steps would swallow it as content.
+    @router.message(StateFilter(TechAction), Command("cancel"))
+    async def on_cancel(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(texts.TECH_ACTION_CANCELLED)
+
     # -- DM text handlers --------------------------------------------------
     @router.message(TechAction.commenting, F.text)
     async def on_comment_text(message: Message, state: FSMContext, link: LinkedUser) -> None:
@@ -168,7 +175,7 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
                 ticket_id, pending.filename, content, mime=pending.mime
             )
         except Exception as exc:  # noqa: BLE001 - download or upload failure
-            log.error("tech_attach_failed ticket=%s error=%s", ticket_id, exc)
+            log.exception("tech_attach_failed ticket=%s error=%s", ticket_id, exc)
             await message.answer(texts.GLPI_ERROR)
             return
         await _post_comment(message, state, content=f"{link.display_name}:\n{caption}")
@@ -179,7 +186,7 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
         try:
             await client.add_followup(ticket_id, content)
         except GlpiError as exc:
-            log.error("tech_comment_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
+            log.exception("tech_comment_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await message.answer(texts.GLPI_ERROR)
             return
         await state.clear()
@@ -194,17 +201,12 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
         try:
             await client.add_solution(ticket_id, message.text.strip())
         except GlpiError as exc:
-            log.error("tech_close_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
+            log.exception("tech_close_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await message.answer(texts.GLPI_ERROR)
             return
         await state.clear()
         await message.answer(texts.TECH_SOLUTION_DONE)
         await _mark_card_solved(bot, data, link.display_name)
-
-    @router.message(StateFilter(TechAction), Command("cancel"))
-    async def on_cancel(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer(texts.TECH_ACTION_CANCELLED)
 
     @router.message(StateFilter(TechAction))
     async def on_expect_text(message: Message) -> None:
