@@ -118,6 +118,14 @@ deploy/
      заявителем без комментария"), mentioning the assigned technician if any. The sync loop
      must NOT echo this close back to the requester (advance the ticket's followup cursor
      past the reason and mark it inactive/closed in SQLite).
+   - **Requester remind ("🔔 Напомнить о себе"):** detail view shows this button only for
+     the user's own tickets still in status New (no technician assigned). Tapping posts
+     "🔔 Заявитель напоминает о заявке #N: <title> (создана X ч назад)" to the tech group
+     with the standard Take/Comment/Close buttons, and confirms to the requester. Rate-limited
+     to once per `REMIND_COOLDOWN_HOURS` (default 4) per ticket — the last-remind time is
+     stored in SQLite (`ticket_reminders`); an earlier retry gets "повторно можно через X ч"
+     and nothing is sent. If the ticket was taken meanwhile (status ≠ New), the button/action
+     is refused.
 4. **Sync loop (GLPI -> TG).** Poll every 45 s:
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
    - status changes on tickets created via the bot -> notify the requester

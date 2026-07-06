@@ -102,3 +102,15 @@ async def notify_closed_by_requester(
         chat_id,
         texts.notify_closed_by_requester(ticket_id=ticket_id, reason=reason, assignees=assignees),
     )
+
+
+async def notify_reminder(
+    bot: Bot, chat_id: int, ticket_id: int, title: str, hours_ago: int | None
+) -> None:
+    """Requester nudge to the tech group, with the standard action buttons."""
+    await _send(
+        bot,
+        chat_id,
+        texts.notify_reminder(ticket_id=ticket_id, title=title, hours_ago=hours_ago),
+        reply_markup=tech_ticket_keyboard(ticket_id),
+    )

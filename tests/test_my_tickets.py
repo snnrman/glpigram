@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from aiogram import Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -13,9 +14,9 @@ from aiogram.types import CallbackQuery, Chat, Message, Update
 from aiogram.types import User as TgUser
 
 from bot import texts
-from bot.db.repo import LinkedUser
-from bot.glpi.client import TICKET_STATUS_CLOSED, _parse_user_refs
-from bot.glpi.models import TicketSummary
+from bot.db.repo import LinkedUser, Repo
+from bot.glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, _parse_user_refs
+from bot.glpi.models import Ticket, TicketSummary
 from bot.handlers.my_tickets import (
     MyTickets,
     _close_prompt_keyboard,
@@ -42,18 +43,17 @@ def test_list_keyboard_one_button_per_ticket():
     assert data == ["mt:open:5", "mt:open:6"]
 
 
-def test_detail_keyboard_closable_shows_close_button():
-    kb = _detail_keyboard(5, closable=True)
+def test_detail_keyboard_new_shows_remind_and_close():
+    kb = _detail_keyboard(5, closable=True, remindable=True)
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert data == ["mt:comment:5", "mt:close:5", "mt:list"]
+    assert data == ["mt:comment:5", "mt:remind:5", "mt:close:5", "mt:list"]
 
 
-def test_detail_keyboard_not_closable_hides_close_button():
-    data = [
-        b.callback_data for row in _detail_keyboard(5, closable=False).inline_keyboard for b in row
-    ]
+def test_detail_keyboard_taken_hides_remind_and_close():
+    kb = _detail_keyboard(5, closable=False, remindable=False)
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert data == ["mt:comment:5", "mt:list"]
-    assert "mt:close:5" not in data
+    assert "mt:remind:5" not in data and "mt:close:5" not in data
 
 
 def test_close_prompt_keyboard_has_no_comment_button():
@@ -220,3 +220,59 @@ async def test_close_without_comment_button_closes_without_followup():
     assert await ctx.get_state() is None
     tech = [t for c, t in bot.sent if c == TECH_CHAT]
     assert tech and "без комментария" in tech[-1].lower()
+
+
+# --- remind about a ticket (cooldown) ---------------------------------------
+@pytest.fixture
+async def repo(tmp_path):
+    r = Repo(str(tmp_path / "myt.sqlite3"))
+    await r.connect()
+    yield r
+    await r.close()
+
+
+def _remind_dispatcher(bot: FakeBot, repo: Repo, *, status: int = TICKET_STATUS_NEW):
+    client = AsyncMock()
+    client.get_ticket.return_value = Ticket(
+        id=TICKET,
+        name="Печать",
+        content="c",
+        status=status,
+        urgency=3,
+        date_creation="2020-01-01 00:00:00",
+    )
+    router = build_my_tickets_router(
+        client, repo, tech_group_chat_id=TECH_CHAT, remind_cooldown_hours=4
+    )
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    return dp
+
+
+def _tech_msgs(bot: FakeBot) -> list[str]:
+    return [t for c, t in bot.sent if c == TECH_CHAT]
+
+
+async def test_remind_sends_then_cooldown_blocks(repo):
+    bot = FakeBot()
+    dp = _remind_dispatcher(bot, repo)
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
+    assert len(_tech_msgs(bot)) == 1
+    assert "напоминает" in _tech_msgs(bot)[0].lower()
+    assert texts.MYT_REMIND_SENT in [t for _, t in bot.sent]
+    assert await repo.get_last_remind(TICKET) is not None
+
+    # Second tap within the cooldown: nothing new to the group, a toast instead.
+    await dp.feed_update(bot, _cb_update(bot, 2, f"mt:remind:{TICKET}"))
+    assert len(_tech_msgs(bot)) == 1  # still only the first reminder
+    assert any(t and "повторно можно через" in t.lower() for _, t in bot.sent)
+
+
+async def test_remind_blocked_when_ticket_taken(repo):
+    bot = FakeBot()
+    dp = _remind_dispatcher(bot, repo, status=2)  # already assigned
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
+    assert _tech_msgs(bot) == []  # nothing sent to the group
+    assert await repo.get_last_remind(TICKET) is None

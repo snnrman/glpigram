@@ -35,3 +35,11 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
 );
+
+-- Last time the requester nudged the tech group about a ticket ("remind me"),
+-- for the per-ticket cooldown (feature 3). Works for any ticket, not just
+-- bot-created ones.
+CREATE TABLE IF NOT EXISTS ticket_reminders (
+    ticket_id      INTEGER PRIMARY KEY,
+    last_remind_at INTEGER NOT NULL  -- unix seconds
+);
