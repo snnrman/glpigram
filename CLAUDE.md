@@ -85,11 +85,16 @@ deploy/
    confirm -> create ticket. Reply with ticket number and link.
 2. **Account linking (AD-based).** GLPI users are synced from Active Directory via LDAP;
    `User.name` equals the AD sAMAccountName and is the linking key.
-   `/start` requires linking: the user sends their AD login (the one they use for Windows
-   sign-in; if they type `login@domain`, strip the domain part), bot finds the GLPI user by
-   `name` (must be active: not deleted, is_active=1), an admin confirms with a button in the
-   tech group (anti-spoofing), mapping stored in SQLite (tg_id, glpi_users_id, display name,
-   is_tech). Unlinked users can do nothing except /start.
+   `/start` requires linking. The user may send **either an AD login or their full name**:
+   - **Login path** (single ASCII token, no spaces): strip any `login@domain` / `DOMAIN\login`,
+     find the GLPI user by exact `name` (must be active: not deleted, is_active=1).
+   - **Name path** (input has a space or Cyrillic): search GLPI users by partial,
+     case-insensitive `realname`/`firstname` match (active only). **1** candidate → an
+     "Это вы?" confirm button; **2–5** → an inline pick-list; **0** → ask for the AD login.
+     The user's pick/confirm resolves which GLPI account they mean.
+   In **all** cases the resolved account then goes to an admin for confirmation with a button
+   in the tech group (anti-spoofing). Mapping stored in SQLite (tg_id, glpi_users_id, display
+   name, is_tech). Unlinked users can do nothing except /start.
    - **Auto-unlink:** on every action by a linked user, verify (with a short cache, ~5 min)
      that the GLPI account is still active; if deactivated/deleted in GLPI (i.e. disabled
      in AD), silently unlink and answer as if the user was never linked. This is the

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from bot.handlers.linking import _parse_link_args, normalize_login
+from bot.handlers.linking import (
+    _candidate_keyboard,
+    _parse_link_args,
+    looks_like_name,
+    normalize_login,
+)
 
 
 @pytest.mark.parametrize(
@@ -19,6 +24,40 @@ from bot.handlers.linking import _parse_link_args, normalize_login
 )
 def test_normalize_login(raw, expected):
     assert normalize_login(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("jdoe", False),  # single ascii token -> login
+        ("jdoe@corp.local", False),
+        ("john doe", True),  # has a space -> name
+        ("Иван", True),  # cyrillic -> name
+        ("Каленский", True),
+        ("  Пётр  ", True),
+    ],
+)
+def test_looks_like_name(raw, expected):
+    assert looks_like_name(raw) is expected
+
+
+class _FakeUser:
+    def __init__(self, uid, name):
+        self.id = uid
+        self.display_name = name
+
+
+def test_candidate_keyboard_single_is_me():
+    kb = _candidate_keyboard([_FakeUser(42, "Олег Каленский")])
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert data == ["lk:pick:42", "lk:name_no"]
+
+
+def test_candidate_keyboard_multiple_pick_list():
+    users = [_FakeUser(41, "Олег Максимов"), _FakeUser(42, "Олег Каленский")]
+    kb = _candidate_keyboard(users)
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert data == ["lk:pick:41", "lk:pick:42", "lk:name_no"]
 
 
 class _Msg:

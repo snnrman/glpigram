@@ -314,6 +314,43 @@ async def test_find_user_by_login_no_match(mock):
     await client.close()
 
 
+async def test_search_users_by_name_matches_all_tokens_active_only(mock):
+    await _init_route(mock)
+    # Server-side searchText narrows on the longest token; both fields are probed.
+    # Pool includes a namesake (different surname) and a deactivated user.
+    pool = [
+        {"id": 42, "name": "oleg.k", "firstname": "Олег", "realname": "Каленский", "is_active": 1},
+        {"id": 41, "name": "oleg.m", "firstname": "Олег", "realname": "Максимов", "is_active": 1},
+        {"id": 40, "name": "old", "firstname": "Олег", "realname": "Каленский", "is_active": 0},
+    ]
+    mock.get(f"{BASE}/User").mock(return_value=httpx.Response(200, json=pool))
+    client = make_client()
+    res = await client.search_users_by_name("Олег Каленский")
+    # only the active user whose combined name contains BOTH tokens
+    assert [u.id for u in res] == [42]
+    await client.close()
+
+
+async def test_search_users_by_name_multiple_and_limit(mock):
+    await _init_route(mock)
+    pool = [
+        {"id": i, "name": f"u{i}", "firstname": "Олег", "realname": f"Ф{i}", "is_active": 1}
+        for i in range(8)
+    ]
+    mock.get(f"{BASE}/User").mock(return_value=httpx.Response(200, json=pool))
+    client = make_client()
+    res = await client.search_users_by_name("Олег", limit=5)
+    assert len(res) == 5  # capped at limit
+    await client.close()
+
+
+async def test_search_users_by_name_blank_query(mock):
+    await _init_route(mock)
+    client = make_client()
+    assert await client.search_users_by_name("   ") == []
+    await client.close()
+
+
 async def test_get_user_returns_none_on_404(mock):
     await _init_route(mock)
     mock.get(f"{BASE}/User/99").mock(return_value=httpx.Response(404, json=["ERROR", "x"]))
