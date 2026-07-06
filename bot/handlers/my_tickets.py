@@ -42,8 +42,7 @@ _MAX_FOLLOWUPS = 5
 
 class MyTickets(StatesGroup):
     commenting = State()
-    closing_reason = State()
-    closing_confirm = State()
+    closing = State()
 
 
 def _list_keyboard(summaries: list[TicketSummary]) -> InlineKeyboardMarkup:
@@ -70,12 +69,13 @@ def _detail_keyboard(ticket_id: int, *, closable: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _close_confirm_keyboard() -> InlineKeyboardMarkup:
+def _close_prompt_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=texts.BTN_MYT_CLOSE_YES, callback_data="mt:close_yes"),
-                InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="mt:close_no"),
+                InlineKeyboardButton(
+                    text=texts.BTN_MYT_CLOSE_NO_COMMENT, callback_data="mt:close_empty"
+                )
             ]
         ]
     )
@@ -256,67 +256,72 @@ def build_my_tickets_router(
     @router.callback_query(F.data.startswith("mt:close:"))
     async def on_close_start(cb: CallbackQuery, state: FSMContext) -> None:
         ticket_id = int(cb.data.split(":")[2])
-        await state.set_state(MyTickets.closing_reason)
+        await state.set_state(MyTickets.closing)
         await state.update_data(close_ticket_id=ticket_id)
-        await cb.message.answer(texts.myt_ask_close_reason(ticket_id))
+        await cb.message.answer(texts.MYT_CLOSE_PROMPT, reply_markup=_close_prompt_keyboard())
         await cb.answer()
 
-    @router.message(MyTickets.closing_reason, F.text)
-    async def on_close_reason(message: Message, state: FSMContext) -> None:
-        data = await state.get_data()
-        await state.update_data(close_reason=message.text.strip())
-        await state.set_state(MyTickets.closing_confirm)
-        await message.answer(
-            texts.myt_close_confirm(data["close_ticket_id"]),
-            reply_markup=_close_confirm_keyboard(),
-        )
+    async def _do_close(ticket_id: int, reason: str | None, link: LinkedUser, bot: Bot) -> bool:
+        """Add the reason followup (if any), close the ticket, notify the techs.
 
-    @router.message(MyTickets.closing_reason)
-    async def on_close_reason_not_text(message: Message) -> None:
-        await message.answer(texts.NEW_EXPECT_TEXT)
-
-    @router.callback_query(MyTickets.closing_confirm, F.data == "mt:close_no")
-    async def on_close_cancel(cb: CallbackQuery, state: FSMContext) -> None:
-        await state.clear()
-        await cb.message.edit_text(texts.MYT_CLOSE_CANCELLED)
-        await cb.answer()
-
-    @router.callback_query(MyTickets.closing_confirm, F.data == "mt:close_yes")
-    async def on_close_confirm(
-        cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot
-    ) -> None:
-        data = await state.get_data()
-        ticket_id = data["close_ticket_id"]
-        reason = data["close_reason"]
-        await cb.answer()
-        # Fetch assignees before closing so the tech-group note can mention them.
+        No confirmation step: any text is the reason, the button closes with none.
+        Returns False on GLPI failure so the caller can keep the dialog open.
+        """
+        # Assignees fetched before closing so the tech-group note can mention them.
         try:
             assignees = await client.get_ticket_assignees(ticket_id)
         except GlpiError:
             assignees = []
+        followup_id: int | None = None
         try:
-            followup_id = await client.add_followup(
-                ticket_id, texts.close_followup_body(link.display_name, reason)
-            )
+            if reason:
+                followup_id = await client.add_followup(
+                    ticket_id, texts.close_followup_body(link.display_name, reason)
+                )
             await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
         except GlpiError as exc:
             log.error("my_tickets_close_failed id=%s error=%s raw=%s", ticket_id, exc, exc.raw)
-            await state.clear()
-            await cb.message.answer(texts.GLPI_ERROR)
-            return
-        await state.clear()
+            return False
         # Suppress the sync-loop echo of the requester's own close: advance the
         # followup cursor past the reason and stop watching the (now closed) ticket.
         try:
-            await repo.set_ticket_followup_cursor(ticket_id, followup_id)
+            if followup_id is not None:
+                await repo.set_ticket_followup_cursor(ticket_id, followup_id)
             await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
         except Exception:  # noqa: BLE001 - untracked ticket / DB hiccup is non-fatal
             log.exception("my_tickets_close_cursor_bump_failed id=%s", ticket_id)
-        await cb.message.edit_text(texts.MYT_CLOSE_DONE)
         if tech_group_chat_id is not None:
             await notify.notify_closed_by_requester(
                 bot, tech_group_chat_id, ticket_id, reason, assignees
             )
+        return True
+
+    @router.message(MyTickets.closing, F.text)
+    async def on_close_reason(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
+        ticket_id = (await state.get_data())["close_ticket_id"]
+        if await _do_close(ticket_id, message.text.strip(), link, bot):
+            await state.clear()
+            await message.answer(texts.MYT_CLOSE_DONE)
+        else:
+            await message.answer(texts.GLPI_ERROR)  # stay in state so the user can retry
+
+    @router.callback_query(MyTickets.closing, F.data == "mt:close_empty")
+    async def on_close_empty(
+        cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
+        ticket_id = (await state.get_data())["close_ticket_id"]
+        await cb.answer()
+        if await _do_close(ticket_id, None, link, bot):
+            await state.clear()
+            await cb.message.edit_text(texts.MYT_CLOSE_DONE)
+        else:
+            await cb.message.edit_text(texts.GLPI_ERROR)
+
+    @router.message(MyTickets.closing)
+    async def on_close_not_text(message: Message) -> None:
+        await message.answer(texts.MYT_CLOSE_PROMPT, reply_markup=_close_prompt_keyboard())
 
     @router.message(StateFilter(MyTickets), Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext) -> None:
