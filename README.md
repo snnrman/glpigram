@@ -156,4 +156,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 Oleg K.
+[MIT](LICENSE) © 2026 Oleg Kalenski

@@ -155,4 +155,4 @@ venv/bin/pytest
 
 ## Лицензия
 
-[MIT](LICENSE) © 2026 Oleg K.
+[MIT](LICENSE) © 2026 Oleg Kalenski
