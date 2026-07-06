@@ -169,7 +169,7 @@ def build_linking_router(
             )
             return True
         except Exception as exc:  # noqa: BLE001 - misconfigured chat id / bot not in group
-            log.error("link_request_send_failed chat=%s error=%s", tech_group_chat_id, exc)
+            log.exception("link_request_send_failed chat=%s error=%s", tech_group_chat_id, exc)
             return False
 
     @router.message(Linking.awaiting_login, F.text)

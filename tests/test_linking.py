@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from bot.handlers.linking import (
     _candidate_keyboard,
+    _from_tech_group,
     _parse_link_args,
     looks_like_name,
     normalize_login,
@@ -80,3 +83,17 @@ def test_parse_link_args_reply_form():
 def test_parse_link_args_invalid():
     assert _parse_link_args(_Msg(), None) == (None, None)
     assert _parse_link_args(_Msg(), "jdoe") == (None, None)  # no tg_id, no reply
+
+
+def _cb(chat_id):
+    msg = SimpleNamespace(chat=SimpleNamespace(id=chat_id)) if chat_id is not None else None
+    return SimpleNamespace(message=msg)
+
+
+def test_from_tech_group_is_the_trust_boundary():
+    # Confirm buttons only work from inside the configured tech group.
+    assert _from_tech_group(_cb(-100), -100) is True
+    assert _from_tech_group(_cb(-200), -100) is False  # forwarded elsewhere
+    assert _from_tech_group(_cb(555), -100) is False  # private chat
+    assert _from_tech_group(_cb(None), -100) is False  # no message attached
+    assert _from_tech_group(_cb(-100), None) is False  # group not configured

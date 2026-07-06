@@ -255,3 +255,99 @@ async def test_high_urgency_offhours_sent_immediately(repo):
     await _service(bot, client, repo, now=OFFHOURS_NIGHT).tick()
     assert any("Новая заявка №3" in m for m in _tech(bot))
     assert await repo.list_deferred() == []
+
+
+# --- restart survival (cursors are the dedup mechanism) ----------------------
+async def test_restart_does_not_resend_new_ticket_cards(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(2), _ticket(1)])
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo).tick()
+    assert len(_tech(bot)) == 1  # ticket 2 announced once
+
+    # "Restart": a brand-new service over the same repo sees the same GLPI page.
+    bot.sent.clear()
+    svc2 = _service(bot, client, repo)
+    await svc2._seed_cursor()  # run() would call this; must be a no-op now
+    await svc2.tick()
+    assert _tech(bot) == []  # cursor persisted -> no duplicates
+
+
+async def test_restart_does_not_resend_forwarded_followups(repo):
+    followups = [Followup(id=1, tickets_id=20, content="ответ", users_id=99)]
+    client = FakeClient(tickets={20: _ticket(20, status=1)}, followups={20: followups})
+    await repo.track_ticket(
+        ticket_id=20, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    bot = FakeBot()
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert len(bot.sent) == 1  # forwarded once
+
+    bot.sent.clear()
+    await _service(bot, client, repo)._poll_tracked_tickets()  # new instance = restart
+    assert bot.sent == []  # followup cursor persisted
+
+
+async def test_restart_does_not_resend_status_change(repo):
+    client = FakeClient(tickets={10: _ticket(10, status=2)})
+    await repo.track_ticket(
+        ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    bot = FakeBot()
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert len(bot.sent) == 1
+
+    bot.sent.clear()
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert bot.sent == []  # last_status persisted
+
+
+async def test_deferred_queue_survives_restart(repo):
+    low = _ticket(2, status=1, urgency=2)
+    client = FakeClient(recent=[low], tickets={2: low})
+    await repo.set_cursor("last_ticket_id", 1)
+    bot = FakeBot()
+
+    # Queued off-hours by one instance...
+    await _service(bot, client, repo, now=OFFHOURS_SAT).tick()
+    assert len(await repo.list_deferred()) == 1
+
+    # ...flushed by a different instance after a restart, exactly once.
+    bot.sent.clear()
+    client.recent = []
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
+    assert any("Новая заявка №2" in m for m in _tech(bot))
+    assert await repo.list_deferred() == []
+
+    bot.sent.clear()
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
+    assert _tech(bot) == []  # queue drained, no re-flush
+
+
+async def test_self_close_suppresses_echo(repo):
+    """Requester closes own ticket -> cursors bumped -> sync sends nothing."""
+    reason = Followup(id=5, tickets_id=30, content="сам закрыл", users_id=42)
+    client = FakeClient(tickets={30: _ticket(30, status=6)}, followups={30: [reason]})
+    await repo.track_ticket(
+        ticket_id=30, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    # what the /tickets close flow records:
+    await repo.set_ticket_followup_cursor(30, 5)
+    await repo.set_ticket_status(30, status=6, active=False)
+
+    bot = FakeBot()
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert bot.sent == []  # neither the status change nor the reason echoed
+
+
+async def test_flush_skips_remind_for_taken_ticket(repo):
+    # Deferred overnight, but a tech took the ticket before morning -> drop it.
+    taken = _ticket(9, status=2)
+    client = FakeClient(tickets={9: taken})
+    await repo.enqueue_deferred("remind", 9, 0)
+    bot = FakeBot()
+
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
+    assert not any("напоминает" in m.lower() for m in _tech(bot))
+    assert await repo.list_deferred() == []  # consumed, not retried

@@ -270,6 +270,33 @@ async def test_remind_sends_then_cooldown_blocks(repo):
     assert any(t and "повторно можно через" in t.lower() for _, t in bot.sent)
 
 
+async def test_remind_allowed_again_after_cooldown_expires(repo):
+    import time as _time
+
+    bot = FakeBot()
+    dp = _remind_dispatcher(bot, repo)  # cooldown 4h
+    # Last reminder 5h ago -> outside the window, must go through.
+    await repo.set_last_remind(TICKET, int(_time.time()) - 5 * 3600)
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
+    assert len(_tech_msgs(bot)) == 1  # sent again
+    # and the timestamp is refreshed to "now"
+    assert await repo.get_last_remind(TICKET) >= int(_time.time()) - 5
+
+
+async def test_remind_cooldown_boundary_still_blocked(repo):
+    import time as _time
+
+    bot = FakeBot()
+    dp = _remind_dispatcher(bot, repo)
+    # 1 second short of the 4h window -> still blocked.
+    await repo.set_last_remind(TICKET, int(_time.time()) - (4 * 3600 - 1))
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
+    assert _tech_msgs(bot) == []
+    assert any(t and "повторно можно через" in t.lower() for _, t in bot.sent)
+
+
 async def test_remind_blocked_when_ticket_taken(repo):
     bot = FakeBot()
     dp = _remind_dispatcher(bot, repo, status=2)  # already assigned
@@ -308,3 +335,23 @@ async def test_remind_offhours_is_deferred_with_notice(repo):
     assert await repo.get_last_remind(TICKET) is not None  # cooldown from the tap
     # requester gets the quiet-hours notice as a toast
     assert any(t and "в понедельник в 09:00" in t for _, t in bot.sent)
+
+
+async def test_detail_view_contains_ticket_url(repo):
+    client = AsyncMock()
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="Печать", content="c", status=1, urgency=3
+    )
+    client.get_ticket_assignees.return_value = []
+    client.list_followups.return_value = []
+    router = build_my_tickets_router(
+        client, repo, tech_group_chat_id=TECH_CHAT, ticket_front_base="https://glpi.local"
+    )
+    router.callback_query.middleware(_inject_link)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:open:{TICKET}"))
+    texts_sent = [t for _, t in bot.sent if t]
+    assert any(f"https://glpi.local/front/ticket.form.php?id={TICKET}" in t for t in texts_sent)

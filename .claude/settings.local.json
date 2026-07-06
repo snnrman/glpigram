@@ -25,7 +25,8 @@
       "Read(//root/**)",
       "Bash(git ls-remote *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(venv/bin/pip list *)"
     ]
   }
 }

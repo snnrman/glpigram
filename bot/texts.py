@@ -147,8 +147,11 @@ URGENCY_HIGH_LABEL = "🔴 Высокая"
 BTN_CONFIRM = "✅ Отправить"
 BTN_CANCEL = "❌ Отмена"
 
-# --- errors ---
+# --- errors / fallbacks ---
 GLPI_ERROR = "Произошла ошибка при обращении к GLPI. Заявка не создана — попробуйте ещё раз позже."
+GENERIC_ERROR = "Что-то пошло не так. Попробуйте ещё раз."
+STALE_BUTTON = "Кнопка устарела. Откройте меню заново."
+USE_BUTTONS = "Пожалуйста, воспользуйтесь кнопками выше."
 
 
 def ticket_created(ticket_id: int, url: str | None) -> str:
@@ -405,7 +408,13 @@ def _assignee_line(assignee: str | None) -> str:
 
 
 def ticket_detail(
-    *, ticket_id: int, title: str, status: int, assignee: str | None, followups: list[str]
+    *,
+    ticket_id: int,
+    title: str,
+    status: int,
+    assignee: str | None,
+    followups: list[str],
+    url: str | None = None,
 ) -> str:
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     return (
@@ -414,6 +423,7 @@ def ticket_detail(
         f"Статус: {ticket_status_label(status)}\n"
         f"{_assignee_line(assignee)}\n\n"
         f"<b>Последние комментарии:</b>\n{body}"
+        f"{_url_line(url)}"
     )
 
 
