@@ -1,4 +1,4 @@
-"""All user-facing strings (Russian). No i18n framework by design."""
+"""All user-facing strings — Russian. Must mirror the key set of en.py."""
 
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def ticket_created(ticket_id: int, url: str | None) -> str:
 
 
 def urgency_label(urgency: int) -> str:
-    from .glpi.client import URGENCY_HIGH, URGENCY_LOW, URGENCY_MEDIUM
+    from ..glpi.client import URGENCY_HIGH, URGENCY_LOW, URGENCY_MEDIUM
 
     return {
         URGENCY_LOW: URGENCY_LOW_LABEL,
