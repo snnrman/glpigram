@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import math
 import time
-from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -27,7 +26,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from .. import texts
+from .. import texts, timeutil
 from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
     OPEN_TICKET_STATUSES,
@@ -79,18 +78,6 @@ def _detail_keyboard(ticket_id: int, *, closable: bool, remindable: bool) -> Inl
         )
     rows.append([InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data="mt:list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _hours_since(dt_str: str | None) -> int | None:
-    """Whole hours since a GLPI 'YYYY-MM-DD HH:MM:SS' timestamp (server = bot tz)."""
-    if not dt_str:
-        return None
-    try:
-        created = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return None
-    delta = time.time() - created.timestamp()
-    return max(0, int(delta // 3600))
 
 
 def _close_prompt_keyboard() -> InlineKeyboardMarkup:
@@ -376,7 +363,11 @@ def build_my_tickets_router(
 
         if tech_group_chat_id is not None:
             await notify.notify_reminder(
-                bot, tech_group_chat_id, ticket_id, ticket.name, _hours_since(ticket.date_creation)
+                bot,
+                tech_group_chat_id,
+                ticket_id,
+                ticket.name,
+                timeutil.hours_since(ticket.date_creation),
             )
         await repo.set_last_remind(ticket_id, now)
         await cb.answer(texts.MYT_REMIND_SENT)
