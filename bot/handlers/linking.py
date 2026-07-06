@@ -57,6 +57,38 @@ def normalize_login(raw: str) -> str:
     return login.strip()
 
 
+def looks_like_name(raw: str) -> bool:
+    """Heuristic: treat input as a full name (not a login) if it has a space or
+    any Cyrillic letter. AD logins are single ASCII tokens."""
+    text = raw.strip()
+    if " " in text:
+        return True
+    return any("Ѐ" <= ch <= "ӿ" for ch in text)
+
+
+def _candidate_keyboard(users: list) -> InlineKeyboardMarkup:
+    """Self-confirm for one match, or a pick-list (each user) for several."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if len(users) == 1:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_LINK_ITS_ME, callback_data=f"lk:pick:{users[0].id}"
+                )
+            ]
+        )
+        rows.append([InlineKeyboardButton(text=texts.BTN_LINK_NOT_ME, callback_data="lk:name_no")])
+    else:
+        rows.extend(
+            [InlineKeyboardButton(text=u.display_name[:60], callback_data=f"lk:pick:{u.id}")]
+            for u in users
+        )
+        rows.append(
+            [InlineKeyboardButton(text=texts.BTN_LINK_NONE_OF_THESE, callback_data="lk:name_no")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _confirm_keyboard(tg_id: int, glpi_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -119,6 +151,27 @@ def build_linking_router(
         await state.set_state(Linking.awaiting_login)
         await message.answer(texts.LINK_WELCOME)
 
+    async def _send_link_request(bot: Bot, requester, user) -> bool:
+        """Post the admin confirmation card into the tech group. Returns success."""
+        if tech_group_chat_id is None:
+            return False
+        try:
+            await bot.send_message(
+                tech_group_chat_id,
+                texts.link_request(
+                    tg_id=requester.id,
+                    tg_name=_tg_display(requester),
+                    login=user.name,
+                    glpi_name=user.display_name,
+                    glpi_id=user.id,
+                ),
+                reply_markup=_confirm_keyboard(requester.id, user.id),
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 - misconfigured chat id / bot not in group
+            log.error("link_request_send_failed chat=%s error=%s", tech_group_chat_id, exc)
+            return False
+
     @router.message(Linking.awaiting_login, F.text)
     async def on_login(message: Message, state: FSMContext, bot: Bot) -> None:
         if tech_group_chat_id is None:
@@ -126,7 +179,12 @@ def build_linking_router(
             await state.clear()
             await message.answer(texts.LINK_NO_TECH_GROUP)
             return
-        login = normalize_login(message.text)
+        text = message.text.strip()
+        if looks_like_name(text):
+            await _handle_name_query(message, text)
+            return
+        # Otherwise treat it as an AD login (exact, single active match).
+        login = normalize_login(text)
         try:
             user = await client.find_user_by_login(login)
         except GlpiError as exc:
@@ -136,25 +194,60 @@ def build_linking_router(
         if user is None:
             await message.answer(texts.LINK_USER_NOT_FOUND)  # stay in state to retry
             return
-        try:
-            await bot.send_message(
-                tech_group_chat_id,
-                texts.link_request(
-                    tg_id=message.from_user.id,
-                    tg_name=_tg_display(message.from_user),
-                    login=login,
-                    glpi_name=user.display_name,
-                    glpi_id=user.id,
-                ),
-                reply_markup=_confirm_keyboard(message.from_user.id, user.id),
-            )
-        except Exception as exc:  # noqa: BLE001 - misconfigured chat id / bot not in group
-            log.error("link_request_send_failed chat=%s error=%s", tech_group_chat_id, exc)
+        if not await _send_link_request(bot, message.from_user, user):
             await state.clear()
             await message.answer(texts.LINK_NO_TECH_GROUP)
             return
         await state.clear()
         await message.answer(texts.LINK_PENDING)
+
+    async def _handle_name_query(message: Message, query: str) -> None:
+        """Name path: search by first/last name and offer the matches."""
+        try:
+            users = await client.search_users_by_name(query)
+        except GlpiError as exc:
+            log.warning("link_name_lookup_failed error=%s", exc)
+            await message.answer(texts.GLPI_ERROR)
+            return
+        if not users:
+            await message.answer(texts.LINK_NAME_NOT_FOUND)  # stay in state, ask for login
+            return
+        if len(users) == 1:
+            await message.answer(
+                texts.link_name_pick_one(users[0].display_name),
+                reply_markup=_candidate_keyboard(users),
+            )
+        else:
+            await message.answer(texts.LINK_NAME_PICK_MANY, reply_markup=_candidate_keyboard(users))
+
+    @router.callback_query(Linking.awaiting_login, F.data.startswith("lk:pick:"))
+    async def on_name_pick(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+        glpi_id = int(cb.data.split(":")[2])
+        try:
+            user = await client.get_user(glpi_id)
+        except GlpiError as exc:
+            log.warning("link_pick_lookup_failed glpi_id=%s error=%s", glpi_id, exc)
+            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            return
+        if user is None or not user.is_usable:
+            await state.clear()
+            await cb.message.edit_text(texts.LINK_USER_NOT_FOUND)
+            await cb.answer()
+            return
+        if not await _send_link_request(bot, cb.from_user, user):
+            await state.clear()
+            await cb.message.edit_text(texts.LINK_NO_TECH_GROUP)
+            await cb.answer()
+            return
+        await state.clear()
+        await cb.message.edit_text(texts.LINK_PENDING)
+        await cb.answer()
+
+    @router.callback_query(Linking.awaiting_login, F.data == "lk:name_no")
+    async def on_name_none(cb: CallbackQuery) -> None:
+        # Keep the linking state; ask for the AD login instead.
+        await cb.message.edit_text(texts.LINK_ASK_LOGIN)
+        await cb.answer()
 
     @router.message(Linking.awaiting_login)
     async def on_login_not_text(message: Message) -> None:

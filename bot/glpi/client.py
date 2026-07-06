@@ -454,6 +454,42 @@ class GlpiClient:
                 return user
         return None
 
+    async def search_users_by_name(self, query: str, *, limit: int = 5) -> list[User]:
+        """Find active users by partial, case-insensitive first/last-name match.
+
+        Splits the query into tokens, narrows server-side with getAllItems
+        ``searchText`` on the longest token (against both ``realname`` and
+        ``firstname``), then keeps users whose combined "firstname realname"
+        contains every token. Returns up to ``limit`` matches, name-sorted.
+        """
+        tokens = [t for t in query.split() if t]
+        if not tokens:
+            return []
+        probe = max(tokens, key=len)  # most selective token for server-side narrowing
+        pool: dict[int, User] = {}
+        for field in ("realname", "firstname"):
+            resp = await self._request(
+                "GET",
+                "/User",
+                params={f"searchText[{field}]": probe, "range": "0-49"},
+                idempotent=True,
+            )
+            rows = resp.json()
+            if not isinstance(rows, list):
+                continue
+            for raw in rows:
+                user = User.from_api(raw)
+                if user.is_usable:
+                    pool[user.id] = user
+        needles = [t.casefold() for t in tokens]
+        matches = [
+            u
+            for u in pool.values()
+            if all(n in f"{u.firstname or ''} {u.realname or ''}".casefold() for n in needles)
+        ]
+        matches.sort(key=lambda u: u.display_name.casefold())
+        return matches[:limit]
+
     async def get_user(self, user_id: int) -> User | None:
         """Fetch one user by id, or ``None`` if it no longer exists (404).
 

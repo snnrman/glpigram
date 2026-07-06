@@ -27,13 +27,23 @@ CMD_TICKETS_DESCRIPTION = "Мои заявки"
 LINK_WELCOME = (
     "Здравствуйте! Я бот службы поддержки.\n"
     "Чтобы начать работу, привяжите ваш рабочий аккаунт.\n\n"
-    "Отправьте ваш рабочий логин (тот, под которым вы входите в Windows)."
+    "Отправьте ваши фамилию и имя или рабочий логин (как при входе в Windows)."
 )
 LINK_ASK_LOGIN = "Отправьте ваш рабочий логин (как при входе в Windows):"
 LINK_USER_NOT_FOUND = (
     "Не нашёл активного пользователя с таким логином в GLPI.\n"
     "Проверьте написание и отправьте логин ещё раз."
 )
+LINK_NAME_NOT_FOUND = (
+    "Не нашёл активных пользователей с таким именем.\n"
+    "Отправьте ваш рабочий логин (как при входе в Windows)."
+)
+LINK_NAME_PICK_MANY = "Нашлось несколько пользователей. Выберите себя:"
+
+# Buttons for the name-based candidate step.
+BTN_LINK_ITS_ME = "✅ Это я"
+BTN_LINK_NOT_ME = "❌ Это не я"
+BTN_LINK_NONE_OF_THESE = "Меня нет в списке"
 LINK_NO_TECH_GROUP = (
     "Привязка временно недоступна: не настроена группа технической поддержки. "
     "Обратитесь к администратору."
@@ -59,6 +69,10 @@ ADMIN_LINK_USAGE = (
     "или укажите tg_id: <code>/link &lt;tg_id&gt; &lt;логин&gt;</code>."
 )
 ADMIN_UNLINK_USAGE = "Использование: <code>/unlink &lt;логин&gt;</code>."
+
+
+def link_name_pick_one(glpi_name: str) -> str:
+    return f"Нашёл: <b>{html.escape(glpi_name)}</b>. Это вы?"
 
 
 def link_request(*, tg_id: int, tg_name: str, login: str, glpi_name: str, glpi_id: int) -> str:
