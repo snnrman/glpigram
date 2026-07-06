@@ -159,7 +159,9 @@ Keep the code structured so these can be added later.
 
 ## Conventions
 
-- Russian for all user-facing strings; keep them in one module (`texts.py`), no i18n framework.
+- All user-facing strings live in `bot/texts/` (`ru.py` + `en.py`, selected by the
+  `BOT_LANGUAGE` env var, default ru; no i18n framework). Every new string goes into
+  BOTH files — a test enforces that the key sets match.
 - Every GLPI client method: typed signature, raises `GlpiError` subclass with the raw API
   response attached; never leaks httpx exceptions to handlers.
 - Retries: 3 attempts with backoff on network errors and 5xx; never retry POSTs that may
