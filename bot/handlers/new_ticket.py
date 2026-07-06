@@ -39,7 +39,7 @@ from ..glpi.client import (
 )
 from ..glpi.models import ITILCategory
 from ..schedule import WorkSchedule
-from ..services import attachments
+from ..services import attachments, notify
 
 log = logging.getLogger(__name__)
 
@@ -305,8 +305,13 @@ def build_new_ticket_router(
         files.append(
             {"file_id": pending.file_id, "filename": pending.filename, "mime": pending.mime}
         )
-        await state.update_data(attachments=files)
-        await message.answer(texts.attach_added(len(files)), reply_markup=_attach_keyboard())
+        # An album arrives as N separate messages sharing media_group_id —
+        # store every photo but confirm only once per album, not N times.
+        group_id = message.media_group_id
+        same_album = group_id is not None and group_id == data.get("last_album")
+        await state.update_data(attachments=files, last_album=group_id)
+        if not same_album:
+            await message.answer(texts.attach_added(len(files)), reply_markup=_attach_keyboard())
 
     @router.message(NewTicket.attaching, F.text)
     async def on_attaching_text(message: Message, state: FSMContext) -> None:
@@ -342,7 +347,9 @@ def build_new_ticket_router(
     @router.callback_query(NewTicket.confirming, F.data == "nt:confirm")
     async def on_confirm(cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot) -> None:
         data = await state.get_data()
-        await cb.message.edit_text(texts.NEW_CREATING)
+        # The user's intent is explicit — create the ticket even if the summary
+        # message can't be edited anymore (deleted / >48h old).
+        await notify.safe_edit(cb, texts.NEW_CREATING)
         await cb.answer()
         try:
             ticket_id = await client.create_ticket(

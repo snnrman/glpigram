@@ -105,6 +105,19 @@ class GlpiNetworkError(GlpiError):
     """Transport-level failure (connection, timeout) after retries were exhausted."""
 
 
+def _session_rejected(resp: httpx.Response) -> bool:
+    """True when GLPI refused the request because of the session token.
+
+    Observed live on GLPI 11.0.4: an expired/unknown token can come back as
+    HTTP **400** ``ERROR_SESSION_TOKEN_MISSING``/``..._INVALID`` rather than the
+    documented 401 — both must trigger the transparent renewal. Either way the
+    request never executed, so retrying a POST is safe.
+    """
+    if resp.status_code == 401:
+        return True
+    return resp.status_code == 400 and "ERROR_SESSION_TOKEN" in resp.text
+
+
 def _extract_id(resp: httpx.Response) -> int:
     """Pull the created object's id from a GLPI create response.
 
@@ -171,7 +184,11 @@ class GlpiClient:
         await self._http.aclose()
 
     # -- headers -----------------------------------------------------------
-    def _auth_headers(self, *, json_content: bool = True) -> dict[str, str]:
+    def _auth_headers(
+        self, *, json_content: bool = True, session_token: str | None = None
+    ) -> dict[str, str]:
+        """Auth headers. ``session_token`` pins a specific token to the request
+        so a concurrent renewal can't yank it out from under a retry."""
         headers: dict[str, str] = {}
         # For multipart uploads httpx must set Content-Type (with the boundary),
         # so only force JSON for the normal case.
@@ -181,8 +198,9 @@ class GlpiClient:
         # send the header when configured.
         if self._app_token:
             headers["App-Token"] = self._app_token
-        if self._session_token:
-            headers["Session-Token"] = self._session_token
+        token = session_token or self._session_token
+        if token:
+            headers["Session-Token"] = token
         return headers
 
     # -- session -----------------------------------------------------------
@@ -193,35 +211,51 @@ class GlpiClient:
         made and the rest reuse the freshly acquired token.
         """
         async with self._session_lock:
-            # A concurrent caller may have refreshed the token while we waited on
-            # the lock (renewers null the token before calling), so reuse it.
+            # A concurrent caller may have refreshed the token while we waited
+            # on the lock, so reuse it.
             if self._session_token is not None:
                 return self._session_token
-            headers = {
-                "Authorization": f"user_token {self._user_token}",
-                "Content-Type": "application/json",
-            }
-            # App-Token is optional; include it only when configured.
-            if self._app_token:
-                headers["App-Token"] = self._app_token
-            # initSession is safe to retry (idempotent, no side effects).
-            resp = await self._send(
-                "GET",
-                "/initSession",
-                headers=headers,
-                idempotent=True,
-            )
-            if resp.status_code == 401:
-                raise GlpiAuthError("GLPI rejected the service account tokens", response=resp)
-            if resp.status_code >= 400:
-                raise self._error_from_response(resp)
-            try:
-                token = resp.json()["session_token"]
-            except (ValueError, KeyError) as exc:
-                raise GlpiAuthError("initSession returned no session_token", response=resp) from exc
-            self._session_token = token
-            log.info("glpi_session_initialised")
-            return token
+            return await self._open_session_locked()
+
+    async def _reauth(self, stale: str | None) -> str:
+        """Renew the session after a 401 that was seen with token ``stale``.
+
+        If a concurrent caller already replaced the token, reuse theirs instead
+        of opening yet another GLPI session (and never null a fresh token).
+        """
+        async with self._session_lock:
+            if self._session_token is not None and self._session_token != stale:
+                return self._session_token
+            self._session_token = None
+            return await self._open_session_locked()
+
+    async def _open_session_locked(self) -> str:
+        """initSession HTTP call; caller must hold ``_session_lock``."""
+        headers = {
+            "Authorization": f"user_token {self._user_token}",
+            "Content-Type": "application/json",
+        }
+        # App-Token is optional; include it only when configured.
+        if self._app_token:
+            headers["App-Token"] = self._app_token
+        # initSession is safe to retry (idempotent, no side effects).
+        resp = await self._send(
+            "GET",
+            "/initSession",
+            headers=headers,
+            idempotent=True,
+        )
+        if resp.status_code == 401:
+            raise GlpiAuthError("GLPI rejected the service account tokens", response=resp)
+        if resp.status_code >= 400:
+            raise self._error_from_response(resp)
+        try:
+            token = resp.json()["session_token"]
+        except (ValueError, KeyError) as exc:
+            raise GlpiAuthError("initSession returned no session_token", response=resp) from exc
+        self._session_token = token
+        log.info("glpi_session_initialised")
+        return token
 
     async def kill_session(self) -> None:
         """Best-effort session teardown; failures are logged, never raised."""
@@ -314,39 +348,36 @@ class GlpiClient:
         must be passed as ``bytes`` so the request can be re-sent on a 401 retry.
         """
         multipart = files is not None
-        if self._session_token is None:
-            await self.init_session()
-
-        def _hdrs() -> dict[str, str]:
-            return self._auth_headers(json_content=not multipart)
+        # Pin the token for this request: a concurrent renewal must not be able
+        # to null it between acquiring and building the retry headers.
+        token = self._session_token or await self.init_session()
 
         resp = await self._send(
             method,
             path,
-            headers=_hdrs(),
+            headers=self._auth_headers(json_content=not multipart, session_token=token),
             json=json,
             params=params,
             data=data,
             files=files,
             idempotent=idempotent,
         )
-        if resp.status_code == 401:
-            # Session expired: re-init once and retry the original request.
+        if _session_rejected(resp):
+            # Session expired: renew once (or reuse a concurrent renewal) and retry.
             log.info("glpi_session_expired path=%s reinitialising", path)
-            self._session_token = None
-            await self.init_session()
+            token = await self._reauth(stale=token)
             resp = await self._send(
                 method,
                 path,
-                headers=_hdrs(),
+                headers=self._auth_headers(json_content=not multipart, session_token=token),
                 json=json,
                 params=params,
                 data=data,
                 files=files,
                 idempotent=idempotent,
             )
-            if resp.status_code == 401:
-                raise GlpiAuthError("still 401 after session renewal", response=resp)
+            if _session_rejected(resp):
+                raise GlpiAuthError("session still rejected after renewal", response=resp)
 
         if resp.status_code >= 400:
             raise self._error_from_response(resp)

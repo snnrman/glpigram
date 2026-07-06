@@ -57,3 +57,19 @@ async def test_loader_error_propagates_and_is_not_cached():
         await cache.get()
     # the failure must not be cached: next call retries the loader
     assert await cache.get() == "ok"
+
+
+async def test_concurrent_gets_trigger_single_load():
+    import asyncio
+
+    calls = {"n": 0}
+
+    async def slow_loader():
+        calls["n"] += 1
+        await asyncio.sleep(0.01)
+        return "v"
+
+    cache = TTLValue(slow_loader, ttl=60)
+    results = await asyncio.gather(*(cache.get() for _ in range(5)))
+    assert set(results) == {"v"}
+    assert calls["n"] == 1  # no thundering herd

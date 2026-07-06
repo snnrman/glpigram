@@ -644,3 +644,64 @@ async def test_kill_session_clears_token(mock):
     await client.kill_session()
     assert client._session_token is None
     await client.close()
+
+
+# --- session renewal race (reviewer finding 1.1) ------------------------------
+async def test_reauth_reuses_concurrent_renewal(mock):
+    # A 401 retry must reuse a token renewed by a concurrent coroutine instead
+    # of opening yet another session (or worse, nulling the fresh token).
+    route = await _init_route(mock)
+    client = make_client()
+    await client.init_session()  # sess-1
+    client._session_token = "sess-2"  # a concurrent caller already renewed
+    assert await client._reauth(stale="sess-1") == "sess-2"
+    assert route.call_count == 1  # no extra initSession
+    await client.close()
+
+
+async def test_reauth_renews_when_own_token_is_stale(mock):
+    mock.get(f"{BASE}/initSession").mock(
+        side_effect=[
+            httpx.Response(200, json={"session_token": "sess-1"}),
+            httpx.Response(200, json={"session_token": "sess-2"}),
+        ]
+    )
+    client = make_client()
+    await client.init_session()
+    assert await client._reauth(stale="sess-1") == "sess-2"
+    await client.close()
+
+
+async def test_session_rejected_as_http_400_also_renews(mock):
+    # Live GLPI 11.0.4 returns 400 ERROR_SESSION_TOKEN_MISSING (not 401) for a
+    # dead token; the transparent renewal must cover that shape too.
+    init = mock.get(f"{BASE}/initSession").mock(
+        side_effect=[
+            httpx.Response(200, json={"session_token": "sess-1"}),
+            httpx.Response(200, json={"session_token": "sess-2"}),
+        ]
+    )
+    ticket = mock.get(f"{BASE}/Ticket/5").mock(
+        side_effect=[
+            httpx.Response(400, json=["ERROR_SESSION_TOKEN_MISSING", "нет токена"]),
+            httpx.Response(200, json={"id": 5, "name": "t", "status": 1}),
+        ]
+    )
+    client = make_client()
+    t = await client.get_ticket(5)
+    assert t is not None and t.id == 5
+    assert init.call_count == 2
+    assert ticket.calls[1].request.headers["Session-Token"] == "sess-2"
+    await client.close()
+
+
+async def test_plain_400_is_not_mistaken_for_session_error(mock):
+    await _init_route(mock)
+    route = mock.post(f"{BASE}/Ticket").mock(
+        return_value=httpx.Response(400, json=["ERROR_BAD_INPUT", "nope"])
+    )
+    client = make_client()
+    with pytest.raises(GlpiHTTPError):
+        await client.create_ticket(name="t", content="c", urgency=3)
+    assert route.call_count == 1  # no bogus renewal retry
+    await client.close()

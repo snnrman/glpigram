@@ -119,3 +119,34 @@ async def test_sync_cursor_roundtrip(repo):
     assert await repo.get_cursor("last_ticket_id") == 42
     await repo.set_cursor("last_ticket_id", 99)  # upsert
     assert await repo.get_cursor("last_ticket_id") == 99
+
+
+# --- write-transaction safety (reviewer findings 2.1/2.2) --------------------
+async def test_tx_rolls_back_partial_multi_statement_write(repo):
+    import aiosqlite
+    import pytest as _pytest
+
+    await repo.upsert_link(tg_id=1, glpi_users_id=2, display_name="a", is_tech=False, now=0)
+    # A failure mid-transaction must not leave the first statement dangling on
+    # the shared connection (a later unrelated commit would persist it).
+    with _pytest.raises(aiosqlite.OperationalError):
+        async with repo._tx() as db:
+            await db.execute("DELETE FROM users")
+            await db.execute("THIS IS NOT SQL")
+    assert await repo.get_by_tg(1) is not None  # the DELETE was rolled back
+
+
+async def test_concurrent_writes_do_not_interleave(repo):
+    import asyncio
+
+    # Hammer upsert_link (multi-statement) from many tasks; the write lock must
+    # keep every row consistent.
+    async def relink(uid):
+        await repo.upsert_link(
+            tg_id=uid, glpi_users_id=uid + 100, display_name=f"u{uid}", is_tech=False, now=0
+        )
+
+    await asyncio.gather(*(relink(uid) for uid in range(20)))
+    for uid in range(20):
+        link = await repo.get_by_tg(uid)
+        assert link is not None and link.glpi_users_id == uid + 100

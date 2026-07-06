@@ -104,6 +104,15 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
     return dp
 
 
+def _sync_task_died(task: asyncio.Task) -> None:
+    """The sync loop must never finish on its own — scream if it does."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.critical("sync_task_died — no GLPI->TG notifications until restart!", exc_info=exc)
+
+
 async def _run(settings: Settings) -> None:
     session = AiohttpSession(proxy=settings.https_proxy) if settings.https_proxy else None
     bot = Bot(
@@ -119,27 +128,32 @@ async def _run(settings: Settings) -> None:
         proxy=settings.https_proxy,
     )
     repo = Repo(settings.db_path)
-    await repo.connect()
-    dp = build_dispatcher(client, repo, settings)
-    sync = SyncService(
-        bot,
-        client,
-        repo,
-        tech_group_chat_id=settings.tech_group_chat_id,
-        schedule=_work_schedule(settings),
-        quiet_min_urgency=settings.quiet_min_urgency,
-        interval=settings.sync_interval,
-        front_base=settings.glpi_front_base,
-    )
-    sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
+    sync_task: asyncio.Task | None = None
+    # Everything after resource creation runs under the finally so a startup
+    # failure (DB perms, bad schedule config) still closes the HTTP sessions.
     try:
+        await repo.connect()
+        dp = build_dispatcher(client, repo, settings)
+        sync = SyncService(
+            bot,
+            client,
+            repo,
+            tech_group_chat_id=settings.tech_group_chat_id,
+            schedule=_work_schedule(settings),
+            quiet_min_urgency=settings.quiet_min_urgency,
+            interval=settings.sync_interval,
+            front_base=settings.glpi_front_base,
+        )
+        sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
+        sync_task.add_done_callback(_sync_task_died)
         log.info("bot_starting")
         await _set_commands(bot)
         await dp.start_polling(bot, handle_signals=True)
     finally:
-        sync_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await sync_task
+        if sync_task is not None:
+            sync_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sync_task
         await repo.close()
         await client.kill_session()
         await client.close()

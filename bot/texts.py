@@ -204,8 +204,19 @@ BTN_TECH_CLOSE = "✅ Закрыть"
 
 # --- tech actions (feature 5) ---
 TECH_TAKEN_TOAST = "Заявка взята в работу."
-TECH_ASK_SOLUTION = "Введите текст решения — заявка будет закрыта:"
-TECH_ASK_COMMENT = "Введите текст комментария к заявке:"
+
+
+# The ticket number is part of the prompt: if the tech taps a second card
+# before replying, the DM state is overwritten and the latest prompt is the
+# only reliable statement of which ticket the reply will go to.
+def tech_ask_solution(ticket_id: int) -> str:
+    return f"Введите текст решения — заявка №{ticket_id} будет закрыта:"
+
+
+def tech_ask_comment(ticket_id: int) -> str:
+    return f"Введите текст комментария к заявке №{ticket_id}:"
+
+
 TECH_SOLUTION_DONE = "✅ Решение сохранено, заявка закрыта."
 TECH_COMMENT_DONE = "💬 Комментарий добавлен."
 TECH_EXPECT_TEXT = "Пожалуйста, отправьте текст."

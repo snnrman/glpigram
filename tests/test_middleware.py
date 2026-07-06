@@ -122,3 +122,16 @@ async def test_transient_glpi_error_keeps_cached_link(repo):
     # GLPI hiccup must NOT lock the user out; the cached link is used.
     assert await _mw(repo, client)(handler, _event(), _data()) == "ok"
     assert await repo.get_by_tg(TG_ID) is not None
+
+
+async def test_recheck_failure_backs_off_for_a_full_ttl(repo):
+    """A GLPI outage must not tax every subsequent update with the retry storm."""
+    await _link(repo, checked_ago=999)
+    client = AsyncMock()
+    client.get_user.side_effect = GlpiHTTPError("GLPI down")
+    mw = _mw(repo, client)
+
+    assert await mw(AsyncMock(return_value="ok"), _event(), _data()) == "ok"
+    # checked_at was bumped on failure -> the next update skips the GLPI call.
+    assert await mw(AsyncMock(return_value="ok"), _event(), _data()) == "ok"
+    client.get_user.assert_awaited_once()
