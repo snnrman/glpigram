@@ -7,7 +7,7 @@ import re
 
 # --- /start + main menu ---
 START_GREETING = (
-    "Hello! I'm the support bot.\n"
+    "Hello! This is GLPIgram — your support bot.\n"
     "Create tickets and track their status right here.\n\n"
     "Pick an action on the keyboard below or send /new."
 )
@@ -25,7 +25,7 @@ CMD_TICKETS_DESCRIPTION = "My tickets"
 
 # --- account linking (feature 2) ---
 LINK_WELCOME = (
-    "Hello! I'm the support bot.\n"
+    "Hello! This is GLPIgram — your support bot.\n"
     "To get started, link your work account.\n\n"
     "Send your last and first name, or your work login (the one you use for Windows sign-in)."
 )

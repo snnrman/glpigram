@@ -1,6 +1,6 @@
-# GLPI Telegram Bot
+# GLPIgram
 
-Telegram bot for IT service management, integrated with GLPI 11.0.4.
+GLPIgram — a Telegram bot for IT service management, integrated with GLPI 11.0.4.
 Company employees create and track tickets from Telegram; technicians
 receive notifications and manage the queue with inline buttons.
 

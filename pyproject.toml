@@ -1,7 +1,7 @@
 [project]
-name = "glpi-tgbot"
+name = "glpigram"
 version = "0.1.0"
-description = "Telegram bot for GLPI IT service management"
+description = "GLPIgram — Telegram bot for GLPI IT service management"
 requires-python = ">=3.11"
 dependencies = [
     "aiogram>=3.0,<4",
@@ -14,7 +14,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "respx>=0.21", "ruff>=0.6"]
 
 [project.scripts]
-glpi-tgbot = "bot.main:main"
+glpigram = "bot.main:main"
 
 [tool.ruff]
 line-length = 100

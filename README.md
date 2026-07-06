@@ -1,9 +1,9 @@
-# GLPI Telegram Bot
+# GLPIgram
 
 > 🇷🇺 [Читать по-русски](README.ru.md)
 
-A Telegram bot for IT service management on top of **GLPI 11** (legacy REST API
-v1). Employees create and track tickets straight from Telegram; technicians get
+**GLPIgram** is a Telegram bot for IT service management on top of **GLPI 11**
+(legacy REST API v1). Employees create and track tickets straight from Telegram; technicians get
 notified in a group chat and manage the queue with inline buttons — no GLPI-side
 plugins, no inbound ports, long polling only.
 

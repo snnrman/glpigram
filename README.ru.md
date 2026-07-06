@@ -1,8 +1,8 @@
-# GLPI Telegram Bot
+# GLPIgram
 
 > 🇬🇧 [Read in English](README.md)
 
-Telegram-бот для ITSM на базе **GLPI 11** (legacy REST API v1). Сотрудники
+**GLPIgram** — Telegram-бот для ITSM на базе **GLPI 11** (legacy REST API v1). Сотрудники
 создают и отслеживают заявки прямо из Telegram; техники получают уведомления в
 группе и управляют очередью инлайн-кнопками — без плагинов на стороне GLPI, без
 входящих портов, только long polling.
