@@ -132,6 +132,21 @@ deploy/
    - new followups by others on the user's tickets -> forward text to the requester
    Persist cursor state (last ids / timestamps) in SQLite; survive restarts without
    duplicate notifications.
+   - **Quiet hours (off-hours).** Config: `WORK_HOURS` ("09:00-18:00"), `WORK_DAYS`
+     ("1-5", ISO Mon=1..Sun=7), `QUIET_MIN_URGENCY` (default 4), timezone from `TZ`
+     (`bot/schedule.py`). Off-hours **tech-group** notifications are held: a new
+     ticket with urgency < `QUIET_MIN_URGENCY` is queued in SQLite
+     (`deferred_notifications`, survives restart) instead of sent; urgency ≥ the
+     threshold is sent immediately, any time. The first sync tick after work resumes
+     flushes the backlog with a header "🌅 За нерабочее время поступило N заявок:"
+     then the standard cards. "Напомнить о себе" off-hours is likewise deferred to
+     the morning (its cooldown counts from the tap). **Requester-facing** messages —
+     status changes, forwarded followups — are NOT affected by quiet hours. On ticket
+     creation off-hours the requester is told when support will see it: low urgency →
+     "🌙 …увидит вашу заявку <в понедельник в 09:00>" (nearest work-day start);
+     urgency ≥ threshold → "заявка помечена как срочная …". In work hours nothing
+     changes. GLPI dates are UTC; the bot converts to `TZ` for all hour math
+     (`bot/timeutil.py`).
 5. **Tech actions.** Inline buttons on the tech-group notification: "Take" (assign to the
    pressing technician, status -> Processing), "Close" (asks for a solution text via FSM),
    "Comment". Only users with is_tech may press; others get a toast.

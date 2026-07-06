@@ -36,6 +36,7 @@ from ..glpi.client import (
     GlpiError,
 )
 from ..glpi.models import TicketSummary
+from ..schedule import WorkSchedule
 from ..services import attachments, notify
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ def build_my_tickets_router(
     tech_group_chat_id: int | None = None,
     ticket_front_base: str | None = None,
     remind_cooldown_hours: int = 4,
+    schedule: WorkSchedule | None = None,
 ) -> Router:
     router = Router(name="my_tickets")
 
@@ -361,6 +363,19 @@ def build_my_tickets_router(
             await cb.answer(texts.myt_remind_cooldown(hours_left), show_alert=True)
             return
 
+        # Cooldown counts from the tap even if we defer to the morning.
+        await repo.set_last_remind(ticket_id, now)
+
+        # Off-hours: hold the card until the next work day; tell the requester when.
+        if schedule is not None and not schedule.is_working(schedule.now()):
+            await repo.enqueue_deferred("remind", ticket_id, now)
+            local_now = schedule.now()
+            await cb.answer(
+                texts.quiet_hours_notice(schedule.next_open(local_now), local_now),
+                show_alert=True,
+            )
+            return
+
         if tech_group_chat_id is not None:
             await notify.notify_reminder(
                 bot,
@@ -369,7 +384,6 @@ def build_my_tickets_router(
                 ticket.name,
                 timeutil.hours_since(ticket.date_creation),
             )
-        await repo.set_last_remind(ticket_id, now)
         await cb.answer(texts.MYT_REMIND_SENT)
 
     @router.message(StateFilter(MyTickets), Command("cancel"))

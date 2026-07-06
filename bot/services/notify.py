@@ -47,6 +47,11 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> bool:
         return False
 
 
+async def send_text(bot: Bot, chat_id: int, text: str) -> None:
+    """Best-effort plain message (e.g. the deferred-batch header)."""
+    await _send(bot, chat_id, text)
+
+
 async def notify_new_ticket(
     bot: Bot,
     chat_id: int,

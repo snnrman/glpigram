@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram import Dispatcher
@@ -276,3 +277,34 @@ async def test_remind_blocked_when_ticket_taken(repo):
     await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
     assert _tech_msgs(bot) == []  # nothing sent to the group
     assert await repo.get_last_remind(TICKET) is None
+
+
+async def test_remind_offhours_is_deferred_with_notice(repo):
+    bot = FakeBot()
+    client = AsyncMock()
+    client.get_ticket.return_value = Ticket(
+        id=TICKET,
+        name="Печать",
+        content="c",
+        status=TICKET_STATUS_NEW,
+        urgency=2,
+        date_creation="2020-01-01 00:00:00",
+    )
+    kgd = ZoneInfo("Europe/Kaliningrad")
+    sched = MagicMock()  # deterministic off-hours clock (Saturday -> next Monday)
+    sched.now.return_value = datetime(2026, 7, 11, 12, 0, tzinfo=kgd)
+    sched.is_working.return_value = False
+    sched.next_open.return_value = datetime(2026, 7, 13, 9, 0, tzinfo=kgd)
+    router = build_my_tickets_router(
+        client, repo, tech_group_chat_id=TECH_CHAT, remind_cooldown_hours=4, schedule=sched
+    )
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
+
+    assert _tech_msgs(bot) == []  # off-hours: nothing to the group yet
+    assert len(await repo.list_deferred()) == 1  # queued for the morning
+    assert await repo.get_last_remind(TICKET) is not None  # cooldown from the tap
+    # requester gets the quiet-hours notice as a toast
+    assert any(t and "в понедельник в 09:00" in t for _, t in bot.sent)

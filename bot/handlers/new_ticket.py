@@ -38,6 +38,7 @@ from ..glpi.client import (
     GlpiError,
 )
 from ..glpi.models import ITILCategory
+from ..schedule import WorkSchedule
 from ..services import attachments
 
 log = logging.getLogger(__name__)
@@ -146,9 +147,22 @@ def build_new_ticket_router(
     repo: Repo,
     *,
     ticket_front_base: str | None = None,
+    schedule: WorkSchedule | None = None,
+    quiet_min_urgency: int = 4,
 ) -> Router:
     """Wire the /new dialog with its GLPI dependencies (closure-injected)."""
     router = Router(name="new_ticket")
+
+    def _quiet_notice(urgency: int) -> str | None:
+        """Off-hours note for the requester after creation (None in work hours)."""
+        if schedule is None:
+            return None
+        now = schedule.now()
+        if schedule.is_working(now):
+            return None
+        if urgency >= quiet_min_urgency:
+            return texts.QUIET_URGENT_NOTICE
+        return texts.quiet_hours_notice(schedule.next_open(now), now)
 
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:
@@ -344,6 +358,10 @@ def build_new_ticket_router(
         )
         if files and uploaded < len(files):
             await cb.message.answer(texts.attachments_partial_failure(uploaded, len(files)))
+        # Off-hours: tell the requester when support will actually see it.
+        notice = _quiet_notice(data["urgency"])
+        if notice:
+            await cb.message.answer(notice)
 
     async def _upload_attachments(bot: Bot, ticket_id: int, files: list[dict]) -> int:
         """Upload each collected file to the ticket; return how many succeeded."""

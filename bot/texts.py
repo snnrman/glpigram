@@ -219,6 +219,56 @@ def tech_card_solved(name: str) -> str:
     return f"✅ Закрыл: {html.escape(name)}"
 
 
+# --- quiet hours / off-hours (feature: quiet hours) ---
+QUIET_URGENT_NOTICE = (
+    "Заявка помечена как срочная — специалисты получили уведомление "
+    "и займутся ей при первой возможности."
+)
+
+# "в понедельник" etc. — weekday with the preposition, keyed by ISO weekday.
+_WEEKDAY_PREP = {
+    1: "в понедельник",
+    2: "во вторник",
+    3: "в среду",
+    4: "в четверг",
+    5: "в пятницу",
+    6: "в субботу",
+    7: "в воскресенье",
+}
+
+
+def _plural_tickets(n: int) -> str:
+    tail = n % 100
+    if 11 <= tail <= 14:
+        return "заявок"
+    match n % 10:
+        case 1:
+            return "заявка"
+        case 2 | 3 | 4:
+            return "заявки"
+        case _:
+            return "заявок"
+
+
+def next_work_phrase(target, now) -> str:
+    """Human phrasing for when work resumes: "сегодня в 09:00" / "в понедельник в 09:00"."""
+    hm = target.strftime("%H:%M")
+    if target.date() == now.date():
+        return f"сегодня в {hm}"
+    return f"{_WEEKDAY_PREP[target.isoweekday()]} в {hm}"
+
+
+def quiet_hours_notice(target, now) -> str:
+    return (
+        "🌙 Сейчас нерабочее время — команда поддержки увидит вашу заявку "
+        f"{next_work_phrase(target, now)}."
+    )
+
+
+def deferred_batch_header(count: int) -> str:
+    return f"🌅 За нерабочее время поступило {count} {_plural_tickets(count)}:"
+
+
 _TAG_RE = re.compile(r"<[^>]+>")
 
 

@@ -22,11 +22,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
+from datetime import datetime
 
 from aiogram import Bot
 
+from .. import texts, timeutil
 from ..db.repo import Repo, TrackedTicket
 from ..glpi.client import TICKET_STATUS_CLOSED, GlpiClient, GlpiError
+from ..schedule import WorkSchedule
 from . import notify
 
 log = logging.getLogger(__name__)
@@ -42,17 +46,23 @@ class SyncService:
         repo: Repo,
         *,
         tech_group_chat_id: int | None,
+        schedule: WorkSchedule,
+        quiet_min_urgency: int,
         interval: int = 45,
         front_base: str | None = None,
         recent_page: int = 100,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._bot = bot
         self._client = client
         self._repo = repo
         self._tech_chat = tech_group_chat_id
+        self._schedule = schedule
+        self._quiet_min_urgency = quiet_min_urgency
         self._interval = interval
         self._front_base = front_base
         self._recent_page = recent_page
+        self._now = now_provider or schedule.now
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -84,10 +94,12 @@ class SyncService:
         log.info("sync_cursor_seeded last_ticket_id=%s", max_id)
 
     async def tick(self) -> None:
+        # Deliver anything queued overnight first, once work has resumed.
+        await self._flush_deferred_if_working()
         await self._poll_new_tickets()
         await self._poll_tracked_tickets()
 
-    # -- 1. new tickets -> tech group -------------------------------------
+    # -- 1. new tickets -> tech group (with quiet-hours deferral) ----------
     async def _poll_new_tickets(self) -> None:
         last_seen = await self._repo.get_cursor(_CURSOR_LAST_TICKET) or 0
         recent = await self._client.list_recent_tickets(limit=self._recent_page)
@@ -97,18 +109,58 @@ class SyncService:
         if len(fresh) == self._recent_page:
             # The page was full of new tickets — older new ones may be beyond it.
             log.warning("sync_new_tickets_page_full count=%s", len(fresh))
-        if self._tech_chat is not None:
-            for ticket in fresh:
-                name, tg_id = await self._requester_card_info(ticket.id)
-                await notify.notify_new_ticket(
-                    self._bot,
-                    self._tech_chat,
-                    ticket,
-                    self._ticket_url(ticket.id),
-                    requester_name=name,
-                    requester_tg_id=tg_id,
-                )
+        working = self._schedule.is_working(self._now())
+        for ticket in fresh:
+            if working or ticket.urgency >= self._quiet_min_urgency:
+                await self._send_new_card(ticket)
+            else:
+                # Off-hours, low urgency: hold until the next work day.
+                await self._repo.enqueue_deferred("new", ticket.id, int(time.time()))
+                log.info("sync_deferred_new id=%s urgency=%s", ticket.id, ticket.urgency)
         await self._repo.set_cursor(_CURSOR_LAST_TICKET, max(t.id for t in fresh))
+
+    async def _send_new_card(self, ticket) -> None:
+        if self._tech_chat is None:
+            return
+        name, tg_id = await self._requester_card_info(ticket.id)
+        await notify.notify_new_ticket(
+            self._bot,
+            self._tech_chat,
+            ticket,
+            self._ticket_url(ticket.id),
+            requester_name=name,
+            requester_tg_id=tg_id,
+        )
+
+    # -- deferred (quiet-hours) flush -------------------------------------
+    async def _flush_deferred_if_working(self) -> None:
+        if self._tech_chat is None or not self._schedule.is_working(self._now()):
+            return
+        queued = await self._repo.list_deferred()
+        if not queued:
+            return
+        await notify.send_text(self._bot, self._tech_chat, texts.deferred_batch_header(len(queued)))
+        for row_id, kind, ticket_id in queued:
+            try:
+                await self._flush_one(kind, ticket_id)
+            except GlpiError as exc:
+                log.warning("sync_flush_failed id=%s kind=%s error=%s", ticket_id, kind, exc)
+            await self._repo.delete_deferred(row_id)
+
+    async def _flush_one(self, kind: str, ticket_id: int) -> None:
+        ticket = await self._client.get_ticket(ticket_id)
+        if ticket is None:  # deleted in GLPI meanwhile
+            return
+        if kind == "remind":
+            await notify.notify_reminder(
+                self._bot,
+                self._tech_chat,
+                ticket_id,
+                ticket.name,
+                timeutil.hours_since(ticket.date_creation),
+            )
+        else:
+            await self._send_new_card(ticket)
 
     async def _requester_card_info(self, ticket_id: int) -> tuple[str | None, int | None]:
         """Requester name for the card, plus their Telegram id if linked in the bot.
