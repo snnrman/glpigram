@@ -48,11 +48,23 @@ class Ticket:
 
 
 @dataclass(slots=True)
+class TicketSummary:
+    """Compact ticket view for the /tickets list (feature 3)."""
+
+    id: int
+    title: str
+    status: int
+    assignee: str | None = None
+
+
+@dataclass(slots=True)
 class Followup:
     id: int
     tickets_id: int
     content: str
     users_id: int
+    is_private: bool = False
+    date: str | None = None
 
     @classmethod
     def from_api(cls, raw: dict) -> Followup:
@@ -61,6 +73,8 @@ class Followup:
             tickets_id=int(raw.get("items_id", 0) or 0),
             content=str(raw.get("content", "")),
             users_id=int(raw.get("users_id", 0) or 0),
+            is_private=_as_bool(raw.get("is_private"), default=False),
+            date=raw.get("date_creation") or raw.get("date") or None,
         )
 
 

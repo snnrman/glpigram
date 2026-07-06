@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import html
+import re
+
 # --- /start + main menu ---
 START_GREETING = (
     "Здравствуйте! Я бот службы поддержки.\n"
@@ -11,8 +14,6 @@ START_GREETING = (
 # Reply-keyboard buttons (persistent main menu).
 BTN_NEW_TICKET = "🆕 Новая заявка"
 BTN_MY_TICKETS = "📋 Мои заявки"
-# Feature 3 placeholder until "my tickets" is implemented.
-MY_TICKETS_SOON = "Раздел «Мои заявки» скоро появится."
 
 # --- free-text outside a dialog ---
 FREETEXT_OFFER = "Создать заявку с этим текстом в качестве описания?"
@@ -98,6 +99,29 @@ NEW_CREATING = "Создаю заявку…"
 NEW_CANCELLED = "Создание заявки отменено."
 NEW_EXPECT_TEXT = "Пожалуйста, отправьте текст."
 
+# --- attachments (feature 6) ---
+NEW_ATTACH_PROMPT = (
+    "При необходимости прикрепите фото или документы (по одному сообщению),\n"
+    "затем нажмите «Готово». Или сразу нажмите «Готово», если вложений нет."
+)
+BTN_ATTACH_DONE = "✅ Готово"
+BTN_ATTACH_CANCEL = "➡️ Пропустить / Отмена"
+# Case-insensitive text that also finishes the attachments step (keyboard fallback).
+ATTACH_DONE_WORD = "готово"
+ATTACH_TOO_LARGE = "Файл слишком большой (максимум 20 МБ). Отправьте файл поменьше."
+ATTACH_TOO_MANY = "Достигнут предел вложений. Нажмите «Готово»."
+ATTACH_UNSUPPORTED = "Отправьте фото/документ или нажмите «Готово»."
+COMMENT_ATTACHMENT_PLACEHOLDER = "(вложение)"
+
+
+def attach_added(count: int) -> str:
+    return f"📎 Вложение добавлено (всего {count}). Отправьте ещё или нажмите «Готово»."
+
+
+def attachments_partial_failure(uploaded: int, total: int) -> str:
+    return f"⚠️ Загружено вложений: {uploaded} из {total}. Остальные не удалось прикрепить."
+
+
 # --- urgency labels ---
 URGENCY_LOW_LABEL = "🟢 Низкая"
 URGENCY_MEDIUM_LABEL = "🟡 Средняя"
@@ -128,11 +152,198 @@ def urgency_label(urgency: int) -> str:
     }.get(urgency, str(urgency))
 
 
-def confirm_summary(category_name: str, urgency: int, title: str, description: str) -> str:
-    return (
+def confirm_summary(
+    category_name: str, urgency: int, title: str, description: str, attachments: int = 0
+) -> str:
+    lines = (
         f"{NEW_CONFIRM_HEADER}\n\n"
         f"<b>Категория:</b> {category_name}\n"
         f"<b>Срочность:</b> {urgency_label(urgency)}\n"
         f"<b>Заголовок:</b> {title}\n"
         f"<b>Описание:</b>\n{description}"
     )
+    if attachments:
+        lines += f"\n<b>Вложений:</b> {attachments}"
+    return lines
+
+
+# --- sync loop notifications (feature 4) ---
+# GLPI ticket status ids (see glpi/client.py TICKET_STATUS_*).
+_STATUS_LABELS = {
+    1: "🆕 Новая",
+    2: "⚙️ В работе (назначена)",
+    3: "⚙️ В работе (запланирована)",
+    4: "⏸ Ожидает",
+    5: "✅ Решена",
+    6: "🔒 Закрыта",
+}
+
+# Tech-group notification buttons (feature 5).
+BTN_TECH_TAKE = "🙋 Взять"
+BTN_TECH_COMMENT = "💬 Комментарий"
+BTN_TECH_CLOSE = "✅ Закрыть"
+
+# --- tech actions (feature 5) ---
+TECH_TAKEN_TOAST = "Заявка взята в работу."
+TECH_ASK_SOLUTION = "Введите текст решения — заявка будет закрыта:"
+TECH_ASK_COMMENT = "Введите текст комментария к заявке:"
+TECH_SOLUTION_DONE = "✅ Решение сохранено, заявка закрыта."
+TECH_COMMENT_DONE = "💬 Комментарий добавлен."
+TECH_EXPECT_TEXT = "Пожалуйста, отправьте текст."
+TECH_ACTION_CANCELLED = "Действие отменено."
+# Shown as a toast when the bot can't DM the technician (they never opened it).
+TECH_DM_FAILED = "Откройте личный чат с ботом (/start) и повторите."
+
+
+def tech_card_taken(name: str) -> str:
+    return f"🙋 В работе: {html.escape(name)}"
+
+
+def tech_card_solved(name: str) -> str:
+    return f"✅ Закрыл: {html.escape(name)}"
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def ticket_status_label(status: int) -> str:
+    return _STATUS_LABELS.get(status, f"статус {status}")
+
+
+def clean_glpi_text(raw: str, *, limit: int = 1000) -> str:
+    """Turn GLPI rich-text (HTML) into a trimmed plain-text snippet.
+
+    GLPI stores followup/ticket bodies as HTML; strip tags, decode entities and
+    cap the length so a forwarded comment stays a readable Telegram message.
+    """
+    text = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    text = re.sub(r"(?i)</p\s*>|</div\s*>", "\n", text)
+    text = _TAG_RE.sub("", text)
+    text = html.unescape(text).strip()
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return text
+
+
+def _url_line(url: str | None) -> str:
+    return f"\n{url}" if url else ""
+
+
+def user_mention(name: str, tg_id: int | None) -> str:
+    """A safe display name, as a clickable Telegram mention when the id is known."""
+    safe = html.escape(name)
+    return f'<a href="tg://user?id={tg_id}">{safe}</a>' if tg_id else safe
+
+
+def notify_new_ticket(
+    *,
+    ticket_id: int,
+    title: str,
+    status: int,
+    url: str | None,
+    requester_name: str | None = None,
+    requester_tg_id: int | None = None,
+) -> str:
+    author = ""
+    if requester_name:
+        author = f"\nАвтор: {user_mention(requester_name, requester_tg_id)}"
+    return (
+        f"🆕 <b>Новая заявка №{ticket_id}</b>\n"
+        f"{html.escape(title)}"
+        f"{author}\n"
+        f"Статус: {ticket_status_label(status)}"
+        f"{_url_line(url)}"
+    )
+
+
+def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | None) -> str:
+    return (
+        f"🔔 <b>Заявка №{ticket_id}</b>: статус изменён\n"
+        f"{html.escape(title)}\n"
+        f"Новый статус: {ticket_status_label(status)}"
+        f"{_url_line(url)}"
+    )
+
+
+def notify_followup(*, ticket_id: int, title: str, body: str, url: str | None) -> str:
+    snippet = html.escape(clean_glpi_text(body))
+    return (
+        f"💬 <b>Новый комментарий по заявке №{ticket_id}</b>\n"
+        f"{html.escape(title)}\n\n"
+        f"{snippet}"
+        f"{_url_line(url)}"
+    )
+
+
+# --- /tickets (feature 3) ---
+MY_TICKETS_HEADER = "📋 Ваши открытые заявки:"
+MY_TICKETS_EMPTY = "У вас нет открытых заявок. Создайте новую через «🆕 Новая заявка»."
+MYT_NO_FOLLOWUPS = "Комментариев пока нет."
+MYT_COMMENT_DONE = "💬 Комментарий добавлен."
+MYT_UNASSIGNED = "не назначен"
+
+BTN_MYT_COMMENT = "💬 Добавить комментарий"
+BTN_MYT_CLOSE = "✅ Закрыть заявку"
+BTN_MYT_BACK = "⬅️ К списку"
+BTN_MYT_CLOSE_YES = "✅ Да, закрыть"
+
+MYT_CLOSE_DONE = "✅ Заявка закрыта."
+MYT_CLOSE_CANCELLED = "Закрытие заявки отменено."
+
+
+def myt_ask_close_reason(ticket_id: int) -> str:
+    return f"Укажите причину закрытия заявки №{ticket_id}:"
+
+
+def myt_close_confirm(ticket_id: int) -> str:
+    return f"Закрыть заявку №{ticket_id}?"
+
+
+def close_followup_body(name: str, reason: str) -> str:
+    """Followup text recorded in GLPI when the requester closes the ticket."""
+    return f"{name} закрыл(а) заявку.\nПричина: {reason}"
+
+
+def notify_closed_by_requester(*, ticket_id: int, reason: str, assignees: list[str]) -> str:
+    text = (
+        f"🔒 <b>Заявка №{ticket_id} закрыта заявителем.</b>\n"
+        f"Причина: {html.escape(clean_glpi_text(reason, limit=500))}"
+    )
+    if assignees:
+        names = ", ".join(html.escape(a) for a in assignees)
+        text += f"\nБыл назначен: {names}"
+    return text
+
+
+def btn_open_ticket(ticket_id: int, title: str) -> str:
+    """Short label for a per-ticket button in the list."""
+    short = title if len(title) <= 30 else title[:29] + "…"
+    return f"№{ticket_id} · {short}"
+
+
+def myt_ask_comment(ticket_id: int) -> str:
+    return f"Введите текст комментария к заявке №{ticket_id}:"
+
+
+def _assignee_line(assignee: str | None) -> str:
+    return f"👤 {html.escape(assignee) if assignee else MYT_UNASSIGNED}"
+
+
+def ticket_detail(
+    *, ticket_id: int, title: str, status: int, assignee: str | None, followups: list[str]
+) -> str:
+    body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
+    return (
+        f"<b>Заявка №{ticket_id}</b>\n"
+        f"{html.escape(title)}\n\n"
+        f"Статус: {ticket_status_label(status)}\n"
+        f"{_assignee_line(assignee)}\n\n"
+        f"<b>Последние комментарии:</b>\n{body}"
+    )
+
+
+def followup_line(author: str | None, body: str) -> str:
+    snippet = html.escape(clean_glpi_text(body, limit=300))
+    if author:
+        return f"• <b>{html.escape(author)}:</b> {snippet}"
+    return f"• {snippet}"

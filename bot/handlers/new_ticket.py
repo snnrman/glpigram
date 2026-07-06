@@ -1,17 +1,19 @@
 """/new — FSM dialog that creates a GLPI ticket.
 
-Flow (CLAUDE.md feature 1):
-    category -> urgency -> title -> description -> confirm -> create ticket.
+Flow (CLAUDE.md features 1 & 6):
+    category -> urgency -> title -> description -> attachments -> confirm ->
+    create ticket -> upload attachments.
 
-Attachments (optional photos/files) are added in feature 6; the dialog is
-structured so a step can slot in before the confirmation.
+Optional photos/documents are collected in the ``attaching`` step and uploaded
+to the ticket (as GLPI Documents) after it is created.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -26,8 +28,9 @@ from aiogram.types import (
 
 from .. import texts
 from ..cache import TTLValue
-from ..db.repo import LinkedUser
+from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
+    TICKET_STATUS_NEW,
     URGENCY_HIGH,
     URGENCY_LOW,
     URGENCY_MEDIUM,
@@ -35,6 +38,7 @@ from ..glpi.client import (
     GlpiError,
 )
 from ..glpi.models import ITILCategory
+from ..services import attachments
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +56,7 @@ class NewTicket(StatesGroup):
     choosing_urgency = State()
     entering_title = State()
     entering_description = State()
+    attaching = State()
     confirming = State()
 
 
@@ -79,6 +84,17 @@ def _confirm_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text=texts.BTN_CONFIRM, callback_data="nt:confirm"),
                 InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:cancel"),
+            ]
+        ]
+    )
+
+
+def _attach_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=texts.BTN_ATTACH_DONE, callback_data="nt:attach_done"),
+                InlineKeyboardButton(text=texts.BTN_ATTACH_CANCEL, callback_data="nt:cancel"),
             ]
         ]
     )
@@ -113,6 +129,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 def build_new_ticket_router(
     client: GlpiClient,
     category_cache: TTLValue[list[ITILCategory]],
+    repo: Repo,
     *,
     ticket_front_base: str | None = None,
 ) -> Router:
@@ -157,11 +174,6 @@ def build_new_ticket_router(
         await state.clear()
         await _open_category_step(message, state)
 
-    @router.message(F.text == texts.BTN_MY_TICKETS)
-    async def btn_my_tickets(message: Message) -> None:
-        # Feature 3 not built yet: acknowledge and keep the menu visible.
-        await message.answer(texts.MY_TICKETS_SOON, reply_markup=main_menu_keyboard())
-
     @router.callback_query(NewTicket.choosing_category, F.data.startswith("nt:cat:"))
     async def on_category(cb: CallbackQuery, state: FSMContext) -> None:
         cat_id = int(cb.data.rsplit(":", 1)[1])
@@ -189,14 +201,8 @@ def build_new_ticket_router(
         await state.update_data(title=title)
         data = await state.get_data()
         if data.get("description"):
-            # Description was pre-filled (free-text flow) -> straight to confirm.
-            await state.set_state(NewTicket.confirming)
-            await message.answer(
-                texts.confirm_summary(
-                    data["category_name"], data["urgency"], title, data["description"]
-                ),
-                reply_markup=_confirm_keyboard(),
-            )
+            # Description was pre-filled (free-text flow) -> skip to attachments.
+            await _open_attach_step(message, state)
             return
         await state.set_state(NewTicket.entering_description)
         await message.answer(texts.NEW_ENTER_DESCRIPTION)
@@ -208,21 +214,70 @@ def build_new_ticket_router(
     @router.message(NewTicket.entering_description, F.text)
     async def on_description(message: Message, state: FSMContext) -> None:
         await state.update_data(description=message.text.strip())
-        data = await state.get_data()
-        await state.set_state(NewTicket.confirming)
-        await message.answer(
-            texts.confirm_summary(
-                data["category_name"], data["urgency"], data["title"], data["description"]
-            ),
-            reply_markup=_confirm_keyboard(),
-        )
+        await _open_attach_step(message, state)
 
     @router.message(NewTicket.entering_description)
     async def on_description_not_text(message: Message, state: FSMContext) -> None:
         await message.answer(texts.NEW_EXPECT_TEXT)
 
+    async def _open_attach_step(message: Message, state: FSMContext) -> None:
+        await state.update_data(attachments=[])
+        await state.set_state(NewTicket.attaching)
+        await message.answer(texts.NEW_ATTACH_PROMPT, reply_markup=_attach_keyboard())
+
+    async def _confirm_text(state: FSMContext) -> str:
+        """Move to the confirming state and render the summary."""
+        data = await state.get_data()
+        await state.set_state(NewTicket.confirming)
+        return texts.confirm_summary(
+            data["category_name"],
+            data["urgency"],
+            data["title"],
+            data["description"],
+            attachments=len(data.get("attachments", [])),
+        )
+
+    @router.message(NewTicket.attaching, F.photo | F.document)
+    async def on_attachment(message: Message, state: FSMContext) -> None:
+        pending = attachments.extract(message)
+        # Every reply in this step keeps the ✅/➡️ keyboard so the dialog is
+        # always finishable — that was the bug: confirmations had no button.
+        if pending is None:
+            await message.answer(texts.ATTACH_UNSUPPORTED, reply_markup=_attach_keyboard())
+            return
+        if attachments.too_large(pending):
+            await message.answer(texts.ATTACH_TOO_LARGE, reply_markup=_attach_keyboard())
+            return
+        data = await state.get_data()
+        files = list(data.get("attachments", []))
+        if len(files) >= attachments.MAX_ATTACHMENTS:
+            await message.answer(texts.ATTACH_TOO_MANY, reply_markup=_attach_keyboard())
+            return
+        files.append(
+            {"file_id": pending.file_id, "filename": pending.filename, "mime": pending.mime}
+        )
+        await state.update_data(attachments=files)
+        await message.answer(texts.attach_added(len(files)), reply_markup=_attach_keyboard())
+
+    @router.message(NewTicket.attaching, F.text)
+    async def on_attaching_text(message: Message, state: FSMContext) -> None:
+        # Text fallback for when the inline keyboard is unavailable.
+        if message.text.strip().casefold() == texts.ATTACH_DONE_WORD:
+            await message.answer(await _confirm_text(state), reply_markup=_confirm_keyboard())
+            return
+        await message.answer(texts.ATTACH_UNSUPPORTED, reply_markup=_attach_keyboard())
+
+    @router.message(NewTicket.attaching)
+    async def on_attaching_other(message: Message) -> None:
+        await message.answer(texts.ATTACH_UNSUPPORTED, reply_markup=_attach_keyboard())
+
+    @router.callback_query(NewTicket.attaching, F.data == "nt:attach_done")
+    async def on_attach_done(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.message.edit_text(await _confirm_text(state), reply_markup=_confirm_keyboard())
+        await cb.answer()
+
     @router.callback_query(NewTicket.confirming, F.data == "nt:confirm")
-    async def on_confirm(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
+    async def on_confirm(cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot) -> None:
         data = await state.get_data()
         await cb.message.edit_text(texts.NEW_CREATING)
         await cb.answer()
@@ -240,11 +295,43 @@ def build_new_ticket_router(
             await cb.message.answer(texts.GLPI_ERROR)
             await state.clear()
             return
+        # Track it so the sync loop can notify this requester of updates.
+        try:
+            await repo.track_ticket(
+                ticket_id=ticket_id,
+                requester_tg_id=cb.from_user.id,
+                requester_glpi_id=link.glpi_users_id,
+                status=TICKET_STATUS_NEW,
+                now=int(time.time()),
+            )
+        except Exception:  # noqa: BLE001 - tracking must never fail ticket creation
+            log.exception("track_ticket_failed ticket_id=%s", ticket_id)
+
+        files = data.get("attachments", [])
+        uploaded = await _upload_attachments(bot, ticket_id, files)
         await state.clear()
         await cb.message.answer(
             texts.ticket_created(ticket_id, _ticket_url(ticket_id)),
             reply_markup=main_menu_keyboard(),
         )
+        if files and uploaded < len(files):
+            await cb.message.answer(texts.attachments_partial_failure(uploaded, len(files)))
+
+    async def _upload_attachments(bot: Bot, ticket_id: int, files: list[dict]) -> int:
+        """Upload each collected file to the ticket; return how many succeeded."""
+        uploaded = 0
+        for att in files:
+            try:
+                content = await attachments.download(bot, att["file_id"])
+                await client.attach_document_to_ticket(
+                    ticket_id, att["filename"], content, mime=att.get("mime")
+                )
+                uploaded += 1
+            except Exception:  # noqa: BLE001 - one bad file shouldn't sink the rest
+                log.warning(
+                    "attach_upload_failed ticket=%s file=%s", ticket_id, att.get("filename")
+                )
+        return uploaded
 
     # Cancel from any state (inline button or /cancel command).
     @router.callback_query(F.data == "nt:cancel")

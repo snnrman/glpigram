@@ -40,6 +40,31 @@ class LinkedUser:
         )
 
 
+@dataclass(slots=True)
+class TrackedTicket:
+    """A bot-created ticket the sync loop watches (one ``bot_tickets`` row)."""
+
+    ticket_id: int
+    requester_tg_id: int
+    requester_glpi_id: int
+    last_status: int
+    last_followup_id: int
+    active: bool
+    created_at: int
+
+    @classmethod
+    def _from_row(cls, row: aiosqlite.Row) -> TrackedTicket:
+        return cls(
+            ticket_id=row["ticket_id"],
+            requester_tg_id=row["requester_tg_id"],
+            requester_glpi_id=row["requester_glpi_id"],
+            last_status=row["last_status"],
+            last_followup_id=row["last_followup_id"],
+            active=bool(row["active"]),
+            created_at=row["created_at"],
+        )
+
+
 class Repo:
     """Owns a single aiosqlite connection; all DB access goes through here."""
 
@@ -136,3 +161,63 @@ class Repo:
         )
         await self._conn.commit()
         return cur.rowcount > 0
+
+    # -- tracked tickets (feature 4) --------------------------------------
+    async def track_ticket(
+        self,
+        *,
+        ticket_id: int,
+        requester_tg_id: int,
+        requester_glpi_id: int,
+        status: int,
+        now: int,
+    ) -> None:
+        """Start watching a bot-created ticket (idempotent on ticket_id)."""
+        await self._conn.execute(
+            """
+            INSERT INTO bot_tickets
+                (ticket_id, requester_tg_id, requester_glpi_id, last_status,
+                 last_followup_id, active, created_at)
+            VALUES (?, ?, ?, ?, 0, 1, ?)
+            ON CONFLICT(ticket_id) DO NOTHING
+            """,
+            (ticket_id, requester_tg_id, requester_glpi_id, status, now),
+        )
+        await self._conn.commit()
+
+    async def active_tracked_tickets(self) -> list[TrackedTicket]:
+        async with self._conn.execute(
+            "SELECT * FROM bot_tickets WHERE active = 1 ORDER BY ticket_id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [TrackedTicket._from_row(r) for r in rows]
+
+    async def set_ticket_status(self, ticket_id: int, *, status: int, active: bool) -> None:
+        await self._conn.execute(
+            "UPDATE bot_tickets SET last_status = ?, active = ? WHERE ticket_id = ?",
+            (status, int(active), ticket_id),
+        )
+        await self._conn.commit()
+
+    async def set_ticket_followup_cursor(self, ticket_id: int, last_followup_id: int) -> None:
+        await self._conn.execute(
+            "UPDATE bot_tickets SET last_followup_id = ? WHERE ticket_id = ?",
+            (last_followup_id, ticket_id),
+        )
+        await self._conn.commit()
+
+    # -- sync cursors ------------------------------------------------------
+    async def get_cursor(self, key: str) -> int | None:
+        async with self._conn.execute("SELECT value FROM sync_state WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+        return row["value"] if row else None
+
+    async def set_cursor(self, key: str, value: int) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO sync_state (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        await self._conn.commit()

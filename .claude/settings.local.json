@@ -16,7 +16,8 @@
       "Bash(bash -n /opt/glpi-tgbot/deploy/install.sh)",
       "Bash(venv/bin/python -c \"import bot.main; import bot.handlers.new_ticket; print\\('import OK'\\)\")",
       "Bash(venv/bin/python *)",
-      "Bash(venv/bin/pip show *)"
+      "Bash(venv/bin/pip show *)",
+      "Read(//var/lib/glpi-tgbot/**)"
     ]
   }
 }

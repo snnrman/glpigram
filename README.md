@@ -6,7 +6,7 @@ the queue. See `CLAUDE.md` for the full spec and roadmap.
 
 ## Status
 
-Implemented (feature 1 — *Core client + `/new` dialog*):
+All roadmap features (1–6) implemented:
 
 - **GLPI client** (`bot/glpi/client.py`) — `initSession` with `App-Token` +
   `user_token`, transparent session re-init on `401` (retried once), ticket
@@ -16,10 +16,10 @@ Implemented (feature 1 — *Core client + `/new` dialog*):
   `GlpiError` subclass with the raw API response attached — `httpx` exceptions
   never leak.
 - **`/new` FSM dialog** (`bot/handlers/new_ticket.py`) —
-  category → urgency → title → description → confirm → create. Categories come
-  from GLPI and are cached 10 min. Replies with the ticket number and a link.
-  A persistent reply keyboard and free-text "turn this into a ticket" flow wrap
-  the dialog.
+  category → urgency → title → description → attachments → confirm → create.
+  Categories come from GLPI and are cached 10 min. Replies with the ticket number
+  and a link. A persistent reply keyboard and free-text "turn this into a ticket"
+  flow wrap the dialog.
 - **Account linking (feature 2, AD-based)** (`bot/handlers/linking.py`) —
   `/start` prompts unlinked users for their AD login; the bot resolves the
   active GLPI user by `name`, posts a confirmation card into the tech group, and
@@ -29,11 +29,35 @@ Implemented (feature 1 — *Core client + `/new` dialog*):
   auto-unlinks accounts deactivated in GLPI (cached ~5 min), and refreshes
   `is_tech` from the configured GLPI group. Admin commands `/link` and
   `/unlink` (technicians only).
+- **My tickets (feature 3)** (`bot/handlers/my_tickets.py`) — `/tickets` (or the
+  "📋 Мои заявки" button) lists the requester's not-yet-closed tickets (number,
+  title, status, assignee) via `/search/Ticket`; tapping one shows a detail view
+  with the last 5 public followups; "add comment" collects text via FSM and posts
+  a followup on behalf of the requester. A "✅ Закрыть заявку" button lets the
+  requester close their own ticket: FSM asks for a reason and confirmation, then
+  posts the reason as a followup, sets the ticket to Closed, and notifies the tech
+  group (mentioning the assignee). Bot-authored followups/closes advance the
+  ticket cursor so the sync loop doesn't echo them back to the requester.
+- **Sync loop (feature 4)** (`bot/services/sync.py`, `notify.py`) — polls GLPI
+  every `SYNC_INTERVAL` seconds: new tickets → tech group (with action buttons
+  for feature 5), status changes on bot-created tickets → the requester, and new
+  followups by others → forwarded to the requester. Cursors (`bot_tickets`,
+  `sync_state`) live in SQLite so restarts don't duplicate notifications; on a
+  fresh DB the ticket cursor is seeded to the current max id. The loop survives
+  any per-tick error and continues.
+- **Tech actions (feature 5)** (`bot/handlers/tech_actions.py`) — the tech-group
+  card's buttons: **Take** (assign the pressing technician + move to
+  *processing*), **Comment** (add a public followup), **Close** (add a solution
+  → *solved*). Only linked technicians (`is_tech`) may act; others get a toast.
+  Comment/Close collect free text via FSM in the technician's private chat
+  (Telegram group privacy hides plain group messages), then edit the group card.
+- **Attachments (feature 6)** (`bot/services/attachments.py`) — photos/documents
+  from Telegram are uploaded to GLPI (multipart `Document` + `Document_Item`) on
+  ticket creation (the `attaching` step of `/new`) and in comments (both the
+  requester's and a technician's). Files over the Bot API's 20 MB `getFile` limit
+  are rejected with a clear message.
 - systemd unit, `install.sh`, `.env.example`, and pytest/respx tests
-  (client, repo, linking helpers).
-
-Not yet implemented: `/tickets`, sync loop, tech actions, attachments
-(features 3–6).
+  (client, repo, linking helpers, sync logic, my-tickets rendering, attachments).
 
 ## Development
 

@@ -19,12 +19,13 @@ Usage IDs referenced below come from GLPI search options / constants; see the
 from __future__ import annotations
 
 import asyncio
+import json as jsonlib
 import logging
 from typing import Any
 
 import httpx
 
-from .models import ITILCategory, User
+from .models import Followup, ITILCategory, Ticket, TicketSummary, User
 
 log = logging.getLogger(__name__)
 
@@ -37,11 +38,38 @@ URGENCY_HIGH = 4
 # GLPI ticket statuses.
 TICKET_STATUS_NEW = 1
 TICKET_STATUS_PROCESSING_ASSIGNED = 2
+TICKET_STATUS_PROCESSING_PLANNED = 3
+TICKET_STATUS_WAITING = 4
 TICKET_STATUS_SOLVED = 5
 TICKET_STATUS_CLOSED = 6
 
+# Not-yet-closed statuses: what /tickets lists and what a requester may close.
+OPEN_TICKET_STATUSES = frozenset(
+    {
+        TICKET_STATUS_NEW,
+        TICKET_STATUS_PROCESSING_ASSIGNED,
+        TICKET_STATUS_PROCESSING_PLANNED,
+        TICKET_STATUS_WAITING,
+        TICKET_STATUS_SOLVED,
+    }
+)
+
 # Ticket_User link types.
 TICKET_USER_REQUESTER = 1
+TICKET_USER_ASSIGN = 2  # technician / assignee
+
+# GLPI searchOption id of the primary key ("id"). It is 2 for every itemtype
+# (framework convention); verify with listSearchOptions/Ticket if a deployment
+# ever disagrees. Used by /search/Ticket (feature 3), which sorts/criteria by
+# searchOption id. NOTE: getAllItems (/Ticket) sorts by column NAME, not this.
+SEARCHOPTION_ID = 2
+
+# Ticket searchOption ids for /search/Ticket (feature 3). CLAUDE.md lists the
+# common ones; verify via listSearchOptions/Ticket before trusting a new install.
+SO_TICKET_NAME = 1
+SO_TICKET_REQUESTER = 4
+SO_TICKET_ASSIGN = 5
+SO_TICKET_STATUS = 12
 
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE = 0.5  # seconds; attempt n waits _BACKOFF_BASE * 2**(n-1)
@@ -77,6 +105,43 @@ class GlpiNetworkError(GlpiError):
     """Transport-level failure (connection, timeout) after retries were exhausted."""
 
 
+def _extract_id(resp: httpx.Response) -> int:
+    """Pull the created object's id from a GLPI create response.
+
+    GLPI returns a single ``{id, message}`` object or a one-element list of them.
+    """
+    data = resp.json()
+    if isinstance(data, list):
+        data = data[0] if data else None
+    try:
+        return int(data["id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GlpiHTTPError("GLPI create returned no id", response=resp) from exc
+
+
+def _parse_user_refs(raw: Any) -> tuple[list[int], str | None]:
+    """Split a GLPI search user-column value into ids and any leftover names.
+
+    Without ``expand_dropdowns`` a user column is a numeric id (or a list of
+    them for multiple actors); some builds already return a name string. Return
+    the numeric ids to resolve plus any non-numeric names to show verbatim.
+    """
+    if raw is None:
+        return [], None
+    items = raw if isinstance(raw, list) else [raw]
+    ids: list[int] = []
+    names: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if not text or text == "0":
+            continue
+        if text.isdigit():
+            ids.append(int(text))
+        else:
+            names.append(text)
+    return ids, (", ".join(names) if names else None)
+
+
 class GlpiClient:
     def __init__(
         self,
@@ -106,8 +171,12 @@ class GlpiClient:
         await self._http.aclose()
 
     # -- headers -----------------------------------------------------------
-    def _auth_headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
+    def _auth_headers(self, *, json_content: bool = True) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        # For multipart uploads httpx must set Content-Type (with the boundary),
+        # so only force JSON for the normal case.
+        if json_content:
+            headers["Content-Type"] = "application/json"
         # App-Token is optional (the localhost client may not need one); only
         # send the header when configured.
         if self._app_token:
@@ -174,6 +243,8 @@ class GlpiClient:
         headers: dict[str, str] | None = None,
         json: Any | None = None,
         params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
         idempotent: bool,
     ) -> httpx.Response:
         """Single HTTP call with retry on transient failures.
@@ -189,7 +260,7 @@ class GlpiClient:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 resp = await self._http.request(
-                    method, url, headers=headers, json=json, params=params
+                    method, url, headers=headers, json=json, params=params, data=data, files=files
                 )
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 # Pre-execution: the request never reached the server -> safe to
@@ -232,18 +303,31 @@ class GlpiClient:
         *,
         json: Any | None = None,
         params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
         idempotent: bool,
     ) -> httpx.Response:
-        """Authenticated request with transparent one-shot session renewal on 401."""
+        """Authenticated request with transparent one-shot session renewal on 401.
+
+        ``data``/``files`` send a multipart body (document uploads); in that case
+        httpx sets the Content-Type, so the JSON header is dropped. File contents
+        must be passed as ``bytes`` so the request can be re-sent on a 401 retry.
+        """
+        multipart = files is not None
         if self._session_token is None:
             await self.init_session()
+
+        def _hdrs() -> dict[str, str]:
+            return self._auth_headers(json_content=not multipart)
 
         resp = await self._send(
             method,
             path,
-            headers=self._auth_headers(),
+            headers=_hdrs(),
             json=json,
             params=params,
+            data=data,
+            files=files,
             idempotent=idempotent,
         )
         if resp.status_code == 401:
@@ -254,9 +338,11 @@ class GlpiClient:
             resp = await self._send(
                 method,
                 path,
-                headers=self._auth_headers(),
+                headers=_hdrs(),
                 json=json,
                 params=params,
+                data=data,
+                files=files,
                 idempotent=idempotent,
             )
             if resp.status_code == 401:
@@ -269,7 +355,15 @@ class GlpiClient:
     @staticmethod
     def _error_from_response(resp: httpx.Response) -> GlpiError:
         cls = GlpiAuthError if resp.status_code in (401, 403) else GlpiHTTPError
-        return cls(f"GLPI returned HTTP {resp.status_code}", response=resp)
+        # Include the (truncated) GLPI body in the message so `str(exc)` — which
+        # is what handlers/log lines print — carries the reason, not just a code.
+        body = resp.text.strip().replace("\n", " ")
+        if len(body) > 500:
+            body = body[:500] + "…"
+        method = resp.request.method if resp.request is not None else "?"
+        detail = f": {body}" if body else ""
+        msg = f"GLPI {method} {resp.url.path} -> HTTP {resp.status_code}{detail}"
+        return cls(msg, response=resp)
 
     # -- endpoints ---------------------------------------------------------
     async def list_categories(self, *, page_size: int = 200) -> list[ITILCategory]:
@@ -386,3 +480,255 @@ class GlpiClient:
         if not isinstance(links, list):
             return False
         return any(int(link.get("groups_id", 0) or 0) == group_id for link in links)
+
+    # -- tickets / followups (feature 4: sync loop) ------------------------
+    async def list_recent_tickets(self, *, limit: int = 100) -> list[Ticket]:
+        """Return the most recent tickets, newest id first.
+
+        getAllItems sorted by the ``id`` column descending; the sync loop filters
+        to ``id > last_seen`` itself. A single page of ``limit`` covers far more
+        than one 45 s interval ever produces.
+
+        NOTE: getAllItems ``sort`` takes a **table column name** ("id"), not a
+        searchOption id — GLPI 11 returns HTTP 400 ("sort param is not a field of
+        glpi_tickets") for a numeric sort here. (Only /search/Ticket uses the
+        numeric searchOption id for ``sort``.)
+        """
+        resp = await self._request(
+            "GET",
+            "/Ticket",
+            params={
+                "sort": "id",
+                "order": "DESC",
+                "range": f"0-{max(0, limit - 1)}",
+            },
+            idempotent=True,
+        )
+        rows = resp.json()
+        if not isinstance(rows, list):
+            return []
+        return [Ticket.from_api(r) for r in rows]
+
+    async def get_ticket(self, ticket_id: int) -> Ticket | None:
+        """Fetch one ticket, or ``None`` if it no longer exists (404)."""
+        try:
+            resp = await self._request("GET", f"/Ticket/{ticket_id}", idempotent=True)
+        except GlpiHTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return None
+            raise
+        data = resp.json()
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return None
+        return Ticket.from_api(data)
+
+    async def list_followups(self, ticket_id: int) -> list[Followup]:
+        """Return all followups of a ticket (sub-item endpoint)."""
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/ITILFollowup", idempotent=True)
+        rows = resp.json()
+        if not isinstance(rows, list):
+            return []
+        return [Followup.from_api(r) for r in rows]
+
+    # -- ticket mutations (feature 5: tech actions) ------------------------
+    async def set_ticket_status(self, ticket_id: int, status: int) -> None:
+        """Update a ticket's status (PUT /Ticket/{id})."""
+        await self._request(
+            "PUT",
+            f"/Ticket/{ticket_id}",
+            json={"input": {"id": ticket_id, "status": status}},
+            idempotent=False,
+        )
+
+    async def assign_ticket(self, ticket_id: int, technician_users_id: int) -> None:
+        """Assign a technician and move the ticket to *processing (assigned)*.
+
+        Adds a ``Ticket_User`` assignee link, then flips the status. The two
+        calls are separate GLPI mutations; if the status update fails the
+        assignee is already recorded and the tech can retry.
+        """
+        await self._request(
+            "POST",
+            "/Ticket_User",
+            json={
+                "input": {
+                    "tickets_id": ticket_id,
+                    "users_id": technician_users_id,
+                    "type": TICKET_USER_ASSIGN,
+                }
+            },
+            idempotent=False,
+        )
+        await self.set_ticket_status(ticket_id, TICKET_STATUS_PROCESSING_ASSIGNED)
+
+    async def add_followup(self, ticket_id: int, content: str, *, is_private: bool = False) -> int:
+        """Add an ITILFollowup to a ticket; returns the new followup id."""
+        resp = await self._request(
+            "POST",
+            "/ITILFollowup",
+            json={
+                "input": {
+                    "itemtype": "Ticket",
+                    "items_id": ticket_id,
+                    "content": content,
+                    "is_private": int(is_private),
+                }
+            },
+            idempotent=False,
+        )
+        return _extract_id(resp)
+
+    async def add_solution(self, ticket_id: int, content: str) -> int:
+        """Add an ITILSolution to a ticket (moves it to *solved*); returns its id."""
+        resp = await self._request(
+            "POST",
+            "/ITILSolution",
+            json={"input": {"itemtype": "Ticket", "items_id": ticket_id, "content": content}},
+            idempotent=False,
+        )
+        return _extract_id(resp)
+
+    # -- my tickets (feature 3) -------------------------------------------
+    async def _user_name(self, user_id: int, cache: dict[int, str]) -> str:
+        """Resolve a user id to a display name, memoised for this call."""
+        if user_id in cache:
+            return cache[user_id]
+        try:
+            user = await self.get_user(user_id)
+        except GlpiError:
+            user = None
+        name = user.display_name if user else str(user_id)
+        cache[user_id] = name
+        return name
+
+    async def search_user_open_tickets(
+        self, requester_users_id: int, *, limit: int = 50
+    ) -> list[TicketSummary]:
+        """Not-yet-closed tickets where the user is requester, newest first.
+
+        Uses /search/Ticket filtered by requester; only closed tickets are
+        dropped client-side (status is numeric without expand_dropdowns), so the
+        requester can still see and close *solved* tickets. Assignee ids are
+        resolved to names.
+        """
+        params = {
+            "criteria[0][field]": SO_TICKET_REQUESTER,
+            "criteria[0][searchtype]": "equals",
+            "criteria[0][value]": requester_users_id,
+            "forcedisplay[0]": SEARCHOPTION_ID,
+            "forcedisplay[1]": SO_TICKET_NAME,
+            "forcedisplay[2]": SO_TICKET_STATUS,
+            "forcedisplay[3]": SO_TICKET_ASSIGN,
+            "sort": SEARCHOPTION_ID,
+            "order": "DESC",
+            "range": f"0-{max(0, limit - 1)}",
+        }
+        resp = await self._request("GET", "/search/Ticket", params=params, idempotent=True)
+        payload = resp.json()
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not rows:
+            return []
+        name_cache: dict[int, str] = {}
+        summaries: list[TicketSummary] = []
+        for row in rows:
+            try:
+                tid = int(row.get(str(SEARCHOPTION_ID)))
+            except (TypeError, ValueError):
+                continue
+            status = int(row.get(str(SO_TICKET_STATUS)) or 0)
+            if status == TICKET_STATUS_CLOSED:
+                continue  # everything not-yet-closed (incl. solved) is listed
+            ids, fallback = _parse_user_refs(row.get(str(SO_TICKET_ASSIGN)))
+            parts = [await self._user_name(uid, name_cache) for uid in ids]
+            if fallback:
+                parts.append(fallback)
+            summaries.append(
+                TicketSummary(
+                    id=tid,
+                    title=str(row.get(str(SO_TICKET_NAME)) or ""),
+                    status=status,
+                    assignee=", ".join(parts) if parts else None,
+                )
+            )
+        return summaries
+
+    # -- attachments (feature 6) ------------------------------------------
+    async def upload_document(
+        self, filename: str, content: bytes, *, mime: str = "application/octet-stream"
+    ) -> int:
+        """Upload a file as a GLPI Document (multipart); returns the document id.
+
+        Follows the documented ``uploadManifest`` + file part convention. The
+        content is passed as ``bytes`` so a 401 re-auth can re-send it.
+        """
+        manifest = jsonlib.dumps({"input": {"name": filename, "_filename": [filename]}})
+        resp = await self._request(
+            "POST",
+            "/Document",
+            data={"uploadManifest": manifest},
+            files={"filename[0]": (filename, content, mime)},
+            idempotent=False,
+        )
+        return _extract_id(resp)
+
+    async def link_document(self, document_id: int, itemtype: str, items_id: int) -> None:
+        """Link an uploaded Document to an item (Document_Item)."""
+        await self._request(
+            "POST",
+            "/Document_Item",
+            json={
+                "input": {
+                    "documents_id": document_id,
+                    "itemtype": itemtype,
+                    "items_id": items_id,
+                }
+            },
+            idempotent=False,
+        )
+
+    async def attach_document_to_ticket(
+        self, ticket_id: int, filename: str, content: bytes, *, mime: str | None = None
+    ) -> int:
+        """Upload a file and link it to the ticket; returns the document id."""
+        doc_id = await self.upload_document(
+            filename, content, mime=mime or "application/octet-stream"
+        )
+        await self.link_document(doc_id, "Ticket", ticket_id)
+        return doc_id
+
+    async def get_ticket_assignees(self, ticket_id: int) -> list[str]:
+        """Names of the technicians assigned to a ticket (Ticket_User type 2)."""
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/Ticket_User", idempotent=True)
+        links = resp.json()
+        if not isinstance(links, list):
+            return []
+        cache: dict[int, str] = {}
+        names: list[str] = []
+        for link in links:
+            if int(link.get("type", 0) or 0) != TICKET_USER_ASSIGN:
+                continue
+            uid = int(link.get("users_id", 0) or 0)
+            if uid:
+                names.append(await self._user_name(uid, cache))
+        return names
+
+    async def get_ticket_requester(self, ticket_id: int) -> tuple[int, str] | None:
+        """The ticket's requester as ``(glpi_users_id, display_name)``, or None.
+
+        The requester is a ``Ticket_User`` link of type 1 (not a ticket column),
+        so it needs its own lookup. Returns the first requester if several.
+        """
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/Ticket_User", idempotent=True)
+        links = resp.json()
+        if not isinstance(links, list):
+            return None
+        cache: dict[int, str] = {}
+        for link in links:
+            if int(link.get("type", 0) or 0) != TICKET_USER_REQUESTER:
+                continue
+            uid = int(link.get("users_id", 0) or 0)
+            if uid:
+                return uid, await self._user_name(uid, cache)
+        return None

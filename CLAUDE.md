@@ -100,9 +100,17 @@ deploy/
      on check.
    - Admin commands (usable only by techs): `/link <tg_id or @username reply> <ad_login>`
      to link someone manually, `/unlink <ad_login>` to remove a mapping.
-3. **My tickets.** `/tickets` — open tickets of the linked user: number, title, status, assignee.
+3. **My tickets.** `/tickets` — the linked user's not-yet-closed tickets (statuses
+   new/assigned/planned/waiting/solved): number, title, status, assignee.
    Tap -> detail view with the last 5 followups. Button "add comment" -> FSM -> followup
    created on behalf of the requester.
+   - **Requester self-close:** detail view shows a "✅ Закрыть заявку" button for the
+     user's own not-yet-closed tickets. FSM: ask for a close reason (text) -> confirm
+     "Закрыть заявку #N?" [Yes/Cancel]. On confirm: add the reason as a followup on
+     behalf of the requester, set the ticket to Closed (6), and notify the tech group
+     ("Заявка #N закрыта заявителем: <reason>", mentioning the assigned technician if
+     any). The sync loop must NOT echo this close back to the requester (advance the
+     ticket's followup cursor past the reason and mark it inactive/closed in SQLite).
 4. **Sync loop (GLPI -> TG).** Poll every 45 s:
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
    - status changes on tickets created via the bot -> notify the requester

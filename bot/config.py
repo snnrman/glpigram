@@ -38,6 +38,12 @@ class Settings(BaseSettings):
         description="Seconds between GLPI re-checks of a linked account (still active + is_tech).",
     )
 
+    # --- Sync loop (feature 4) ---
+    sync_interval: int = Field(
+        default=45,
+        description="GLPI polling interval in seconds (new tickets, status, followups).",
+    )
+
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(
         ...,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -22,9 +23,12 @@ from .config import Settings, load_settings
 from .db.repo import Repo
 from .glpi.client import GlpiClient
 from .handlers.linking import build_linking_router
+from .handlers.my_tickets import build_my_tickets_router
 from .handlers.new_ticket import build_new_ticket_router
+from .handlers.tech_actions import build_tech_actions_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
+from .services.sync import SyncService
 
 log = logging.getLogger(__name__)
 
@@ -53,19 +57,29 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         )
     )
 
-    # Business router: gated by AuthMiddleware (requires a linked account).
-    business = build_new_ticket_router(
-        client, category_cache, ticket_front_base=settings.glpi_front_base
-    )
+    # Business routers: gated by AuthMiddleware (require a linked account).
     auth = AuthMiddleware(
         repo,
         client,
         tech_group_id=settings.tech_group_id,
         recheck_ttl=settings.link_recheck_ttl,
     )
-    business.message.middleware(auth)
-    business.callback_query.middleware(auth)
-    dp.include_router(business)
+    # Order matters: tech_actions and my_tickets must precede new_ticket so their
+    # FSM-state and menu-button handlers win over the /new free-text fallback.
+    tech = build_tech_actions_router(client)
+    my_tickets = build_my_tickets_router(
+        client,
+        repo,
+        tech_group_chat_id=settings.tech_group_chat_id,
+        ticket_front_base=settings.glpi_front_base,
+    )
+    business = build_new_ticket_router(
+        client, category_cache, repo, ticket_front_base=settings.glpi_front_base
+    )
+    for router in (tech, my_tickets, business):
+        router.message.middleware(auth)
+        router.callback_query.middleware(auth)
+        dp.include_router(router)
     return dp
 
 
@@ -86,11 +100,23 @@ async def _run(settings: Settings) -> None:
     repo = Repo(settings.db_path)
     await repo.connect()
     dp = build_dispatcher(client, repo, settings)
+    sync = SyncService(
+        bot,
+        client,
+        repo,
+        tech_group_chat_id=settings.tech_group_chat_id,
+        interval=settings.sync_interval,
+        front_base=settings.glpi_front_base,
+    )
+    sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
     try:
         log.info("bot_starting")
         await _set_commands(bot)
         await dp.start_polling(bot, handle_signals=True)
     finally:
+        sync_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await sync_task
         await repo.close()
         await client.kill_session()
         await client.close()

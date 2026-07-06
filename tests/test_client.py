@@ -138,6 +138,10 @@ async def test_create_ticket_error_surfaces_raw(mock):
         await client.create_ticket(name="t", content="c", urgency=3)
     assert ei.value.raw == ["ERROR_BAD_INPUT", "nope"]
     assert ei.value.response is not None
+    # the message (what logs print via %s) must carry the GLPI body, not just the code
+    msg = str(ei.value)
+    assert "400" in msg
+    assert "ERROR_BAD_INPUT" in msg and "nope" in msg
     await client.close()
 
 
@@ -346,6 +350,252 @@ async def test_user_not_in_group(mock):
     )
     client = make_client()
     assert await client.user_in_group(7, 9) is False
+    await client.close()
+
+
+# --- tickets / followups (feature 4) ----------------------------------------
+async def test_list_recent_tickets_sorts_desc_and_parses(mock):
+    await _init_route(mock)
+    route = mock.get(f"{BASE}/Ticket").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 9, "name": "b", "status": 2},
+                {"id": 8, "name": "a", "status": 1},
+            ],
+        )
+    )
+    client = make_client()
+    tickets = await client.list_recent_tickets(limit=50)
+    assert [t.id for t in tickets] == [9, 8]
+    # newest-first sort is requested from GLPI. getAllItems sorts by COLUMN name
+    # ("id"), not a searchOption id — a numeric sort here is HTTP 400 in GLPI 11.
+    params = route.calls.last.request.url.params
+    assert params["order"] == "DESC"
+    assert params["sort"] == "id"
+    assert params["range"] == "0-49"
+    await client.close()
+
+
+async def test_get_ticket_none_on_404(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/77").mock(return_value=httpx.Response(404, json=["ERR", "x"]))
+    client = make_client()
+    assert await client.get_ticket(77) is None
+    await client.close()
+
+
+async def test_list_followups_parses_flags(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/10/ITILFollowup").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 1, "items_id": 10, "content": "hi", "users_id": 5, "is_private": 0},
+                {"id": 2, "items_id": 10, "content": "psst", "users_id": 6, "is_private": 1},
+            ],
+        )
+    )
+    client = make_client()
+    fups = await client.list_followups(10)
+    assert [f.id for f in fups] == [1, 2]
+    assert fups[0].is_private is False
+    assert fups[1].is_private is True
+    await client.close()
+
+
+# --- ticket mutations (feature 5) -------------------------------------------
+async def test_set_ticket_status_puts_status(mock):
+    import json
+
+    await _init_route(mock)
+    route = mock.put(f"{BASE}/Ticket/5").mock(return_value=httpx.Response(200, json={"id": 5}))
+    client = make_client()
+    await client.set_ticket_status(5, 2)
+    payload = json.loads(route.calls.last.request.read().decode())["input"]
+    assert payload["status"] == 2
+    await client.close()
+
+
+async def test_assign_ticket_links_then_sets_status(mock):
+    import json
+
+    await _init_route(mock)
+    link = mock.post(f"{BASE}/Ticket_User").mock(return_value=httpx.Response(201, json={"id": 1}))
+    status = mock.put(f"{BASE}/Ticket/5").mock(return_value=httpx.Response(200, json={"id": 5}))
+    client = make_client()
+    await client.assign_ticket(5, technician_users_id=42)
+    link_input = json.loads(link.calls.last.request.read().decode())["input"]
+    assert link_input == {"tickets_id": 5, "users_id": 42, "type": 2}  # type 2 = assignee
+    status_input = json.loads(status.calls.last.request.read().decode())["input"]
+    assert status_input["status"] == 2  # processing (assigned)
+    await client.close()
+
+
+async def test_add_followup_sends_input_and_returns_id(mock):
+    import json
+
+    await _init_route(mock)
+    route = mock.post(f"{BASE}/ITILFollowup").mock(
+        return_value=httpx.Response(201, json={"id": 88})
+    )
+    client = make_client()
+    fid = await client.add_followup(10, "hello", is_private=False)
+    assert fid == 88
+    payload = json.loads(route.calls.last.request.read().decode())["input"]
+    assert payload == {"itemtype": "Ticket", "items_id": 10, "content": "hello", "is_private": 0}
+    await client.close()
+
+
+async def test_add_solution_sends_input_and_returns_id(mock):
+    import json
+
+    await _init_route(mock)
+    route = mock.post(f"{BASE}/ITILSolution").mock(
+        return_value=httpx.Response(201, json=[{"id": 3, "message": "ok"}])
+    )
+    client = make_client()
+    sid = await client.add_solution(10, "fixed it")
+    assert sid == 3  # tolerates list-wrapped create response
+    payload = json.loads(route.calls.last.request.read().decode())["input"]
+    assert payload == {"itemtype": "Ticket", "items_id": 10, "content": "fixed it"}
+    await client.close()
+
+
+# --- my tickets (feature 3) -------------------------------------------------
+async def test_search_user_open_tickets_filters_closed_and_resolves_assignee(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/search/Ticket").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "totalcount": 4,
+                "data": [
+                    {"2": 9, "1": "Открытая", "12": 2, "5": "42"},  # open, assignee id 42
+                    {"2": 8, "1": "Закрытая", "12": 6, "5": ""},  # closed -> dropped
+                    {"2": 7, "1": "Без исполнителя", "12": 1, "5": None},  # open, no assignee
+                    {"2": 6, "1": "Решённая", "12": 5, "5": ""},  # solved -> KEPT (closable)
+                ],
+            },
+        )
+    )
+    mock.get(f"{BASE}/User/42").mock(
+        return_value=httpx.Response(
+            200, json={"id": 42, "name": "tech", "firstname": "Иван", "realname": "Петров"}
+        )
+    )
+    client = make_client()
+    tickets = await client.search_user_open_tickets(99)
+    assert [t.id for t in tickets] == [9, 7, 6]  # only the closed one is filtered out
+    assert tickets[0].status == 2
+    assert tickets[0].assignee == "Иван Петров"  # id resolved to a name
+    assert tickets[1].assignee is None
+    assert tickets[2].status == 5  # solved stays so the requester can close it
+    await client.close()
+
+
+async def test_search_user_open_tickets_empty(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/search/Ticket").mock(return_value=httpx.Response(200, json={"totalcount": 0}))
+    client = make_client()
+    assert await client.search_user_open_tickets(99) == []
+    await client.close()
+
+
+async def test_get_ticket_assignees_only_type_2(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/10/Ticket_User").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"users_id": 7, "type": 1},  # requester -> ignored
+                {"users_id": 42, "type": 2},  # technician
+            ],
+        )
+    )
+    mock.get(f"{BASE}/User/42").mock(
+        return_value=httpx.Response(200, json={"id": 42, "name": "tech"})
+    )
+    client = make_client()
+    assert await client.get_ticket_assignees(10) == ["tech"]
+    await client.close()
+
+
+async def test_get_ticket_requester_type_1(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/23/Ticket_User").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"users_id": 99, "type": 2},  # assignee -> ignored
+                {"users_id": 42, "type": 1},  # requester
+            ],
+        )
+    )
+    mock.get(f"{BASE}/User/42").mock(
+        return_value=httpx.Response(
+            200, json={"id": 42, "name": "jdoe", "firstname": "Иван", "realname": "Петров"}
+        )
+    )
+    client = make_client()
+    assert await client.get_ticket_requester(23) == (42, "Иван Петров")
+    await client.close()
+
+
+async def test_get_ticket_requester_none_when_absent(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/23/Ticket_User").mock(
+        return_value=httpx.Response(200, json=[{"users_id": 99, "type": 2}])
+    )
+    client = make_client()
+    assert await client.get_ticket_requester(23) is None
+    await client.close()
+
+
+# --- attachments (feature 6) ------------------------------------------------
+async def test_upload_document_sends_multipart_and_returns_id(mock):
+    await _init_route(mock)
+    route = mock.post(f"{BASE}/Document").mock(return_value=httpx.Response(201, json={"id": 55}))
+    client = make_client()
+    doc_id = await client.upload_document("photo.jpg", b"\xff\xd8\xff data", mime="image/jpeg")
+    assert doc_id == 55
+    req = route.calls.last.request
+    # multipart body: httpx sets the boundary Content-Type, not application/json
+    assert req.headers["content-type"].startswith("multipart/form-data")
+    body = req.read()
+    assert b'name="uploadManifest"' in body
+    assert b'"_filename"' in body
+    assert b'name="filename[0]"' in body
+    assert b"\xff\xd8\xff data" in body
+    await client.close()
+
+
+async def test_link_document_posts_document_item(mock):
+    import json
+
+    await _init_route(mock)
+    route = mock.post(f"{BASE}/Document_Item").mock(
+        return_value=httpx.Response(201, json={"id": 1})
+    )
+    client = make_client()
+    await client.link_document(55, "Ticket", 10)
+    payload = json.loads(route.calls.last.request.read().decode())["input"]
+    assert payload == {"documents_id": 55, "itemtype": "Ticket", "items_id": 10}
+    await client.close()
+
+
+async def test_attach_document_to_ticket_uploads_then_links(mock):
+    await _init_route(mock)
+    upload = mock.post(f"{BASE}/Document").mock(return_value=httpx.Response(201, json={"id": 55}))
+    linkr = mock.post(f"{BASE}/Document_Item").mock(
+        return_value=httpx.Response(201, json={"id": 1})
+    )
+    client = make_client()
+    doc_id = await client.attach_document_to_ticket(
+        10, "f.pdf", b"pdfbytes", mime="application/pdf"
+    )
+    assert doc_id == 55
+    assert upload.called and linkr.called
     await client.close()
 
 
