@@ -7,10 +7,14 @@ requester (own/private skipped), and cursor persistence across ticks.
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from bot.db.repo import Repo
 from bot.glpi.models import Followup, Ticket
+from bot.schedule import WorkSchedule
 from bot.services.sync import SyncService
 
 pytestmark = pytest.mark.asyncio
@@ -18,9 +22,17 @@ pytestmark = pytest.mark.asyncio
 TECH_CHAT = -1000
 REQUESTER_TG = 777
 
+_KGD = ZoneInfo("Europe/Kaliningrad")
+_SCHEDULE = WorkSchedule.from_config("09:00-18:00", "1-5", tz_name="Europe/Kaliningrad")
+# 2026-07-06 is a Monday.
+WORKING = datetime(2026, 7, 6, 12, 0, tzinfo=_KGD)  # Mon 12:00 -> working
+OFFHOURS_NIGHT = datetime(2026, 7, 6, 23, 0, tzinfo=_KGD)  # Mon 23:00 -> off
+OFFHOURS_SAT = datetime(2026, 7, 11, 12, 0, tzinfo=_KGD)  # Sat -> off
+MONDAY_OPEN = datetime(2026, 7, 6, 9, 0, tzinfo=_KGD)  # Mon 09:00 -> working
 
-def _ticket(tid: int, *, status: int = 1, name: str = "t") -> Ticket:
-    return Ticket(id=tid, name=name, content="c", status=status, urgency=3)
+
+def _ticket(tid: int, *, status: int = 1, name: str = "t", urgency: int = 3) -> Ticket:
+    return Ticket(id=tid, name=name, content="c", status=status, urgency=urgency)
 
 
 class FakeBot:
@@ -59,10 +71,23 @@ async def repo(tmp_path):
     await r.close()
 
 
-def _service(bot, client, repo, **kw):
+def _service(bot, client, repo, *, now=WORKING, quiet_min_urgency=4, **kw):
     return SyncService(
-        bot, client, repo, tech_group_chat_id=TECH_CHAT, interval=45, front_base=None, **kw
+        bot,
+        client,
+        repo,
+        tech_group_chat_id=TECH_CHAT,
+        schedule=_SCHEDULE,
+        quiet_min_urgency=quiet_min_urgency,
+        interval=45,
+        front_base=None,
+        now_provider=lambda: now,
+        **kw,
     )
+
+
+def _tech(bot: FakeBot) -> list[str]:
+    return [t for c, t in bot.sent if c == TECH_CHAT]
 
 
 # --- 1. new tickets -> tech group -------------------------------------------
@@ -196,3 +221,37 @@ async def test_deleted_ticket_is_deactivated(repo):
     await svc._poll_tracked_tickets()
     assert bot.sent == []
     assert await repo.active_tracked_tickets() == []
+
+
+# --- quiet hours (off-hours) ------------------------------------------------
+async def test_low_urgency_offhours_deferred_then_flushed_next_workday(repo):
+    bot = FakeBot()
+    low = _ticket(2, status=1, urgency=2)
+    client = FakeClient(recent=[low], tickets={2: low})
+    await repo.set_cursor("last_ticket_id", 1)
+
+    # Saturday: low-urgency ticket is queued, nothing hits the group.
+    await _service(bot, client, repo, now=OFFHOURS_SAT).tick()
+    assert _tech(bot) == []
+    assert len(await repo.list_deferred()) == 1
+    assert await repo.get_cursor("last_ticket_id") == 2  # cursor still advances
+
+    # Monday 09:00: backlog is flushed with a header + the card, queue emptied.
+    bot.sent.clear()
+    client.recent = []  # nothing newer to poll
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
+    msgs = _tech(bot)
+    assert any("нерабочее время поступило" in m for m in msgs)  # batch header
+    assert any("Новая заявка №2" in m for m in msgs)  # the card itself
+    assert await repo.list_deferred() == []
+
+
+async def test_high_urgency_offhours_sent_immediately(repo):
+    bot = FakeBot()
+    high = _ticket(3, status=1, urgency=4)  # >= QUIET_MIN_URGENCY
+    client = FakeClient(recent=[high])
+    await repo.set_cursor("last_ticket_id", 2)
+
+    await _service(bot, client, repo, now=OFFHOURS_NIGHT).tick()
+    assert any("Новая заявка №3" in m for m in _tech(bot))
+    assert await repo.list_deferred() == []

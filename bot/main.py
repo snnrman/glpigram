@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
@@ -28,6 +29,7 @@ from .handlers.new_ticket import build_new_ticket_router
 from .handlers.tech_actions import build_tech_actions_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
+from .schedule import WorkSchedule
 from .services.sync import SyncService
 
 log = logging.getLogger(__name__)
@@ -43,9 +45,16 @@ async def _set_commands(bot: Bot) -> None:
     )
 
 
+def _work_schedule(settings: Settings) -> WorkSchedule:
+    return WorkSchedule.from_config(
+        settings.work_hours, settings.work_days, tz_name=os.environ.get("TZ")
+    )
+
+
 def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Dispatcher:
     dp = Dispatcher()
     category_cache: TTLValue = TTLValue(client.list_categories, settings.category_cache_ttl)
+    schedule = _work_schedule(settings)
 
     # Linking router first and un-gated: unlinked users must reach /start.
     dp.include_router(
@@ -73,9 +82,15 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         tech_group_chat_id=settings.tech_group_chat_id,
         ticket_front_base=settings.glpi_front_base,
         remind_cooldown_hours=settings.remind_cooldown_hours,
+        schedule=schedule,
     )
     business = build_new_ticket_router(
-        client, category_cache, repo, ticket_front_base=settings.glpi_front_base
+        client,
+        category_cache,
+        repo,
+        ticket_front_base=settings.glpi_front_base,
+        schedule=schedule,
+        quiet_min_urgency=settings.quiet_min_urgency,
     )
     for router in (tech, my_tickets, business):
         router.message.middleware(auth)
@@ -106,6 +121,8 @@ async def _run(settings: Settings) -> None:
         client,
         repo,
         tech_group_chat_id=settings.tech_group_chat_id,
+        schedule=_work_schedule(settings),
+        quiet_min_urgency=settings.quiet_min_urgency,
         interval=settings.sync_interval,
         front_base=settings.glpi_front_base,
     )

@@ -43,3 +43,12 @@ CREATE TABLE IF NOT EXISTS ticket_reminders (
     ticket_id      INTEGER PRIMARY KEY,
     last_remind_at INTEGER NOT NULL  -- unix seconds
 );
+
+-- Tech-group notifications deferred during quiet hours (off-hours), flushed at
+-- the start of the next work day. Survives restarts.
+CREATE TABLE IF NOT EXISTS deferred_notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT    NOT NULL,   -- 'new' (new-ticket card) | 'remind'
+    ticket_id  INTEGER NOT NULL,
+    created_at INTEGER NOT NULL    -- unix seconds when queued
+);

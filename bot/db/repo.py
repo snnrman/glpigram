@@ -239,3 +239,23 @@ class Repo:
             (ticket_id, when),
         )
         await self._conn.commit()
+
+    # -- deferred (quiet-hours) notifications -----------------------------
+    async def enqueue_deferred(self, kind: str, ticket_id: int, now: int) -> None:
+        await self._conn.execute(
+            "INSERT INTO deferred_notifications (kind, ticket_id, created_at) VALUES (?, ?, ?)",
+            (kind, ticket_id, now),
+        )
+        await self._conn.commit()
+
+    async def list_deferred(self) -> list[tuple[int, str, int]]:
+        """Queued notifications oldest-first as (id, kind, ticket_id)."""
+        async with self._conn.execute(
+            "SELECT id, kind, ticket_id FROM deferred_notifications ORDER BY id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [(r["id"], r["kind"], r["ticket_id"]) for r in rows]
+
+    async def delete_deferred(self, row_id: int) -> None:
+        await self._conn.execute("DELETE FROM deferred_notifications WHERE id = ?", (row_id,))
+        await self._conn.commit()

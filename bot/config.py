@@ -50,6 +50,14 @@ class Settings(BaseSettings):
         description="Min hours between a requester's reminders about the same ticket.",
     )
 
+    # --- Quiet hours (off-hours) for tech-group notifications ---
+    work_hours: str = Field(default="09:00-18:00", description='Working hours, "HH:MM-HH:MM".')
+    work_days: str = Field(default="1-5", description="Working ISO weekdays, Mon=1..Sun=7.")
+    quiet_min_urgency: int = Field(
+        default=4,
+        description="Off-hours: only tickets with urgency >= this bypass the quiet queue.",
+    )
+
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(
         ...,
