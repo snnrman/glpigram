@@ -301,18 +301,11 @@ MYT_UNASSIGNED = "не назначен"
 BTN_MYT_COMMENT = "💬 Добавить комментарий"
 BTN_MYT_CLOSE = "✅ Закрыть заявку"
 BTN_MYT_BACK = "⬅️ К списку"
-BTN_MYT_CLOSE_YES = "✅ Да, закрыть"
+# On its own row in the close prompt (full width) — length is not a concern.
+BTN_MYT_CLOSE_NO_COMMENT = "Закрыть без комментария"
 
+MYT_CLOSE_PROMPT = "Напишите причину закрытия или закройте без комментария."
 MYT_CLOSE_DONE = "✅ Заявка закрыта."
-MYT_CLOSE_CANCELLED = "Закрытие заявки отменено."
-
-
-def myt_ask_close_reason(ticket_id: int) -> str:
-    return f"Укажите причину закрытия заявки №{ticket_id}:"
-
-
-def myt_close_confirm(ticket_id: int) -> str:
-    return f"Закрыть заявку №{ticket_id}?"
 
 
 def close_followup_body(name: str, reason: str) -> str:
@@ -320,11 +313,14 @@ def close_followup_body(name: str, reason: str) -> str:
     return f"{name} закрыл(а) заявку.\nПричина: {reason}"
 
 
-def notify_closed_by_requester(*, ticket_id: int, reason: str, assignees: list[str]) -> str:
-    text = (
-        f"🔒 <b>Заявка №{ticket_id} закрыта заявителем.</b>\n"
-        f"Причина: {html.escape(clean_glpi_text(reason, limit=500))}"
-    )
+def notify_closed_by_requester(*, ticket_id: int, reason: str | None, assignees: list[str]) -> str:
+    if reason:
+        text = (
+            f"🔒 <b>Заявка №{ticket_id} закрыта заявителем.</b>\n"
+            f"Причина: {html.escape(clean_glpi_text(reason, limit=500))}"
+        )
+    else:
+        text = f"🔒 <b>Заявка №{ticket_id} закрыта заявителем без комментария.</b>"
     if assignees:
         names = ", ".join(html.escape(a) for a in assignees)
         text += f"\nБыл назначен: {names}"

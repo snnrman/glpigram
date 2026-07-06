@@ -110,12 +110,14 @@ deploy/
    Tap -> detail view with the last 5 followups. Button "add comment" -> FSM -> followup
    created on behalf of the requester.
    - **Requester self-close:** detail view shows a "✅ Закрыть заявку" button for the
-     user's own not-yet-closed tickets. FSM: ask for a close reason (text) -> confirm
-     "Закрыть заявку #N?" [Yes/Cancel]. On confirm: add the reason as a followup on
-     behalf of the requester, set the ticket to Closed (6), and notify the tech group
-     ("Заявка #N закрыта заявителем: <reason>", mentioning the assigned technician if
-     any). The sync loop must NOT echo this close back to the requester (advance the
-     ticket's followup cursor past the reason and mark it inactive/closed in SQLite).
+     user's own not-yet-closed tickets. Tapping it prompts "напишите причину или закройте
+     без комментария" with a "Закрыть без комментария" button. No confirmation step:
+     **any text is the reason** — add it as a followup on behalf of the requester, then
+     close; the button closes immediately **without** a followup. Either way set the ticket
+     to Closed (6) and notify the tech group ("закрыта заявителем: <reason>", or "закрыта
+     заявителем без комментария"), mentioning the assigned technician if any. The sync loop
+     must NOT echo this close back to the requester (advance the ticket's followup cursor
+     past the reason and mark it inactive/closed in SQLite).
 4. **Sync loop (GLPI -> TG).** Poll every 45 s:
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
    - status changes on tickets created via the bot -> notify the requester

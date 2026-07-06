@@ -94,7 +94,7 @@ async def notify_followup(
 
 
 async def notify_closed_by_requester(
-    bot: Bot, chat_id: int, ticket_id: int, reason: str, assignees: list[str]
+    bot: Bot, chat_id: int, ticket_id: int, reason: str | None, assignees: list[str]
 ) -> None:
     """Tell the tech group a requester closed their own ticket (feature 3)."""
     await _send(
