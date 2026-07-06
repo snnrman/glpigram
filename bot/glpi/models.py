@@ -33,7 +33,7 @@ class Ticket:
     status: int
     urgency: int
     itilcategories_id: int | None = None
-    date_creation: str | None = None  # GLPI "YYYY-MM-DD HH:MM:SS" (server tz)
+    date_creation: str | None = None  # GLPI "YYYY-MM-DD HH:MM:SS", UTC (see timeutil)
 
     @classmethod
     def from_api(cls, raw: dict) -> Ticket:
