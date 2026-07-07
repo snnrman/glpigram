@@ -55,8 +55,8 @@ LINK_REJECTED = "❌ Запрос на привязку отклонён. Обр
 # Shown to a user who tries to do anything before linking.
 NEED_LINK = "Сначала привяжите аккаунт: отправьте /start."
 
-# Buttons on the tech-group confirmation card.
-BTN_LINK_CONFIRM = "✅ Подтвердить"
+# Buttons on the tech-group confirmation card (2 per row -> keep <=12 chars).
+BTN_LINK_CONFIRM = "✅ Одобрить"
 BTN_LINK_REJECT = "❌ Отклонить"
 
 # Toasts / admin replies.
@@ -218,7 +218,8 @@ _STATUS_LABELS = {
 
 # Tech-group notification buttons (feature 5).
 BTN_TECH_TAKE = "🙋 Взять"
-BTN_TECH_COMMENT = "💬 Комментарий"
+OPEN_IN_GLPI = "Открыть в GLPI ↗"
+BTN_TECH_COMMENT = "💬 Ответить"
 BTN_TECH_CLOSE = "✅ Закрыть"
 
 # --- tech actions (feature 5) ---
@@ -344,18 +345,22 @@ def notify_new_ticket(
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
 ) -> str:
-    author = ""
+    """Tech-group card: number + urgency on top (the tech's priority signal),
+    then bold title + author, then a named link instead of a bare URL. The
+    "New" status is implied by 🆕 and shown only when it is something else
+    (e.g. a deferred card flushed after the ticket was taken overnight)."""
+    head = f"🆕 <b>Заявка №{ticket_id}</b>"
+    if urgency is not None:
+        head += f"\n{urgency_line(urgency)}"
+    if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)
+        head += f"\nСтатус: {ticket_status_label(status)}"
+    body = f"<b>{html.escape(title)}</b>"
     if requester_name:
-        author = f"\nАвтор: {user_mention(requester_name, requester_tg_id)}"
-    urgency_row = f"\n{urgency_line(urgency)}" if urgency is not None else ""
-    return (
-        f"🆕 <b>Новая заявка №{ticket_id}</b>\n"
-        f"{html.escape(title)}"
-        f"{author}\n"
-        f"Статус: {ticket_status_label(status)}"
-        f"{urgency_row}"
-        f"{_url_line(url)}"
-    )
+        body += f"\n👤 {user_mention(requester_name, requester_tg_id)}"
+    parts = [head, body]
+    if url:
+        parts.append(f'<a href="{url}">{OPEN_IN_GLPI}</a>')
+    return "\n\n".join(parts)
 
 
 def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | None) -> str:
