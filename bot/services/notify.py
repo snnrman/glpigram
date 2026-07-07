@@ -26,20 +26,22 @@ _MAX_RETRY_AFTER = 60
 
 
 def tech_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
-    """Action buttons on the tech-group card. Handlers arrive in feature 5."""
+    """Action buttons on the tech-group card.
+
+    Secondary actions share the top row; the primary action ("Take") sits alone
+    on the bottom row, full-width — the biggest, most tappable button.
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text=texts.BTN_TECH_TAKE, callback_data=f"ta:take:{ticket_id}"
-                ),
                 InlineKeyboardButton(
                     text=texts.BTN_TECH_COMMENT, callback_data=f"ta:comment:{ticket_id}"
                 ),
                 InlineKeyboardButton(
                     text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}"
                 ),
-            ]
+            ],
+            [InlineKeyboardButton(text=texts.BTN_TECH_TAKE, callback_data=f"ta:take:{ticket_id}")],
         ]
     )
 
