@@ -71,7 +71,7 @@ async def repo(tmp_path):
     await r.close()
 
 
-def _service(bot, client, repo, *, now=WORKING, quiet_min_urgency=4, **kw):
+def _service(bot, client, repo, *, now=WORKING, quiet_min_urgency=4, front_base=None, **kw):
     return SyncService(
         bot,
         client,
@@ -80,7 +80,7 @@ def _service(bot, client, repo, *, now=WORKING, quiet_min_urgency=4, **kw):
         schedule=_SCHEDULE,
         quiet_min_urgency=quiet_min_urgency,
         interval=45,
-        front_base=None,
+        front_base=front_base,
         now_provider=lambda: now,
         **kw,
     )
@@ -129,7 +129,7 @@ async def test_new_ticket_card_shows_requester_and_tg_mention(repo):
     await svc._poll_new_tickets()
     assert len(bot.sent) == 1
     text = bot.sent[0][1]
-    assert "Автор: " in text
+    assert "👤 " in text
     assert "Иван Петров" in text
     assert "tg://user?id=555" in text
 
@@ -142,7 +142,7 @@ async def test_new_ticket_card_requester_not_linked_no_mention(repo):
 
     await svc._poll_new_tickets()
     text = bot.sent[0][1]
-    assert "Автор: Пётр" in text
+    assert "👤 Пётр" in text
     assert "tg://user" not in text  # unknown requester -> plain name, no mention
 
 
@@ -242,7 +242,7 @@ async def test_low_urgency_offhours_deferred_then_flushed_next_workday(repo):
     await _service(bot, client, repo, now=MONDAY_OPEN).tick()
     msgs = _tech(bot)
     assert any("нерабочее время поступило" in m for m in msgs)  # batch header
-    assert any("Новая заявка №2" in m for m in msgs)  # the card itself
+    assert any("Заявка №2" in m for m in msgs)  # the card itself
     assert await repo.list_deferred() == []
 
 
@@ -253,7 +253,7 @@ async def test_high_urgency_offhours_sent_immediately(repo):
     await repo.set_cursor("last_ticket_id", 2)
 
     await _service(bot, client, repo, now=OFFHOURS_NIGHT).tick()
-    assert any("Новая заявка №3" in m for m in _tech(bot))
+    assert any("Заявка №3" in m for m in _tech(bot))
     assert await repo.list_deferred() == []
 
 
@@ -317,7 +317,7 @@ async def test_deferred_queue_survives_restart(repo):
     bot.sent.clear()
     client.recent = []
     await _service(bot, client, repo, now=MONDAY_OPEN).tick()
-    assert any("Новая заявка №2" in m for m in _tech(bot))
+    assert any("Заявка №2" in m for m in _tech(bot))
     assert await repo.list_deferred() == []
 
     bot.sent.clear()
@@ -374,7 +374,7 @@ async def test_flush_keeps_queue_when_telegram_down(repo):
     await _service(bot, client, repo, now=MONDAY_OPEN).tick()
     msgs = _tech(bot)
     assert any("нерабочее время поступило" in m for m in msgs)
-    assert any("Новая заявка №2" in m for m in msgs)
+    assert any("Заявка №2" in m for m in msgs)
     assert await repo.list_deferred() == []
 
 
@@ -386,3 +386,22 @@ async def test_new_ticket_card_shows_urgency(repo):
     await _service(bot, client, repo)._poll_new_tickets()
     text = bot.sent[0][1]
     assert "🔴 Срочность: высокая" in text
+
+
+async def test_new_ticket_card_layout(repo):
+    """Pin the card format: №+urgency block, bold title + author, named link."""
+    bot = FakeBot()
+    client = FakeClient(
+        recent=[_ticket(33, name="тест", urgency=3)], requesters={33: (42, "Олег Каленский")}
+    )
+    await repo.set_cursor("last_ticket_id", 32)
+
+    await _service(bot, client, repo, front_base="https://glpi.local")._poll_new_tickets()
+    text = bot.sent[0][1]
+    blocks = text.split("\n\n")
+    assert blocks[0] == "🆕 <b>Заявка №33</b>\n🟡 Срочность: средняя"  # no status line for New
+    assert blocks[1].startswith("<b>тест</b>\n👤 ")
+    assert blocks[2] == (
+        '<a href="https://glpi.local/front/ticket.form.php?id=33">Открыть в GLPI ↗</a>'
+    )
+    assert "Статус" not in text
