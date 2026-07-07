@@ -31,6 +31,7 @@ from .handlers.tech_actions import build_tech_actions_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
 from .schedule import WorkSchedule
+from .services.cards import CardService
 from .services.sync import SyncService
 
 log = logging.getLogger(__name__)
@@ -76,7 +77,10 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
     )
     # Order matters: tech_actions and my_tickets must precede new_ticket so their
     # FSM-state and menu-button handlers win over the /new free-text fallback.
-    tech = build_tech_actions_router(client, tech_group_chat_id=settings.tech_group_chat_id)
+    cards = CardService(repo, front_base=settings.glpi_front_base)
+    tech = build_tech_actions_router(
+        client, tech_group_chat_id=settings.tech_group_chat_id, cards=cards
+    )
     my_tickets = build_my_tickets_router(
         client,
         repo,
@@ -84,6 +88,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         ticket_front_base=settings.glpi_front_base,
         remind_cooldown_hours=settings.remind_cooldown_hours,
         schedule=schedule,
+        cards=cards,
     )
     business = build_new_ticket_router(
         client,

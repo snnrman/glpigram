@@ -32,6 +32,7 @@ from ..db.repo import Repo, TrackedTicket
 from ..glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, GlpiClient, GlpiError
 from ..schedule import WorkSchedule
 from . import notify
+from .cards import CardService
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class SyncService:
         front_base: str | None = None,
         recent_page: int = 100,
         now_provider: Callable[[], datetime] | None = None,
+        cards: CardService | None = None,
     ) -> None:
         self._bot = bot
         self._client = client
@@ -63,6 +65,7 @@ class SyncService:
         self._front_base = front_base
         self._recent_page = recent_page
         self._now = now_provider or schedule.now
+        self._cards = cards or CardService(repo, front_base=front_base)
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -127,7 +130,7 @@ class SyncService:
             return True  # nowhere to send is not a delivery failure
         name, tg_id = await self._requester_card_info(ticket.id)
         docs = await self._ticket_documents(ticket.id)
-        sent = await notify.notify_new_ticket(
+        msg = await notify.notify_new_ticket(
             self._bot,
             self._tech_chat,
             ticket,
@@ -136,6 +139,19 @@ class SyncService:
             requester_tg_id=tg_id,
             attachments_count=len(docs),
         )
+        sent = msg is not None
+        if sent:
+            # Register the living card NOW — the moment of the real send — so
+            # deferred (quiet-hours) cards get their message_id in the morning.
+            await self._cards.register(
+                ticket,
+                chat_id=self._tech_chat,
+                message_id=msg.message_id,
+                requester_name=name,
+                requester_tg_id=tg_id,
+                attachments_count=len(docs),
+                now=int(time.time()),
+            )
         if sent and docs:
             # Images ride along under the card; everything else (pdf, oversized)
             # is covered by the 📎 line + the GLPI link. Sent in the same pass as
@@ -229,6 +245,20 @@ class SyncService:
             )
         return await self._send_new_card(ticket)
 
+    async def _author_name(self, user_id: int, cache: dict) -> str | None:
+        if not user_id:
+            return None
+        if user_id in cache:
+            return cache[user_id]
+        name = None
+        try:
+            user = await self._client.get_user(user_id)
+            name = user.display_name if user else None
+        except GlpiError:
+            pass
+        cache[user_id] = name
+        return name
+
     async def _requester_card_info(self, ticket_id: int) -> tuple[str | None, int | None]:
         """Requester name for the card, plus their Telegram id if linked in the bot.
 
@@ -267,6 +297,15 @@ class SyncService:
             await notify.notify_status_change(
                 self._bot, row.requester_tg_id, ticket, self._ticket_url(ticket.id)
             )
+            # Reflect it on the living card too; skip when a button action
+            # already recorded this exact state (no duplicate history line).
+            await self._cards.record_event(
+                self._bot,
+                row.ticket_id,
+                texts.hist_status(ticket.status),
+                status=ticket.status,
+                skip_if_status_unchanged=True,
+            )
             still_active = ticket.status != TICKET_STATUS_CLOSED
             await self._repo.set_ticket_status(
                 row.ticket_id, status=ticket.status, active=still_active
@@ -288,9 +327,18 @@ class SyncService:
             ),
             key=lambda f: f.id,
         )
+        author_cache: dict[int, str | None] = {}
         for followup in fresh:
             await notify.notify_followup(
                 self._bot, row.requester_tg_id, ticket, followup, self._ticket_url(ticket.id)
+            )
+            author = await self._author_name(followup.users_id, author_cache)
+            await self._cards.record_event(
+                self._bot,
+                row.ticket_id,
+                texts.hist_comment(author),
+                followup_id=followup.id,
+                reply=texts.reply_new_comment(row.ticket_id),
             )
         # Advance past every followup seen (own/private included) to avoid rework.
         max_id = max(f.id for f in followups)

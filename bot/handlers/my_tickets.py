@@ -38,6 +38,7 @@ from ..glpi.client import (
 from ..glpi.models import TicketSummary
 from ..schedule import WorkSchedule
 from ..services import attachments, notify
+from ..services.cards import CardService
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ def build_my_tickets_router(
     ticket_front_base: str | None = None,
     remind_cooldown_hours: int = 4,
     schedule: WorkSchedule | None = None,
+    cards: CardService | None = None,
 ) -> Router:
     router = Router(name="my_tickets")
 
@@ -227,10 +229,12 @@ def build_my_tickets_router(
         await cb.answer()
 
     @router.message(MyTickets.commenting, F.text)
-    async def on_comment_text(message: Message, state: FSMContext, link: LinkedUser) -> None:
+    async def on_comment_text(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
         data = await state.get_data()
         content = f"{link.display_name}:\n{message.text.strip()}"
-        await _finish_comment(message, state, data["ticket_id"], content=content)
+        await _finish_comment(message, state, bot, link, data["ticket_id"], content=content)
 
     @router.message(MyTickets.commenting, F.photo | F.document)
     async def on_comment_file(
@@ -255,10 +259,18 @@ def build_my_tickets_router(
             log.exception("my_tickets_attach_failed id=%s error=%s", ticket_id, exc)
             await message.answer(texts.GLPI_ERROR)
             return
-        await _finish_comment(message, state, ticket_id, content=f"{link.display_name}:\n{caption}")
+        await _finish_comment(
+            message, state, bot, link, ticket_id, content=f"{link.display_name}:\n{caption}"
+        )
 
     async def _finish_comment(
-        message: Message, state: FSMContext, ticket_id: int, *, content: str
+        message: Message,
+        state: FSMContext,
+        bot: Bot,
+        link: LinkedUser,
+        ticket_id: int,
+        *,
+        content: str,
     ) -> None:
         try:
             followup_id = await client.add_followup(ticket_id, content)
@@ -277,6 +289,14 @@ def build_my_tickets_router(
         except Exception:  # noqa: BLE001 - untracked ticket / DB hiccup is non-fatal
             log.exception("my_tickets_cursor_bump_failed id=%s", ticket_id)
         await message.answer(texts.MYT_COMMENT_DONE)
+        if cards is not None:
+            await cards.record_event(
+                bot,
+                ticket_id,
+                texts.hist_comment(link.display_name),
+                followup_id=followup_id,
+                reply=texts.reply_new_comment(ticket_id),
+            )
         await _resend_detail(message, ticket_id)
 
     async def _resend_detail(message: Message, ticket_id: int) -> None:
@@ -331,7 +351,17 @@ def build_my_tickets_router(
             await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
         except Exception:  # noqa: BLE001 - untracked ticket / DB hiccup is non-fatal
             log.exception("my_tickets_close_cursor_bump_failed id=%s", ticket_id)
-        if tech_group_chat_id is not None:
+        handled = cards is not None and await cards.record_event(
+            bot,
+            ticket_id,
+            texts.hist_closed_by_requester(),
+            status=TICKET_STATUS_CLOSED,
+            followup_id=followup_id,
+            reply=texts.notify_closed_by_requester(
+                ticket_id=ticket_id, reason=reason, assignees=assignees
+            ),
+        )
+        if not handled and tech_group_chat_id is not None:
             await notify.notify_closed_by_requester(
                 bot, tech_group_chat_id, ticket_id, reason, assignees
             )

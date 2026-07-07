@@ -52,3 +52,24 @@ CREATE TABLE IF NOT EXISTS deferred_notifications (
     ticket_id  INTEGER NOT NULL,
     created_at INTEGER NOT NULL    -- unix seconds when queued
 );
+
+-- The single evolving ("living") card per ticket in the tech group: every
+-- event edits this message instead of spawning new ones. Fields are the raw
+-- ingredients for a full re-render; history is a JSON array of rendered lines
+-- (capped at 10 by the service). last_followup_id dedups comment events that
+-- are recorded both directly (bot actions) and via the sync loop.
+CREATE TABLE IF NOT EXISTS ticket_cards (
+    ticket_id         INTEGER PRIMARY KEY,
+    chat_id           INTEGER NOT NULL,
+    message_id        INTEGER NOT NULL,
+    title             TEXT    NOT NULL DEFAULT '',
+    urgency           INTEGER NOT NULL DEFAULT 0,
+    requester_name    TEXT    NOT NULL DEFAULT '',
+    requester_tg_id   INTEGER,
+    attachments_count INTEGER NOT NULL DEFAULT 0,
+    status            INTEGER NOT NULL DEFAULT 1,
+    taken_by          TEXT    NOT NULL DEFAULT '',
+    history           TEXT    NOT NULL DEFAULT '[]',
+    last_followup_id  INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL DEFAULT 0
+);

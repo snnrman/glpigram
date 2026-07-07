@@ -355,6 +355,7 @@ def notify_new_ticket(
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
     attachments_count: int = 0,
+    history: list[str] | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title + author, then a named link instead of a bare URL. The
@@ -373,7 +374,10 @@ def notify_new_ticket(
         body.append(attachments_note(attachments_count))
     if url:
         body.append(f'🔗 <a href="{url}">{OPEN_IN_GLPI}</a>')
-    return head + "\n\n" + "\n".join(body)
+    text = head + "\n\n" + "\n".join(body)
+    if history:
+        text += "\n\n" + HISTORY_HEADER + "\n" + "\n".join(history)
+    return text
 
 
 def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | None) -> str:
@@ -487,3 +491,35 @@ def followup_line(author: str | None, body: str) -> str:
     if author:
         return f"• <b>{html.escape(author)}:</b> {snippet}"
     return f"• {snippet}"
+
+
+# --- living card history (single evolving card in the tech group) ---
+HISTORY_HEADER = "── History ──"
+
+
+def hist_taken(name: str) -> str:
+    return f"🙋 Taken by: {html.escape(name)}"
+
+
+def hist_comment(author: str | None) -> str:
+    return f"💬 Comment ({html.escape(author)})" if author else "💬 Comment"
+
+
+def hist_status(status: int) -> str:
+    return f"🔄 {ticket_status_label(status)}"
+
+
+def hist_closed(name: str) -> str:
+    return f"✅ Closed by: {html.escape(name)}"
+
+
+def hist_closed_by_requester() -> str:
+    return "🔒 Closed by the requester"
+
+
+def reply_new_comment(ticket_id: int) -> str:
+    return f"💬 New comment on ticket #{ticket_id}"
+
+
+def reply_taken(ticket_id: int, name: str) -> str:
+    return f"🙋 Ticket #{ticket_id} taken by {html.escape(name)}"

@@ -68,6 +68,41 @@ class TrackedTicket:
         )
 
 
+@dataclass(slots=True)
+class TicketCard:
+    """The living tech-group card of one ticket (one ``ticket_cards`` row)."""
+
+    ticket_id: int
+    chat_id: int
+    message_id: int
+    title: str
+    urgency: int
+    requester_name: str
+    requester_tg_id: int | None
+    attachments_count: int
+    status: int
+    taken_by: str
+    history: str  # JSON array of rendered lines
+    last_followup_id: int
+
+    @classmethod
+    def _from_row(cls, row: aiosqlite.Row) -> TicketCard:
+        return cls(
+            ticket_id=row["ticket_id"],
+            chat_id=row["chat_id"],
+            message_id=row["message_id"],
+            title=row["title"],
+            urgency=row["urgency"],
+            requester_name=row["requester_name"],
+            requester_tg_id=row["requester_tg_id"],
+            attachments_count=row["attachments_count"],
+            status=row["status"],
+            taken_by=row["taken_by"],
+            history=row["history"],
+            last_followup_id=row["last_followup_id"],
+        )
+
+
 class Repo:
     """Owns a single aiosqlite connection; all DB access goes through here.
 
@@ -283,3 +318,69 @@ class Repo:
     async def delete_deferred(self, row_id: int) -> None:
         async with self._tx() as db:
             await db.execute("DELETE FROM deferred_notifications WHERE id = ?", (row_id,))
+
+    # -- living cards (single evolving tech-group card per ticket) ---------
+    async def save_card(
+        self,
+        *,
+        ticket_id: int,
+        chat_id: int,
+        message_id: int,
+        title: str,
+        urgency: int,
+        requester_name: str,
+        requester_tg_id: int | None,
+        attachments_count: int,
+        status: int,
+        now: int,
+    ) -> None:
+        """Remember the group card at the moment it was actually sent."""
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO ticket_cards
+                    (ticket_id, chat_id, message_id, title, urgency, requester_name,
+                     requester_tg_id, attachments_count, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticket_id) DO UPDATE SET
+                    chat_id = excluded.chat_id, message_id = excluded.message_id
+                """,
+                (
+                    ticket_id,
+                    chat_id,
+                    message_id,
+                    title,
+                    urgency,
+                    requester_name,
+                    requester_tg_id,
+                    attachments_count,
+                    status,
+                    now,
+                ),
+            )
+
+    async def get_card(self, ticket_id: int) -> TicketCard | None:
+        async with self._conn.execute(
+            "SELECT * FROM ticket_cards WHERE ticket_id = ?", (ticket_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return TicketCard._from_row(row) if row else None
+
+    async def update_card(
+        self,
+        ticket_id: int,
+        *,
+        status: int,
+        taken_by: str,
+        history: str,
+        last_followup_id: int,
+    ) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                """
+                UPDATE ticket_cards
+                SET status = ?, taken_by = ?, history = ?, last_followup_id = ?
+                WHERE ticket_id = ?
+                """,
+                (status, taken_by, history, last_followup_id, ticket_id),
+            )
