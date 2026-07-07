@@ -385,23 +385,26 @@ async def test_new_ticket_card_shows_urgency(repo):
 
     await _service(bot, client, repo)._poll_new_tickets()
     text = bot.sent[0][1]
-    assert "🔴 Срочность: высокая" in text
+    assert "🔴 <b>Высокая срочность</b>" in text
 
 
 async def test_new_ticket_card_layout(repo):
-    """Pin the card format: №+urgency block, bold title + author, named link."""
+    """Pin the card format: №+urgency head, ONE blank line, compact 📝/👤/🔗 body."""
     bot = FakeBot()
     client = FakeClient(
-        recent=[_ticket(33, name="тест", urgency=3)], requesters={33: (42, "Олег Каленский")}
+        recent=[_ticket(36, name="тест", urgency=3)], requesters={36: (42, "Олег Каленский")}
     )
-    await repo.set_cursor("last_ticket_id", 32)
+    await repo.set_cursor("last_ticket_id", 35)
 
     await _service(bot, client, repo, front_base="https://glpi.local")._poll_new_tickets()
     text = bot.sent[0][1]
     blocks = text.split("\n\n")
-    assert blocks[0] == "🆕 <b>Заявка №33</b>\n🟡 Срочность: средняя"  # no status line for New
-    assert blocks[1].startswith("<b>тест</b>\n👤 ")
-    assert blocks[2] == (
-        '<a href="https://glpi.local/front/ticket.form.php?id=33">Открыть в GLPI ↗</a>'
+    assert len(blocks) == 2  # exactly one blank line in the whole card
+    assert blocks[0] == "🆕 <b>Заявка №36</b>\n🟡 <b>Средняя срочность</b>"
+    body = blocks[1].split("\n")
+    assert body[0] == "📝 тест"  # title NOT bold
+    assert body[1].startswith("👤 ")
+    assert body[2] == (
+        '🔗 <a href="https://glpi.local/front/ticket.form.php?id=36">Открыть в GLPI</a>'
     )
-    assert "Статус" not in text
+    assert "Статус" not in text  # implied by 🆕 for a New ticket

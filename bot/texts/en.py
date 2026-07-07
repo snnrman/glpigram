@@ -149,12 +149,21 @@ _URGENCY_SCALE = {
 
 
 def urgency_line(urgency: int) -> str:
-    """Card line like "🔴 Urgency: high"; tolerant of unknown values."""
+    """Detail-view line like "🔴 Urgency: high"; tolerant of unknown values."""
     scale = _URGENCY_SCALE.get(urgency)
     if scale is None:
         return f"Urgency: {urgency}"
     emoji, name = scale
     return f"{emoji} Urgency: {name}"
+
+
+def urgency_card_line(urgency: int) -> str:
+    """Tech-card headline like "🟡 <b>Medium urgency</b>"."""
+    scale = _URGENCY_SCALE.get(urgency)
+    if scale is None:
+        return f"Urgency: {urgency}"
+    emoji, name = scale
+    return f"{emoji} <b>{name.capitalize()} urgency</b>"
 
 
 # --- buttons ---
@@ -214,8 +223,8 @@ _STATUS_LABELS = {
 }
 
 # Tech-group notification buttons (feature 5).
-BTN_TECH_TAKE = "🙋 Take"
-OPEN_IN_GLPI = "Open in GLPI ↗"
+BTN_TECH_TAKE = "🙋 Take the ticket"  # full-width row -> length is fine
+OPEN_IN_GLPI = "Open in GLPI"
 BTN_TECH_COMMENT = "💬 Reply"
 BTN_TECH_CLOSE = "✅ Close"
 
@@ -339,16 +348,16 @@ def notify_new_ticket(
     (e.g. a deferred card flushed after the ticket was taken overnight)."""
     head = f"🆕 <b>Ticket #{ticket_id}</b>"
     if urgency is not None:
-        head += f"\n{urgency_line(urgency)}"
+        head += f"\n{urgency_card_line(urgency)}"
     if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)
         head += f"\nStatus: {ticket_status_label(status)}"
-    body = f"<b>{html.escape(title)}</b>"
+    # One compact body block: emoji markers for eye-scanning, no extra air.
+    body = [f"📝 {html.escape(title)}"]
     if requester_name:
-        body += f"\n👤 {user_mention(requester_name, requester_tg_id)}"
-    parts = [head, body]
+        body.append(f"👤 {user_mention(requester_name, requester_tg_id)}")
     if url:
-        parts.append(f'<a href="{url}">{OPEN_IN_GLPI}</a>')
-    return "\n\n".join(parts)
+        body.append(f'🔗 <a href="{url}">{OPEN_IN_GLPI}</a>')
+    return head + "\n\n" + "\n".join(body)
 
 
 def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | None) -> str:

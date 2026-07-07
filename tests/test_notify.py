@@ -69,3 +69,15 @@ async def test_safe_edit_inaccessible_message_returns_false():
     assert await notify.safe_edit(cb, "x") is False
     cb_none = SimpleNamespace(message=None)
     assert await notify.safe_edit(cb_none, "x") is False
+
+
+def test_tech_keyboard_take_is_full_width_bottom_row():
+    from bot import texts
+
+    kb = notify.tech_ticket_keyboard(7)
+    rows = [[(b.text, b.callback_data) for b in row] for row in kb.inline_keyboard]
+    assert rows[0] == [
+        (texts.BTN_TECH_COMMENT, "ta:comment:7"),
+        (texts.BTN_TECH_CLOSE, "ta:close:7"),
+    ]
+    assert rows[1] == [(texts.BTN_TECH_TAKE, "ta:take:7")]  # primary, alone = full width
