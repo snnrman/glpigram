@@ -530,7 +530,3 @@ def hist_closed_by_requester() -> str:
 
 def reply_new_comment(ticket_id: int) -> str:
     return f"💬 Новый комментарий по заявке №{ticket_id}"
-
-
-def reply_taken(ticket_id: int, name: str) -> str:
-    return f"🙋 Заявку №{ticket_id} взял {html.escape(name)}"

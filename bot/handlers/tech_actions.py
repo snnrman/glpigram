@@ -114,13 +114,15 @@ def build_tech_actions_router(
             log.exception("tech_take_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
+        # History-only event: taking a ticket is visible in the card edit and
+        # needs no group ping (reply pings are reserved for requester comments
+        # and closures — events that demand the team's attention).
         handled = cards is not None and await cards.record_event(
             bot,
             ticket_id,
             texts.hist_taken(link.display_name),
             status=TICKET_STATUS_PROCESSING_ASSIGNED,
             taken_by=link.display_name,
-            reply=texts.reply_taken(ticket_id, link.display_name),
         )
         if not handled:
             # No living card for this ticket (pre-feature) -> legacy in-place edit.
@@ -221,12 +223,12 @@ def build_tech_actions_router(
         await state.clear()
         await message.answer(texts.TECH_COMMENT_DONE)
         if cards is not None:
+            # The team's own comment: history line only, no self-ping.
             await cards.record_event(
                 bot,
                 ticket_id,
                 texts.hist_comment(link.display_name),
                 followup_id=followup_id,
-                reply=texts.reply_new_comment(ticket_id),
             )
 
     @router.message(TechAction.closing, F.text)

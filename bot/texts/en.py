@@ -519,7 +519,3 @@ def hist_closed_by_requester() -> str:
 
 def reply_new_comment(ticket_id: int) -> str:
     return f"💬 New comment on ticket #{ticket_id}"
-
-
-def reply_taken(ticket_id: int, name: str) -> str:
-    return f"🙋 Ticket #{ticket_id} taken by {html.escape(name)}"
