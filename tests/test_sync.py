@@ -376,3 +376,13 @@ async def test_flush_keeps_queue_when_telegram_down(repo):
     assert any("нерабочее время поступило" in m for m in msgs)
     assert any("Новая заявка №2" in m for m in msgs)
     assert await repo.list_deferred() == []
+
+
+async def test_new_ticket_card_shows_urgency(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(2, urgency=4)])
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo)._poll_new_tickets()
+    text = bot.sent[0][1]
+    assert "🔴 Срочность: высокая" in text

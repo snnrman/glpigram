@@ -138,6 +138,7 @@ def build_my_tickets_router(
             assignee=", ".join(assignees) if assignees else None,
             followups=lines,
             url=_ticket_url(ticket_id),
+            urgency=ticket.urgency or None,  # 0 = not provided by GLPI
         )
         # Remind only while New (no technician has taken it yet).
         return text, ticket.status in OPEN_TICKET_STATUSES, ticket.status == TICKET_STATUS_NEW

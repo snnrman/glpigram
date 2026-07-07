@@ -118,6 +118,7 @@ async def notify_new_ticket(
             title=ticket.name,
             status=ticket.status,
             url=url,
+            urgency=ticket.urgency or None,  # 0 = not provided by GLPI
             requester_name=requester_name,
             requester_tg_id=requester_tg_id,
         ),

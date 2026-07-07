@@ -355,3 +355,21 @@ async def test_detail_view_contains_ticket_url(repo):
     await dp.feed_update(bot, _cb_update(bot, 1, f"mt:open:{TICKET}"))
     texts_sent = [t for _, t in bot.sent if t]
     assert any(f"https://glpi.local/front/ticket.form.php?id={TICKET}" in t for t in texts_sent)
+
+
+async def test_detail_view_shows_urgency(repo):
+    client = AsyncMock()
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="Печать", content="c", status=1, urgency=3
+    )
+    client.get_ticket_assignees.return_value = []
+    client.list_followups.return_value = []
+    router = build_my_tickets_router(client, repo, tech_group_chat_id=TECH_CHAT)
+    router.callback_query.middleware(_inject_link)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:open:{TICKET}"))
+    texts_sent = [t for _, t in bot.sent if t]
+    assert any("🟡 Срочность: средняя" in t for t in texts_sent)

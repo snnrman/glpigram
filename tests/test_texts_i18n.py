@@ -68,3 +68,14 @@ def test_custom_welcome_verbatim_with_html_and_newlines(monkeypatch):
 
     monkeypatch.setenv("WELCOME_MESSAGE", "Привет, <b>ACME</b>!\\nWe help.")
     assert texts.custom_welcome() == "Привет, <b>ACME</b>!\nWe help."
+
+
+def test_urgency_line_full_scale_and_unknown():
+    assert ru.urgency_line(4) == "🔴 Срочность: высокая"
+    assert ru.urgency_line(3) == "🟡 Срочность: средняя"
+    assert ru.urgency_line(2) == "🟢 Срочность: низкая"
+    assert ru.urgency_line(1) == "⚪ Срочность: очень низкая"
+    assert ru.urgency_line(5) == "🚨 Срочность: очень высокая"
+    assert ru.urgency_line(9) == "Срочность: 9"  # unknown -> no crash
+    assert en.urgency_line(4) == "🔴 Urgency: high"
+    assert en.urgency_line(9) == "Urgency: 9"

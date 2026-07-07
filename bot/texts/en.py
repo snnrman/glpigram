@@ -138,6 +138,25 @@ URGENCY_LOW_LABEL = "🟢 Low"
 URGENCY_MEDIUM_LABEL = "🟡 Medium"
 URGENCY_HIGH_LABEL = "🔴 High"
 
+# Full GLPI urgency scale (1..5) for cards; the /new dialog exposes only three.
+_URGENCY_SCALE = {
+    1: ("⚪", "very low"),
+    2: ("🟢", "low"),
+    3: ("🟡", "medium"),
+    4: ("🔴", "high"),
+    5: ("🚨", "very high"),
+}
+
+
+def urgency_line(urgency: int) -> str:
+    """Card line like "🔴 Urgency: high"; tolerant of unknown values."""
+    scale = _URGENCY_SCALE.get(urgency)
+    if scale is None:
+        return f"Urgency: {urgency}"
+    emoji, name = scale
+    return f"{emoji} Urgency: {name}"
+
+
 # --- buttons ---
 BTN_CONFIRM = "✅ Submit"
 BTN_CANCEL = "❌ Cancel"
@@ -309,17 +328,20 @@ def notify_new_ticket(
     title: str,
     status: int,
     url: str | None,
+    urgency: int | None = None,
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
 ) -> str:
     author = ""
     if requester_name:
         author = f"\nRequester: {user_mention(requester_name, requester_tg_id)}"
+    urgency_row = f"\n{urgency_line(urgency)}" if urgency is not None else ""
     return (
         f"🆕 <b>New ticket #{ticket_id}</b>\n"
         f"{html.escape(title)}"
         f"{author}\n"
         f"Status: {ticket_status_label(status)}"
+        f"{urgency_row}"
         f"{_url_line(url)}"
     )
 
@@ -415,12 +437,15 @@ def ticket_detail(
     assignee: str | None,
     followups: list[str],
     url: str | None = None,
+    urgency: int | None = None,
 ) -> str:
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
+    urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
     return (
         f"<b>Ticket #{ticket_id}</b>\n"
         f"{html.escape(title)}\n\n"
         f"Status: {ticket_status_label(status)}\n"
+        f"{urgency_row}"
         f"{_assignee_line(assignee)}\n\n"
         f"<b>Recent comments:</b>\n{body}"
         f"{_url_line(url)}"
