@@ -705,3 +705,44 @@ async def test_plain_400_is_not_mistaken_for_session_error(mock):
         await client.create_ticket(name="t", content="c", urgency=3)
     assert route.call_count == 1  # no bogus renewal retry
     await client.close()
+
+
+# --- ticket documents (attachments on the tech card) --------------------------
+async def test_list_ticket_documents_resolves_metadata(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/7/Document_Item").mock(
+        return_value=httpx.Response(
+            200, json=[{"documents_id": 55}, {"documents_id": 56}, {"documents_id": 0}]
+        )
+    )
+    mock.get(f"{BASE}/Document/55").mock(
+        return_value=httpx.Response(
+            200, json={"id": 55, "filename": "a.jpg", "mime": "image/jpeg", "filesize": 1234}
+        )
+    )
+    mock.get(f"{BASE}/Document/56").mock(
+        return_value=httpx.Response(404, json=["ERROR", "gone"])  # deleted meanwhile
+    )
+    client = make_client()
+    docs = await client.list_ticket_documents(7)
+    assert len(docs) == 1
+    assert (docs[0].id, docs[0].filename, docs[0].is_image, docs[0].filesize) == (
+        55,
+        "a.jpg",
+        True,
+        1234,
+    )
+    await client.close()
+
+
+async def test_download_document_uses_octet_stream_accept(mock):
+    await _init_route(mock)
+    route = mock.get(f"{BASE}/Document/55").mock(
+        return_value=httpx.Response(200, content=b"\xff\xd8binary")
+    )
+    client = make_client()
+    data = await client.download_document(55)
+    assert data == b"\xff\xd8binary"
+    # the raw file comes back only with this Accept header (JSON meta otherwise)
+    assert route.calls.last.request.headers["Accept"] == "application/octet-stream"
+    await client.close()

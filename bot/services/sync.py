@@ -119,18 +119,55 @@ class SyncService:
                 log.info("sync_deferred_new id=%s urgency=%s", ticket.id, ticket.urgency)
         await self._repo.set_cursor(_CURSOR_LAST_TICKET, max(t.id for t in fresh))
 
+    # Telegram's sendPhoto upload cap; larger images stay behind the GLPI link.
+    _MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
     async def _send_new_card(self, ticket) -> bool:
         if self._tech_chat is None:
             return True  # nowhere to send is not a delivery failure
         name, tg_id = await self._requester_card_info(ticket.id)
-        return await notify.notify_new_ticket(
+        docs = await self._ticket_documents(ticket.id)
+        sent = await notify.notify_new_ticket(
             self._bot,
             self._tech_chat,
             ticket,
             self._ticket_url(ticket.id),
             requester_name=name,
             requester_tg_id=tg_id,
+            attachments_count=len(docs),
         )
+        if sent and docs:
+            # Images ride along under the card; everything else (pdf, oversized)
+            # is covered by the 📎 line + the GLPI link. Sent in the same pass as
+            # the card, so the existing cursor/queue dedup applies — no repeats.
+            await self._send_card_images(ticket.id, docs)
+        return sent
+
+    async def _ticket_documents(self, ticket_id: int) -> list:
+        """Attached documents, best-effort: a lookup failure must not cost the card."""
+        try:
+            return await self._client.list_ticket_documents(ticket_id)
+        except GlpiError as exc:
+            log.warning("sync_documents_lookup_failed id=%s error=%s", ticket_id, exc)
+            return []
+
+    async def _send_card_images(self, ticket_id: int, docs: list) -> None:
+        photos: list[tuple[str, bytes]] = []
+        for doc in docs:
+            if not doc.is_image or doc.filesize > self._MAX_IMAGE_BYTES:
+                continue
+            if len(photos) >= 10:  # Telegram media-group limit
+                break
+            try:
+                content = await self._client.download_document(doc.id)
+            except GlpiError as exc:
+                log.warning("sync_document_download_failed doc=%s error=%s", doc.id, exc)
+                continue
+            if len(content) > self._MAX_IMAGE_BYTES:  # filesize meta was missing/wrong
+                continue
+            photos.append((doc.filename, content))
+        if photos:
+            await notify.send_photos(self._bot, self._tech_chat, photos)
 
     # -- deferred (quiet-hours) flush -------------------------------------
     async def _flush_deferred_if_working(self) -> None:

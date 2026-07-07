@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from bot.db.repo import Repo
-from bot.glpi.models import Followup, Ticket
+from bot.glpi.models import Document, Followup, Ticket
 from bot.schedule import WorkSchedule
 from bot.services.sync import SyncService
 
@@ -38,17 +38,28 @@ def _ticket(tid: int, *, status: int = 1, name: str = "t", urgency: int = 3) -> 
 class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
+        self.photos: list[tuple[int, list[str]]] = []  # (chat_id, [filenames])
 
     async def send_message(self, chat_id, text, **kwargs):
         self.sent.append((chat_id, text))
 
+    async def send_photo(self, chat_id, photo, **kwargs):
+        self.photos.append((chat_id, [photo.filename]))
+
+    async def send_media_group(self, chat_id, media, **kwargs):
+        self.photos.append((chat_id, [m.media.filename for m in media]))
+
 
 class FakeClient:
-    def __init__(self, *, recent=None, tickets=None, followups=None, requesters=None) -> None:
+    def __init__(
+        self, *, recent=None, tickets=None, followups=None, requesters=None, documents=None
+    ) -> None:
         self.recent = recent or []
         self.tickets = tickets or {}
         self.followups = followups or {}
         self.requesters = requesters or {}  # ticket_id -> (glpi_id, name)
+        self.documents = documents or {}  # ticket_id -> list[Document]
+        self.blobs = {}  # document_id -> bytes
 
     async def list_recent_tickets(self, *, limit=100):
         return list(self.recent)
@@ -61,6 +72,12 @@ class FakeClient:
 
     async def get_ticket_requester(self, ticket_id):
         return self.requesters.get(ticket_id)
+
+    async def list_ticket_documents(self, ticket_id):
+        return list(self.documents.get(ticket_id, []))
+
+    async def download_document(self, document_id):
+        return self.blobs.get(document_id, b"IMAGEBYTES")
 
 
 @pytest.fixture
@@ -408,3 +425,73 @@ async def test_new_ticket_card_layout(repo):
         '🔗 <a href="https://glpi.local/front/ticket.form.php?id=36">Открыть в GLPI</a>'
     )
     assert "Статус" not in text  # implied by 🆕 for a New ticket
+
+
+# --- attachments on the new-ticket card ---------------------------------------
+def _doc(doc_id, filename, mime, size=1000):
+    return Document(id=doc_id, filename=filename, mime=mime, filesize=size)
+
+
+async def test_card_sends_images_and_counts_all_attachments(repo):
+    bot = FakeBot()
+    docs = [
+        _doc(1, "a.jpg", "image/jpeg"),
+        _doc(2, "b.png", "image/png"),
+        _doc(3, "spec.pdf", "application/pdf"),  # not an image -> counted only
+    ]
+    client = FakeClient(recent=[_ticket(2)], documents={2: docs})
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo)._poll_new_tickets()
+    assert "📎 Вложений: 3" in bot.sent[0][1]  # every attachment counted in-card
+    assert bot.photos == [(TECH_CHAT, ["a.jpg", "b.png"])]  # images as a media group
+
+
+async def test_card_without_attachments_unchanged(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(2)])
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo)._poll_new_tickets()
+    assert "📎" not in bot.sent[0][1]
+    assert bot.photos == []
+
+
+async def test_oversized_image_stays_behind_the_link(repo):
+    bot = FakeBot()
+    docs = [_doc(1, "huge.jpg", "image/jpeg", size=25 * 1024 * 1024)]
+    client = FakeClient(recent=[_ticket(2)], documents={2: docs})
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo)._poll_new_tickets()
+    assert "📎 Вложений: 1" in bot.sent[0][1]  # still counted
+    assert bot.photos == []  # too big for sendPhoto -> not uploaded
+
+
+async def test_document_lookup_failure_does_not_cost_the_card(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(2)])
+
+    async def boom(ticket_id):
+        from bot.glpi.client import GlpiHTTPError
+
+        raise GlpiHTTPError("GLPI down")
+
+    client.list_ticket_documents = boom
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo)._poll_new_tickets()
+    assert any("Заявка №2" in m for m in _tech(bot))  # card still delivered
+    assert await repo.get_cursor("last_ticket_id") == 2
+
+
+async def test_repeated_tick_sends_no_duplicate_images(repo):
+    bot = FakeBot()
+    docs = [_doc(1, "a.jpg", "image/jpeg")]
+    client = FakeClient(recent=[_ticket(2)], documents={2: docs})
+    await repo.set_cursor("last_ticket_id", 1)
+    svc = _service(bot, client, repo)
+
+    await svc.tick()
+    await svc.tick()  # same GLPI page again
+    assert len(bot.photos) == 1  # images ride the card; cursor dedup covers both
