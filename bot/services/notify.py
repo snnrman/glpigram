@@ -53,16 +53,16 @@ def tech_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> bool:
-    """Best-effort send. Honours one Telegram flood-wait; reports success.
+async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> Message | None:
+    """Best-effort send. Honours one Telegram flood-wait.
 
-    Callers that must not lose messages (the quiet-hours flush) keep the item
-    queued when this returns False.
+    Returns the sent Message (truthy) so callers can remember its id for the
+    living card; None (falsy) on failure — callers that must not lose messages
+    (the quiet-hours flush) keep the item queued then.
     """
     for attempt in (1, 2):
         try:
-            await bot.send_message(chat_id, text, **kwargs)
-            return True
+            return await bot.send_message(chat_id, text, **kwargs)
         except TelegramRetryAfter as exc:
             # Flood limit. Wait it out once if reasonable, otherwise report
             # failure so the caller can retry later instead of dropping data.
@@ -71,7 +71,7 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> bool:
                 await asyncio.sleep(exc.retry_after)
                 continue
             log.warning("notify_flood_giveup chat=%s seconds=%s", chat_id, exc.retry_after)
-            return False
+            return None
         except TelegramMigrateToChat as exc:
             # Group upgraded to a supergroup: the configured id is dead. Loud —
             # every group notification is lost until the operator fixes .env.
@@ -80,14 +80,14 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> bool:
                 chat_id,
                 exc.migrate_to_chat_id,
             )
-            return False
+            return None
         except Exception as exc:  # noqa: BLE001 - aiogram raises many send errors
             log.warning("notify_send_failed chat=%s error=%s", chat_id, exc)
-            return False
-    return False  # pragma: no cover - loop always returns
+            return None
+    return None  # pragma: no cover - loop always returns
 
 
-async def send_text(bot: Bot, chat_id: int, text: str) -> bool:
+async def send_text(bot: Bot, chat_id: int, text: str) -> Message | None:
     """Best-effort plain message (e.g. the deferred-batch header)."""
     return await _send(bot, chat_id, text)
 
@@ -119,7 +119,9 @@ async def notify_new_ticket(
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
     attachments_count: int = 0,
-) -> bool:
+    history: list[str] | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message | None:
     return await _send(
         bot,
         chat_id,
@@ -132,8 +134,9 @@ async def notify_new_ticket(
             requester_name=requester_name,
             requester_tg_id=requester_tg_id,
             attachments_count=attachments_count,
+            history=history,
         ),
-        reply_markup=tech_ticket_keyboard(ticket.id),
+        reply_markup=reply_markup if reply_markup is not None else tech_ticket_keyboard(ticket.id),
     )
 
 
@@ -190,9 +193,25 @@ async def notify_closed_by_requester(
     )
 
 
+def tech_ticket_keyboard_taken(ticket_id: int) -> InlineKeyboardMarkup:
+    """Card buttons once taken: Take is gone, Reply/Close remain."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_COMMENT, callback_data=f"ta:comment:{ticket_id}"
+                ),
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}"
+                ),
+            ]
+        ]
+    )
+
+
 async def notify_reminder(
     bot: Bot, chat_id: int, ticket_id: int, title: str, hours_ago: int | None
-) -> bool:
+) -> Message | None:
     """Requester nudge to the tech group, with the standard action buttons."""
     return await _send(
         bot,

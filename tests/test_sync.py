@@ -39,9 +39,18 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
         self.photos: list[tuple[int, list[str]]] = []  # (chat_id, [filenames])
+        self.edits: list[tuple[int, int, str]] = []  # (chat_id, message_id, text)
 
     async def send_message(self, chat_id, text, **kwargs):
         self.sent.append((chat_id, text))
+        # notify._send returns the sent Message so the living card can remember
+        # its id — hand back a minimal stand-in.
+        from types import SimpleNamespace
+
+        return SimpleNamespace(message_id=len(self.sent))
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None, **kwargs):
+        self.edits.append((chat_id, message_id, text))
 
     async def send_photo(self, chat_id, photo, **kwargs):
         self.photos.append((chat_id, [photo.filename]))
@@ -78,6 +87,9 @@ class FakeClient:
 
     async def download_document(self, document_id):
         return self.blobs.get(document_id, b"IMAGEBYTES")
+
+    async def get_user(self, user_id):
+        return None  # card history then shows an author-less comment line
 
 
 @pytest.fixture
@@ -495,3 +507,75 @@ async def test_repeated_tick_sends_no_duplicate_images(repo):
     await svc.tick()
     await svc.tick()  # same GLPI page again
     assert len(bot.photos) == 1  # images ride the card; cursor dedup covers both
+
+
+# --- living card registration ------------------------------------------------
+async def test_card_registered_at_send_time(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(2, name="тест", urgency=3)])
+    await repo.set_cursor("last_ticket_id", 1)
+
+    await _service(bot, client, repo)._poll_new_tickets()
+    card = await repo.get_card(2)
+    assert card is not None
+    assert card.chat_id == TECH_CHAT and card.message_id == 1  # first send
+    assert card.title == "тест" and card.urgency == 3
+
+
+async def test_deferred_card_gets_message_id_only_in_the_morning(repo):
+    low = _ticket(2, status=1, urgency=2)
+    client = FakeClient(recent=[low], tickets={2: low})
+    await repo.set_cursor("last_ticket_id", 1)
+    bot = FakeBot()
+
+    # Saturday: queued, NOT sent -> no card row yet (spec item 5).
+    await _service(bot, client, repo, now=OFFHOURS_SAT).tick()
+    assert await repo.get_card(2) is None
+
+    # Monday: the flush actually sends it -> the row appears with the real id.
+    client.recent = []
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
+    card = await repo.get_card(2)
+    assert card is not None and card.message_id > 0
+
+
+async def test_sync_status_change_updates_card_and_history(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(10)], tickets={10: _ticket(10, status=2)})
+    await repo.set_cursor("last_ticket_id", 9)
+    await repo.track_ticket(
+        ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    svc = _service(bot, client, repo)
+    await svc._poll_new_tickets()  # card registered (status New)
+    await svc._poll_tracked_tickets()  # GLPI says: now assigned
+
+    card = await repo.get_card(10)
+    assert card.status == 2
+    import json as _json
+
+    assert any("🔄" in line for line in _json.loads(card.history))
+    # the card message was edited with the history block
+    assert any("── История ──" in text for _, _, text in bot.edits)
+
+
+async def test_sync_followup_edits_card_and_pings_group(repo):
+    followups = [Followup(id=1, tickets_id=20, content="ответ", users_id=99)]
+    client = FakeClient(
+        recent=[_ticket(20)], tickets={20: _ticket(20, status=1)}, followups={20: followups}
+    )
+    await repo.set_cursor("last_ticket_id", 19)
+    await repo.track_ticket(
+        ticket_id=20, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    bot = FakeBot()
+    svc = _service(bot, client, repo)
+    await svc._poll_new_tickets()
+    await svc._poll_tracked_tickets()
+
+    import json as _json
+
+    card = await repo.get_card(20)
+    assert any("💬 Комментарий" in line for line in _json.loads(card.history))
+    # short reply ping to the group (edits don't notify)
+    assert any(c == TECH_CHAT and "Новый комментарий по заявке №20" in t for c, t in bot.sent)

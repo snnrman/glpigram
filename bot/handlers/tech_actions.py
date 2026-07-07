@@ -28,8 +28,14 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .. import texts
 from ..db.repo import LinkedUser
-from ..glpi.client import GlpiClient, GlpiError
+from ..glpi.client import (
+    TICKET_STATUS_PROCESSING_ASSIGNED,
+    TICKET_STATUS_SOLVED,
+    GlpiClient,
+    GlpiError,
+)
 from ..services import attachments, notify
+from ..services.cards import CardService
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +62,10 @@ def _card_keyboard_after_take(ticket_id: int) -> InlineKeyboardMarkup:
 
 
 def build_tech_actions_router(
-    client: GlpiClient, *, tech_group_chat_id: int | None = None
+    client: GlpiClient,
+    *,
+    tech_group_chat_id: int | None = None,
+    cards: CardService | None = None,
 ) -> Router:
     router = Router(name="tech_actions")
 
@@ -94,7 +103,7 @@ def build_tech_actions_router(
 
     # -- Take (immediate) --------------------------------------------------
     @router.callback_query(F.data.startswith("ta:take:"))
-    async def on_take(cb: CallbackQuery, link: LinkedUser) -> None:
+    async def on_take(cb: CallbackQuery, link: LinkedUser, bot: Bot) -> None:
         if not link.is_tech:
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
@@ -105,15 +114,25 @@ def build_tech_actions_router(
             log.exception("tech_take_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
-        card = cb.message if isinstance(cb.message, Message) else None
-        if card is not None:
-            try:
-                await card.edit_text(
-                    f"{card.html_text}\n\n{texts.tech_card_taken(link.display_name)}",
-                    reply_markup=_card_keyboard_after_take(ticket_id),
-                )
-            except Exception as exc:  # noqa: BLE001 - editing is best-effort
-                log.warning("tech_card_edit_failed ticket=%s error=%s", ticket_id, exc)
+        handled = cards is not None and await cards.record_event(
+            bot,
+            ticket_id,
+            texts.hist_taken(link.display_name),
+            status=TICKET_STATUS_PROCESSING_ASSIGNED,
+            taken_by=link.display_name,
+            reply=texts.reply_taken(ticket_id, link.display_name),
+        )
+        if not handled:
+            # No living card for this ticket (pre-feature) -> legacy in-place edit.
+            card = cb.message if isinstance(cb.message, Message) else None
+            if card is not None:
+                try:
+                    await card.edit_text(
+                        f"{card.html_text}\n\n{texts.tech_card_taken(link.display_name)}",
+                        reply_markup=_card_keyboard_after_take(ticket_id),
+                    )
+                except Exception as exc:  # noqa: BLE001 - editing is best-effort
+                    log.warning("tech_card_edit_failed ticket=%s error=%s", ticket_id, exc)
         await cb.answer(texts.TECH_TAKEN_TOAST)
 
     # -- Comment / Close (collect text in DM) ------------------------------
@@ -156,10 +175,12 @@ def build_tech_actions_router(
 
     # -- DM text handlers --------------------------------------------------
     @router.message(TechAction.commenting, F.text)
-    async def on_comment_text(message: Message, state: FSMContext, link: LinkedUser) -> None:
+    async def on_comment_text(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
         # GLPI records the followup as the service account; name it in the body.
         content = f"{link.display_name}:\n{message.text.strip()}"
-        await _post_comment(message, state, content=content)
+        await _post_comment(message, state, bot, link, content=content)
 
     @router.message(TechAction.commenting, F.photo | F.document)
     async def on_comment_file(
@@ -184,19 +205,29 @@ def build_tech_actions_router(
             log.exception("tech_attach_failed ticket=%s error=%s", ticket_id, exc)
             await message.answer(texts.GLPI_ERROR)
             return
-        await _post_comment(message, state, content=f"{link.display_name}:\n{caption}")
+        await _post_comment(message, state, bot, link, content=f"{link.display_name}:\n{caption}")
 
-    async def _post_comment(message: Message, state: FSMContext, *, content: str) -> None:
+    async def _post_comment(
+        message: Message, state: FSMContext, bot: Bot, link: LinkedUser, *, content: str
+    ) -> None:
         data = await state.get_data()
         ticket_id = data["ticket_id"]
         try:
-            await client.add_followup(ticket_id, content)
+            followup_id = await client.add_followup(ticket_id, content)
         except GlpiError as exc:
             log.exception("tech_comment_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await message.answer(texts.GLPI_ERROR)
             return
         await state.clear()
         await message.answer(texts.TECH_COMMENT_DONE)
+        if cards is not None:
+            await cards.record_event(
+                bot,
+                ticket_id,
+                texts.hist_comment(link.display_name),
+                followup_id=followup_id,
+                reply=texts.reply_new_comment(ticket_id),
+            )
 
     @router.message(TechAction.closing, F.text)
     async def on_solution_text(
@@ -214,18 +245,22 @@ def build_tech_actions_router(
             return
         await state.clear()
         await message.answer(texts.TECH_SOLUTION_DONE)
-        await _mark_card_solved(bot, data, link.display_name)
-        # Announce in the group with the solution text — unlike the card edit,
-        # this works even when the card is deleted or past the 48h edit limit.
-        group = data.get("card_chat_id") or tech_group_chat_id
-        if group is not None:
-            await notify.send_text(
-                bot,
-                group,
-                texts.tech_closed_announcement(
-                    ticket_id=ticket_id, name=link.display_name, solution=solution
-                ),
-            )
+        announcement = texts.tech_closed_announcement(
+            ticket_id=ticket_id, name=link.display_name, solution=solution
+        )
+        handled = cards is not None and await cards.record_event(
+            bot,
+            ticket_id,
+            texts.hist_closed(link.display_name),
+            status=TICKET_STATUS_SOLVED,
+            reply=announcement,
+        )
+        if not handled:
+            # No living card (pre-feature ticket) -> legacy edit + plain message.
+            await _mark_card_solved(bot, data, link.display_name)
+            group = data.get("card_chat_id") or tech_group_chat_id
+            if group is not None:
+                await notify.send_text(bot, group, announcement)
 
     @router.message(StateFilter(TechAction))
     async def on_expect_text(message: Message) -> None:

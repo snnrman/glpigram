@@ -26,6 +26,9 @@ class SeqBot:
         if isinstance(action, Exception):
             raise action
         self.sent += 1
+        from types import SimpleNamespace
+
+        return SimpleNamespace(message_id=self.sent)
 
 
 async def test_send_waits_out_one_flood_limit(monkeypatch):
@@ -37,7 +40,7 @@ async def test_send_waits_out_one_flood_limit(monkeypatch):
     monkeypatch.setattr(notify.asyncio, "sleep", fake_sleep)
     bot = SeqBot([_retry_after(7), None])  # flood once, then ok
 
-    assert await notify._send(bot, -100, "hi") is True
+    assert await notify._send(bot, -100, "hi")
     assert slept == [7]
     assert bot.sent == 1
 
@@ -45,21 +48,21 @@ async def test_send_waits_out_one_flood_limit(monkeypatch):
 async def test_send_gives_up_on_repeated_flood(monkeypatch):
     monkeypatch.setattr(notify.asyncio, "sleep", AsyncMock())
     bot = SeqBot([_retry_after(7), _retry_after(7)])
-    assert await notify._send(bot, -100, "hi") is False
+    assert await notify._send(bot, -100, "hi") is None
 
 
 async def test_send_gives_up_on_huge_flood_wait(monkeypatch):
     sleep = AsyncMock()
     monkeypatch.setattr(notify.asyncio, "sleep", sleep)
     bot = SeqBot([_retry_after(3600)])  # not worth blocking the loop for
-    assert await notify._send(bot, -100, "hi") is False
+    assert await notify._send(bot, -100, "hi") is None
     sleep.assert_not_awaited()
 
 
 async def test_send_reports_chat_migration(caplog):
     exc = TelegramMigrateToChat(method=MagicMock(), message="moved", migrate_to_chat_id=-100999)
     bot = SeqBot([exc])
-    assert await notify._send(bot, -100, "hi") is False
+    assert await notify._send(bot, -100, "hi") is None
     assert any("-100999" in r.getMessage() for r in caplog.records)  # new id is loud
 
 
