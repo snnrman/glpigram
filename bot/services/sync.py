@@ -333,12 +333,13 @@ class SyncService:
                 self._bot, row.requester_tg_id, ticket, followup, self._ticket_url(ticket.id)
             )
             author = await self._author_name(followup.users_id, author_cache)
+            # These are comments by others than the requester (the filter above),
+            # i.e. the team's own activity: history line only, no self-ping.
             await self._cards.record_event(
                 self._bot,
                 row.ticket_id,
                 texts.hist_comment(author),
                 followup_id=followup.id,
-                reply=texts.reply_new_comment(row.ticket_id),
             )
         # Advance past every followup seen (own/private included) to avoid rework.
         max_id = max(f.id for f in followups)

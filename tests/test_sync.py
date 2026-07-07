@@ -559,7 +559,7 @@ async def test_sync_status_change_updates_card_and_history(repo):
     assert any("── История ──" in text for _, _, text in bot.edits)
 
 
-async def test_sync_followup_edits_card_and_pings_group(repo):
+async def test_sync_followup_edits_card_without_group_ping(repo):
     followups = [Followup(id=1, tickets_id=20, content="ответ", users_id=99)]
     client = FakeClient(
         recent=[_ticket(20)], tickets={20: _ticket(20, status=1)}, followups={20: followups}
@@ -577,5 +577,6 @@ async def test_sync_followup_edits_card_and_pings_group(repo):
 
     card = await repo.get_card(20)
     assert any("💬 Комментарий" in line for line in _json.loads(card.history))
-    # short reply ping to the group (edits don't notify)
-    assert any(c == TECH_CHAT and "Новый комментарий по заявке №20" in t for c, t in bot.sent)
+    # a comment by the team (sync filters out the requester's own) is
+    # history-only: no self-ping into the group
+    assert not any(c == TECH_CHAT and "Новый комментарий" in t for c, t in bot.sent)

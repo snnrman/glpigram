@@ -46,6 +46,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple[object, str]] = []  # (chat_id, text)
         self.toasts: list[str] = []
+        self.edits: list[tuple[object, object, str]] = []
 
     async def __call__(self, method, **kwargs):
         name = type(method).__name__
@@ -58,6 +59,9 @@ class FakeBot:
     async def send_message(self, chat_id, text, **kwargs):
         self.sent.append((chat_id, text))
         return MagicMock()
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None, **kwargs):
+        self.edits.append((chat_id, message_id, text))
 
 
 def _client() -> AsyncMock:
@@ -188,3 +192,86 @@ async def test_non_tech_pressing_card_close_is_refused(env):
     assert texts.TECH_ONLY in bot.toasts  # is_tech guard
     assert bot.sent == []  # no dialog opened anywhere
     assert await dp.storage.get_state(_key(REQUESTER_ID, REQUESTER_ID)) is None
+
+
+async def _seed_card(repo):
+    await repo.save_card(
+        ticket_id=TICKET,
+        chat_id=GROUP,
+        message_id=333,
+        title="тест",
+        urgency=3,
+        requester_name="Заявитель",
+        requester_tg_id=REQUESTER_ID,
+        attachments_count=0,
+        status=1,
+        now=0,
+    )
+
+
+async def test_take_appears_once_history_only_no_ping(env):
+    """«Взял в работу» lives in the card history (edit) and is NOT ping-replied."""
+    dp, client, repo = env
+    await _seed_card(repo)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:take:{TICKET}"))
+
+    # exactly one appearance: the history line inside the edited card
+    assert len(bot.edits) == 1
+    assert "🙋 Взял в работу: Техник" in bot.edits[0][2]
+    # and NO separate group message about the take
+    assert not any(chat == GROUP for chat, _ in bot.sent)
+
+
+async def test_tech_close_pings_group_once_plus_history(env):
+    dp, client, repo = env
+    await _seed_card(repo)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:close:{TICKET}"))
+    bot.edits.clear()
+    group_before = [t for c, t in bot.sent if c == GROUP]
+    await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "готово"))
+
+    # history line in the card edit...
+    assert any("✅ Закрыто: Техник" in text for _, _, text in bot.edits)
+    # ...plus exactly ONE reply ping with the solution
+    group_msgs = [t for c, t in bot.sent if c == GROUP]
+    assert len(group_msgs) - len(group_before) == 1
+    assert "закрыл Техник" in group_msgs[-1]
+
+
+async def test_tech_dm_comment_history_only_no_ping(env):
+    dp, client, repo = env
+    await _seed_card(repo)
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:comment:{TICKET}"))
+    await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "смотрим"))
+
+    assert any("💬 Комментарий (Техник)" in text for _, _, text in bot.edits)
+    assert not any(chat == GROUP for chat, _ in bot.sent)  # the team's own comment: no self-ping
+
+
+async def test_requester_comment_pings_group_once_plus_history(env):
+    dp, client, repo = env
+    await _seed_card(repo)
+    # _resend_detail needs a real-ish ticket
+    from bot.glpi.models import Ticket
+
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="тест", content="c", status=1, urgency=3
+    )
+    client.list_followups.return_value = []
+    bot = FakeBot()
+    await dp.storage.set_state(_key(REQUESTER_ID, REQUESTER_ID), MyTickets.commenting.state)
+    await dp.storage.set_data(_key(REQUESTER_ID, REQUESTER_ID), {"ticket_id": TICKET})
+
+    await dp.feed_update(bot, _dm_msg(bot, 1, REQUESTER_ID, "всё ещё не работает"))
+
+    # history line in the card edit...
+    assert any("💬 Комментарий (Заявитель)" in text for _, _, text in bot.edits)
+    # ...plus exactly ONE short reply ping to the group
+    group_msgs = [t for c, t in bot.sent if c == GROUP]
+    assert group_msgs == [texts.reply_new_comment(TICKET)]
