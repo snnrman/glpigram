@@ -228,6 +228,13 @@ _STATUS_LABELS = {
 # Tech-group notification buttons (feature 5).
 BTN_TECH_TAKE = "🙋 Взять в работу"  # full-width row -> length is fine
 OPEN_IN_GLPI = "Открыть в GLPI"
+
+
+def attachments_note(count: int) -> str:
+    """Card line: the requester attached N files (see the GLPI link)."""
+    return f"📎 Вложений: {count}"
+
+
 BTN_TECH_COMMENT = "💬 Ответить"
 BTN_TECH_CLOSE = "✅ Закрыть"
 
@@ -353,6 +360,7 @@ def notify_new_ticket(
     urgency: int | None = None,
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
+    attachments_count: int = 0,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title + author, then a named link instead of a bare URL. The
@@ -367,6 +375,8 @@ def notify_new_ticket(
     body = [f"📝 {html.escape(title)}"]
     if requester_name:
         body.append(f"👤 {user_mention(requester_name, requester_tg_id)}")
+    if attachments_count:
+        body.append(attachments_note(attachments_count))
     if url:
         body.append(f'🔗 <a href="{url}">{OPEN_IN_GLPI}</a>')
     return head + "\n\n" + "\n".join(body)

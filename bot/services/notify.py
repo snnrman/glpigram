@@ -13,7 +13,14 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat, TelegramRetryAfter
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+)
 
 from .. import texts
 from ..glpi.models import Followup, Ticket
@@ -111,6 +118,7 @@ async def notify_new_ticket(
     *,
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
+    attachments_count: int = 0,
 ) -> bool:
     return await _send(
         bot,
@@ -123,9 +131,30 @@ async def notify_new_ticket(
             urgency=ticket.urgency or None,  # 0 = not provided by GLPI
             requester_name=requester_name,
             requester_tg_id=requester_tg_id,
+            attachments_count=attachments_count,
         ),
         reply_markup=tech_ticket_keyboard(ticket.id),
     )
+
+
+async def send_photos(bot: Bot, chat_id: int, photos: list[tuple[str, bytes]]) -> bool:
+    """Best-effort image delivery under a card: one photo or a media group."""
+    if not photos:
+        return True
+    try:
+        if len(photos) == 1:
+            name, data = photos[0]
+            await bot.send_photo(chat_id, BufferedInputFile(data, filename=name))
+        else:
+            media = [
+                InputMediaPhoto(media=BufferedInputFile(data, filename=name))
+                for name, data in photos[:10]  # Telegram media-group limit
+            ]
+            await bot.send_media_group(chat_id, media)
+        return True
+    except Exception as exc:  # noqa: BLE001 - images are auxiliary to the card
+        log.warning("notify_photos_failed chat=%s count=%s error=%s", chat_id, len(photos), exc)
+        return False
 
 
 async def notify_status_change(bot: Bot, tg_id: int, ticket: Ticket, url: str | None) -> None:

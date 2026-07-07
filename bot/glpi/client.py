@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 
-from .models import Followup, ITILCategory, Ticket, TicketSummary, User
+from .models import Document, Followup, ITILCategory, Ticket, TicketSummary, User
 
 log = logging.getLogger(__name__)
 
@@ -339,6 +339,7 @@ class GlpiClient:
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
+        headers_extra: dict[str, str] | None = None,
         idempotent: bool,
     ) -> httpx.Response:
         """Authenticated request with transparent one-shot session renewal on 401.
@@ -352,10 +353,16 @@ class GlpiClient:
         # to null it between acquiring and building the retry headers.
         token = self._session_token or await self.init_session()
 
+        def _hdrs(tok: str) -> dict[str, str]:
+            headers = self._auth_headers(json_content=not multipart, session_token=tok)
+            if headers_extra:
+                headers.update(headers_extra)
+            return headers
+
         resp = await self._send(
             method,
             path,
-            headers=self._auth_headers(json_content=not multipart, session_token=token),
+            headers=_hdrs(token),
             json=json,
             params=params,
             data=data,
@@ -369,7 +376,7 @@ class GlpiClient:
             resp = await self._send(
                 method,
                 path,
-                headers=self._auth_headers(json_content=not multipart, session_token=token),
+                headers=_hdrs(token),
                 json=json,
                 params=params,
                 data=data,
@@ -764,6 +771,42 @@ class GlpiClient:
         )
         await self.link_document(doc_id, "Ticket", ticket_id)
         return doc_id
+
+    async def list_ticket_documents(self, ticket_id: int) -> list[Document]:
+        """Documents attached to a ticket (Document_Item links + metadata)."""
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/Document_Item", idempotent=True)
+        links = resp.json()
+        if not isinstance(links, list):
+            return []
+        docs: list[Document] = []
+        for link in links:
+            doc_id = int(link.get("documents_id", 0) or 0)
+            if not doc_id:
+                continue
+            try:
+                meta = await self._request("GET", f"/Document/{doc_id}", idempotent=True)
+                raw = meta.json()
+            except GlpiHTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    continue  # document deleted meanwhile
+                raise
+            if isinstance(raw, dict):
+                docs.append(Document.from_api(raw))
+        return docs
+
+    async def download_document(self, document_id: int) -> bytes:
+        """Download a document's file content.
+
+        The legacy API returns the raw file when the request carries
+        ``Accept: application/octet-stream`` (JSON metadata otherwise).
+        """
+        resp = await self._request(
+            "GET",
+            f"/Document/{document_id}",
+            headers_extra={"Accept": "application/octet-stream"},
+            idempotent=True,
+        )
+        return resp.content
 
     async def get_ticket_assignees(self, ticket_id: int) -> list[str]:
         """Names of the technicians assigned to a ticket (Ticket_User type 2)."""

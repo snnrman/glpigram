@@ -80,6 +80,29 @@ class Followup:
         )
 
 
+@dataclass(slots=True)
+class Document:
+    """A GLPI Document attached to a ticket (via Document_Item)."""
+
+    id: int
+    filename: str
+    mime: str
+    filesize: int
+
+    @property
+    def is_image(self) -> bool:
+        return self.mime.startswith("image/")
+
+    @classmethod
+    def from_api(cls, raw: dict) -> Document:
+        return cls(
+            id=int(raw["id"]),
+            filename=str(raw.get("filename") or raw.get("name") or f"document_{raw['id']}"),
+            mime=str(raw.get("mime") or ""),
+            filesize=int(raw.get("filesize", 0) or 0),
+        )
+
+
 def _as_bool(value: object, *, default: bool) -> bool:
     """Coerce GLPI's 0/1 / "0"/"1" / true/false flags to a bool."""
     if value is None:
