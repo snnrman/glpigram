@@ -29,7 +29,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from .. import texts
 from ..db.repo import LinkedUser
 from ..glpi.client import GlpiClient, GlpiError
-from ..services import attachments
+from ..services import attachments, notify
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,9 @@ def _card_keyboard_after_take(ticket_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def build_tech_actions_router(client: GlpiClient) -> Router:
+def build_tech_actions_router(
+    client: GlpiClient, *, tech_group_chat_id: int | None = None
+) -> Router:
     router = Router(name="tech_actions")
 
     async def _start_dm_dialog(
@@ -202,8 +204,10 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
     ) -> None:
         data = await state.get_data()
         ticket_id = data["ticket_id"]
+        solution = message.text.strip()
+        # GLPI records the solution as the service account; name the tech in it.
         try:
-            await client.add_solution(ticket_id, message.text.strip())
+            await client.add_solution(ticket_id, f"{link.display_name}:\n{solution}")
         except GlpiError as exc:
             log.exception("tech_close_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await message.answer(texts.GLPI_ERROR)
@@ -211,6 +215,17 @@ def build_tech_actions_router(client: GlpiClient) -> Router:
         await state.clear()
         await message.answer(texts.TECH_SOLUTION_DONE)
         await _mark_card_solved(bot, data, link.display_name)
+        # Announce in the group with the solution text — unlike the card edit,
+        # this works even when the card is deleted or past the 48h edit limit.
+        group = data.get("card_chat_id") or tech_group_chat_id
+        if group is not None:
+            await notify.send_text(
+                bot,
+                group,
+                texts.tech_closed_announcement(
+                    ticket_id=ticket_id, name=link.display_name, solution=solution
+                ),
+            )
 
     @router.message(StateFilter(TechAction))
     async def on_expect_text(message: Message) -> None:

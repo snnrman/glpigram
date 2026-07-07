@@ -76,7 +76,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
     )
     # Order matters: tech_actions and my_tickets must precede new_ticket so their
     # FSM-state and menu-button handlers win over the /new free-text fallback.
-    tech = build_tech_actions_router(client)
+    tech = build_tech_actions_router(client, tech_group_chat_id=settings.tech_group_chat_id)
     my_tickets = build_my_tickets_router(
         client,
         repo,
