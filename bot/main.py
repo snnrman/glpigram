@@ -148,6 +148,8 @@ async def _run(settings: Settings) -> None:
             quiet_min_urgency=settings.quiet_min_urgency,
             interval=settings.sync_interval,
             front_base=settings.glpi_front_base,
+            unassigned_remind_hours=settings.unassigned_remind_hours,
+            remind_interval_hours=settings.remind_interval_hours,
         )
         sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
         sync_task.add_done_callback(_sync_task_died)

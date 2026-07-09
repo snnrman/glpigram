@@ -82,3 +82,10 @@ CREATE TABLE IF NOT EXISTS ticket_solvers (
     tg_id     INTEGER,
     name      TEXT NOT NULL DEFAULT ''
 );
+
+-- Anti-spam state for the "unassigned tickets" group reminder: when each
+-- ticket was last included in a summary. Survives restarts.
+CREATE TABLE IF NOT EXISTS unassigned_reminders (
+    ticket_id      INTEGER PRIMARY KEY,
+    last_remind_at INTEGER NOT NULL  -- unix seconds
+);

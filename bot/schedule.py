@@ -79,3 +79,28 @@ class WorkSchedule:
                 return candidate
         # work_days is non-empty in practice; fall back to the local moment.
         return local
+
+    def working_seconds_between(self, start: datetime, end: datetime) -> float:
+        """Working time elapsed between two instants (nights/weekends excluded).
+
+        Both datetimes must be tz-aware; they are evaluated in the schedule's
+        zone. Used for "N working hours old" thresholds, so a ticket created on
+        Friday evening is 0h old on Monday 09:00, not 60+.
+        """
+        start = start.astimezone(self.tz)
+        end = end.astimezone(self.tz)
+        if end <= start:
+            return 0.0
+        total = 0.0
+        span_days = (end.date() - start.date()).days
+        for offset in range(min(span_days, 366) + 1):
+            day = start.date() + timedelta(days=offset)
+            if day.isoweekday() not in self.work_days:
+                continue
+            window_start = datetime.combine(day, self.start, tzinfo=self.tz)
+            window_end = datetime.combine(day, self.end, tzinfo=self.tz)
+            lo = max(window_start, start)
+            hi = min(window_end, end)
+            if hi > lo:
+                total += (hi - lo).total_seconds()
+        return total

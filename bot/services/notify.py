@@ -229,6 +229,16 @@ def tech_ticket_keyboard_solved(ticket_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def unassigned_take_keyboard(ticket_ids: list[int]) -> InlineKeyboardMarkup:
+    """One full-width Take button per unattended ticket in the summary."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=texts.btn_take_ticket(tid), callback_data=f"ta:take:{tid}")]
+            for tid in ticket_ids
+        ]
+    )
+
+
 def solution_confirm_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     """Requester's prompt under a proposed solution: confirm or return to work."""
     return InlineKeyboardMarkup(

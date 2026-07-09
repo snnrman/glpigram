@@ -95,6 +95,8 @@ under systemd). See [.env.example](.env.example).
 | `LINK_RECHECK_TTL` | — | `300` | Seconds between re-checks that a linked account is still active |
 | `SYNC_INTERVAL` | — | `45` | GLPI polling interval, seconds |
 | `REMIND_COOLDOWN_HOURS` | — | `4` | Min hours between reminders about the same ticket |
+| `UNASSIGNED_REMIND_HOURS` | — | `2` | Nag the group about New tickets older than this many working hours |
+| `REMIND_INTERVAL_HOURS` | — | `3` | Min working hours between repeated unassigned-nags per ticket |
 | `TZ` | — | system | Bot timezone (GLPI dates are UTC and converted to it) |
 | `WORK_HOURS` | — | `09:00-18:00` | Working hours for quiet-hours handling |
 | `WORK_DAYS` | — | `1-5` | Working ISO weekdays, Mon=1..Sun=7 |

@@ -23,7 +23,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from aiogram import Bot
 
@@ -60,6 +60,8 @@ class SyncService:
         recent_page: int = 100,
         now_provider: Callable[[], datetime] | None = None,
         cards: CardService | None = None,
+        unassigned_remind_hours: float = 2,
+        remind_interval_hours: float = 3,
     ) -> None:
         self._bot = bot
         self._client = client
@@ -72,6 +74,8 @@ class SyncService:
         self._recent_page = recent_page
         self._now = now_provider or schedule.now
         self._cards = cards or CardService(repo, front_base=front_base)
+        self._unassigned_after = unassigned_remind_hours * 3600
+        self._remind_interval = remind_interval_hours * 3600
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -105,13 +109,17 @@ class SyncService:
     async def tick(self) -> None:
         # Deliver anything queued overnight first, once work has resumed.
         await self._flush_deferred_if_working()
-        await self._poll_new_tickets()
+        # One GLPI page feeds both the announcer and the unassigned reminder.
+        recent = await self._client.list_recent_tickets(limit=self._recent_page)
+        await self._poll_new_tickets(recent)
+        await self._remind_unassigned(recent)
         await self._poll_tracked_tickets()
 
     # -- 1. new tickets -> tech group (with quiet-hours deferral) ----------
-    async def _poll_new_tickets(self) -> None:
+    async def _poll_new_tickets(self, recent: list | None = None) -> None:
         last_seen = await self._repo.get_cursor(_CURSOR_LAST_TICKET) or 0
-        recent = await self._client.list_recent_tickets(limit=self._recent_page)
+        if recent is None:
+            recent = await self._client.list_recent_tickets(limit=self._recent_page)
         fresh = sorted((t for t in recent if t.id > last_seen), key=lambda t: t.id)
         if not fresh:
             return
@@ -324,6 +332,60 @@ class SyncService:
         return name, (link.tg_id if link else None)
 
     # -- 2 & 3. tracked tickets: status + followups -----------------------
+    # -- unassigned-tickets reminder (working hours only) ------------------
+    async def _remind_unassigned(self, recent: list | None = None) -> None:
+        """One summary about New tickets nobody took, with Take buttons.
+
+        Thresholds count WORKING hours (GLPI dates are UTC -> schedule tz);
+        per-ticket anti-spam state lives in SQLite and survives restarts. A
+        taken ticket (status != New) simply stops matching and drops out.
+        """
+        if self._tech_chat is None:
+            return
+        now = self._now()
+        if not self._schedule.is_working(now):
+            return
+        if recent is None:
+            recent = await self._client.list_recent_tickets(limit=self._recent_page)
+        now_ts = int(now.timestamp())
+        due: list[tuple[int, str, int]] = []
+        for ticket in recent:
+            if ticket.status != TICKET_STATUS_NEW:
+                continue  # taken/solved -> out of the reminder
+            created = timeutil.parse_glpi_utc(ticket.date_creation)
+            if created is None:
+                continue
+            age = self._schedule.working_seconds_between(created, now)
+            if age < self._unassigned_after:
+                continue
+            last = await self._repo.get_last_unassigned_remind(ticket.id)
+            if last is not None:
+                since_last = self._schedule.working_seconds_between(
+                    datetime.fromtimestamp(last, tz=UTC), now
+                )
+                if since_last < self._remind_interval:
+                    continue  # anti-spam window still open for this ticket
+            due.append((ticket.id, ticket.name, int(age // 3600)))
+        if not due:
+            return
+        due.sort()
+        due = due[:10]  # keyboard/message size guard; the rest come next round
+        text = (
+            texts.UNASSIGNED_HEADER
+            + "\n"
+            + "\n".join(texts.unassigned_line(tid, title, hours) for tid, title, hours in due)
+        )
+        msg = await notify.send_text(
+            self._bot,
+            self._tech_chat,
+            text,
+            reply_markup=notify.unassigned_take_keyboard([tid for tid, _, _ in due]),
+        )
+        if msg:
+            # Stamp the anti-spam state only for what was actually delivered.
+            for tid, _, _ in due:
+                await self._repo.set_last_unassigned_remind(tid, now_ts)
+
     async def _poll_tracked_tickets(self) -> None:
         for row in await self._repo.active_tracked_tickets():
             try:

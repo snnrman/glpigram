@@ -31,8 +31,12 @@ OFFHOURS_SAT = datetime(2026, 7, 11, 12, 0, tzinfo=_KGD)  # Sat -> off
 MONDAY_OPEN = datetime(2026, 7, 6, 9, 0, tzinfo=_KGD)  # Mon 09:00 -> working
 
 
-def _ticket(tid: int, *, status: int = 1, name: str = "t", urgency: int = 3) -> Ticket:
-    return Ticket(id=tid, name=name, content="c", status=status, urgency=urgency)
+def _ticket(
+    tid: int, *, status: int = 1, name: str = "t", urgency: int = 3, created: str | None = None
+) -> Ticket:
+    return Ticket(
+        id=tid, name=name, content="c", status=status, urgency=urgency, date_creation=created
+    )
 
 
 class FakeBot:
@@ -643,3 +647,85 @@ async def test_bot_closed_ticket_not_renotified_by_sync(repo):
 
     await _service(bot, client, repo)._poll_tracked_tickets()
     assert [t for c, t in bot.sent if c == REQUESTER_TG] == []  # no duplicate
+
+
+# --- unassigned-tickets reminder ----------------------------------------------
+# WORKING is Mon 2026-07-06 12:00 Kaliningrad (UTC+2). GLPI dates are UTC:
+_CREATED_3H_AGO = "2026-07-06 07:00:00"  # 09:00 local -> 3 working hours old
+_CREATED_1H_AGO = "2026-07-06 09:00:00"  # 11:00 local -> 1 working hour old
+MON_1300 = datetime(2026, 7, 6, 13, 0, tzinfo=_KGD)
+MON_1600 = datetime(2026, 7, 6, 16, 0, tzinfo=_KGD)
+
+
+async def test_unassigned_older_than_threshold_gets_one_summary(repo):
+    bot = FakeBot()
+    client = FakeClient(
+        recent=[
+            _ticket(44, name="Принтер сломан", created=_CREATED_3H_AGO),
+            _ticket(47, name="Нет сети", created=_CREATED_3H_AGO),
+        ]
+    )
+    await _service(bot, client, repo)._remind_unassigned()
+
+    msgs = _tech(bot)
+    assert len(msgs) == 1  # ONE summary, not one message per ticket
+    assert "Заявки без исполнителя" in msgs[0]
+    assert "№44 «Принтер сломан» (3ч)" in msgs[0]
+    assert "№47 «Нет сети» (3ч)" in msgs[0]
+    # anti-spam state persisted per ticket
+    assert await repo.get_last_unassigned_remind(44) is not None
+    assert await repo.get_last_unassigned_remind(47) is not None
+
+
+async def test_unassigned_below_threshold_is_silent(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(44, created=_CREATED_1H_AGO)])  # 1h < 2h
+    await _service(bot, client, repo)._remind_unassigned()
+    assert _tech(bot) == []
+
+
+async def test_unassigned_antispam_counts_working_hours(repo):
+    client = FakeClient(recent=[_ticket(44, created=_CREATED_3H_AGO)])
+
+    bot = FakeBot()
+    await _service(bot, client, repo)._remind_unassigned()  # 12:00 -> sent
+    assert len(_tech(bot)) == 1
+
+    bot = FakeBot()  # 13:00: only 1 working hour since the last one (< 3) -> silent
+    await _service(bot, client, repo, now=MON_1300)._remind_unassigned()
+    assert _tech(bot) == []
+
+    bot = FakeBot()  # 16:00: 4 working hours passed -> reminded again
+    await _service(bot, client, repo, now=MON_1600)._remind_unassigned()
+    assert len(_tech(bot)) == 1
+
+
+async def test_taken_ticket_drops_out_of_reminders(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(44, status=2, created=_CREATED_3H_AGO)])
+    await _service(bot, client, repo)._remind_unassigned()
+    assert _tech(bot) == []  # someone took it -> no nagging
+
+
+async def test_unassigned_reminder_respects_quiet_hours(repo):
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(44, created=_CREATED_3H_AGO)])
+    await _service(bot, client, repo, now=OFFHOURS_NIGHT)._remind_unassigned()
+    assert _tech(bot) == []
+
+
+async def test_unassigned_summary_has_take_buttons(repo):
+    sent_markups = []
+
+    class KbBot(FakeBot):
+        async def send_message(self, chat_id, text, reply_markup=None, **kwargs):
+            sent_markups.append(reply_markup)
+            return await super().send_message(chat_id, text, **kwargs)
+
+    client = FakeClient(
+        recent=[_ticket(44, created=_CREATED_3H_AGO), _ticket(47, created=_CREATED_3H_AGO)]
+    )
+    await _service(KbBot(), client, repo)._remind_unassigned()
+    kb = sent_markups[0]
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert data == ["ta:take:44", "ta:take:47"]  # existing Take handler reused
