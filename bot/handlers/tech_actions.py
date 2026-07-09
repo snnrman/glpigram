@@ -27,7 +27,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .. import texts
-from ..db.repo import LinkedUser
+from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
     TICKET_STATUS_PROCESSING_ASSIGNED,
     TICKET_STATUS_SOLVED,
@@ -66,6 +66,7 @@ def build_tech_actions_router(
     *,
     tech_group_chat_id: int | None = None,
     cards: CardService | None = None,
+    repo: Repo | None = None,
 ) -> Router:
     router = Router(name="tech_actions")
 
@@ -247,6 +248,20 @@ def build_tech_actions_router(
             return
         await state.clear()
         await message.answer(texts.TECH_SOLUTION_DONE)
+        # Tell the REQUESTER right now, with the actual solution text — and bump
+        # the tracked status so the sync loop doesn't follow up with a bare
+        # "status changed" duplicate for the same transition.
+        if repo is not None:
+            tracked = await repo.get_tracked_ticket(ticket_id)
+            if tracked is not None:
+                await notify.send_text(
+                    bot,
+                    tracked.requester_tg_id,
+                    texts.solved_notice(
+                        ticket_id=ticket_id, tech_name=link.display_name, solution=solution
+                    ),
+                )
+                await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_SOLVED, active=True)
         announcement = texts.tech_closed_announcement(
             ticket_id=ticket_id, name=link.display_name, solution=solution
         )

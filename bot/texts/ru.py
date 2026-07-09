@@ -530,3 +530,10 @@ def hist_closed_by_requester() -> str:
 
 def reply_new_comment(ticket_id: int) -> str:
     return f"💬 Новый комментарий по заявке №{ticket_id}"
+
+
+def solved_notice(*, ticket_id: int, tech_name: str | None, solution: str) -> str:
+    """Requester notification carrying the actual solution text."""
+    body = html.escape(clean_glpi_text(solution, limit=800))
+    who = f" — {html.escape(tech_name)}" if tech_name else ""
+    return f"✅ Ваша заявка №{ticket_id} решена{who}: {body}"
