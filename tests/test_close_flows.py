@@ -158,7 +158,10 @@ async def test_tech_solution_goes_to_glpi_and_group_announcement(env):
     client.set_ticket_status.assert_not_awaited()
     # group announcement with the solution text
     group_msgs = [t for c, t in bot.sent if c == GROUP]
-    assert any("Заявку №5 закрыл Техник" in t and "перезагрузил сервер" in t for t in group_msgs)
+    assert any(
+        "Техник предложил решение по заявке №5" in t and "перезагрузил сервер" in t
+        for t in group_msgs
+    )
     # tech got the confirmation, state cleared
     assert (TECH_ID, texts.TECH_SOLUTION_DONE) in bot.sent
     assert await dp.storage.get_state(_key(TECH_ID, TECH_ID)) is None
@@ -235,11 +238,11 @@ async def test_tech_close_pings_group_once_plus_history(env):
     await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "готово"))
 
     # history line in the card edit...
-    assert any("✅ Закрыто: Техник" in text for _, _, text in bot.edits)
+    assert any("✅ Решение предложено: Техник" in text for _, _, text in bot.edits)
     # ...plus exactly ONE reply ping with the solution
     group_msgs = [t for c, t in bot.sent if c == GROUP]
     assert len(group_msgs) - len(group_before) == 1
-    assert "закрыл Техник" in group_msgs[-1]
+    assert "предложил решение" in group_msgs[-1]
 
 
 async def test_tech_dm_comment_history_only_no_ping(env):
@@ -289,9 +292,98 @@ async def test_bot_close_notifies_requester_with_solution_immediately(env):
     await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:close:{TICKET}"))
     await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "заменил картридж"))
 
-    # the requester gets the solution text right away — not a bare status line
+    # the requester gets the solution PROPOSAL right away, with the text
     to_requester = [t for c, t in bot.sent if c == REQUESTER_ID]
-    assert to_requester == ["✅ Ваша заявка №5 решена — Техник: заменил картридж"]
-    # and the tracked status is bumped so the sync loop won't send a duplicate
+    assert to_requester == [
+        "✅ По заявке №5 предложено решение — Техник: заменил картридж\n\nПроблема решена?"
+    ]
+    # the tracked status is bumped: SOLVED, not closed (awaiting confirmation)
     tracked = await repo.get_tracked_ticket(TICKET)
-    assert tracked.last_status == 5
+    assert tracked.last_status == 5 and tracked.active
+    # and the solver is remembered for a possible return-to-work ping
+    assert await repo.get_solver(TICKET) == (TECH_ID, "Техник")
+
+
+def _dm_cb(bot, uid, from_id, data):
+    msg = Message(
+        message_id=uid,
+        date=_DATE,
+        chat=Chat(id=from_id, type="private"),
+        from_user=TgUser(id=BOT_ID, is_bot=True, first_name="bot"),
+        text="решение предложено",
+    ).as_(bot)
+    cb = CallbackQuery(
+        id=str(uid),
+        from_user=TgUser(id=from_id, is_bot=False, first_name="U"),
+        chat_instance="ci",
+        message=msg,
+        data=data,
+    ).as_(bot)
+    return Update(update_id=uid, callback_query=cb)
+
+
+async def _solve_via_bot(dp, repo, bot):
+    """Common preamble: tracked ticket + card, tech proposes a solution."""
+    await _seed_card(repo)
+    await repo.track_ticket(
+        ticket_id=TICKET, requester_tg_id=REQUESTER_ID, requester_glpi_id=8, status=1, now=0
+    )
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:close:{TICKET}"))
+    await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "заменил картридж"))
+
+
+async def test_full_cycle_solved_then_confirmed_closes(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    assert (await repo.get_tracked_ticket(TICKET)).last_status == 5  # solved, not closed
+
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:ok:{TICKET}"))
+
+    client.set_ticket_status.assert_awaited_once_with(TICKET, 6)  # closed on confirm
+    tracked = await repo.get_tracked_ticket(TICKET)
+    assert tracked.last_status == 6 and not tracked.active
+    # requester's prompt edited into a thank-you (buttons gone)
+    assert any(c == REQUESTER_ID and "закрыта, спасибо" in t for c, t in bot.sent)
+    # card history + group ping
+    assert any("👍 Заявитель подтвердил решение" in text for _, _, text in bot.edits)
+    assert any(c == GROUP and "подтвердил решение по заявке №5" in t for c, t in bot.sent)
+
+
+async def test_full_cycle_solved_then_returned_to_work(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    bot.sent.clear()
+    bot.edits.clear()
+
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:back:{TICKET}"))
+    assert any(c == REQUESTER_ID and "осталось нерешённым" in t for c, t in bot.sent)
+    await dp.feed_update(bot, _dm_msg(bot, 4, REQUESTER_ID, "всё ещё шумит"))
+
+    # the reason lands in GLPI as a requester followup, status back to assigned
+    client.add_followup.assert_awaited_once_with(TICKET, "Заявитель:\nвсё ещё шумит")
+    client.set_ticket_status.assert_awaited_once_with(TICKET, 2)
+    tracked = await repo.get_tracked_ticket(TICKET)
+    assert tracked.last_status == 2 and tracked.active
+    # the solving tech gets a DM, the group gets the ping, the card the history
+    assert any(
+        c == TECH_ID and "вернул заявку №5 в работу: всё ещё шумит" in t for c, t in bot.sent
+    )
+    assert any(c == GROUP and "вернул заявку №5 в работу" in t for c, t in bot.sent)
+    assert any("↩️ Возвращена в работу заявителем" in text for _, _, text in bot.edits)
+    # requester acknowledged, FSM cleared
+    assert any(c == REQUESTER_ID and t == texts.RETURNED_ACK for c, t in bot.sent)
+    assert await dp.storage.get_state(_key(REQUESTER_ID, REQUESTER_ID)) is None
+
+
+async def test_confirm_by_someone_else_is_refused(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    bot.sent.clear()
+
+    # the tech (not the requester) somehow presses the requester's button
+    await dp.feed_update(bot, _dm_cb(bot, 3, TECH_ID, f"rs:ok:{TICKET}"))
+    client.set_ticket_status.assert_not_awaited()
+    assert texts.STALE_BUTTON in bot.toasts

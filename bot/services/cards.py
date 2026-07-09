@@ -140,11 +140,23 @@ class CardService:
             await self._reply(bot, card.chat_id, card.message_id, reply)
         return True
 
-    @staticmethod
-    def _keyboard(ticket_id: int, status: int):
-        """Buttons follow the state: no re-take once taken, nothing once done."""
-        if status in (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED):
-            return None
+    def _keyboard(self, ticket_id: int, status: int):
+        """Buttons follow the state (ITIL cycle):
+
+        New -> Reply/Close + full-width Take; taken -> no re-take; solved ->
+        Reply + a passive "awaiting confirmation"; closed -> only the GLPI link.
+        """
+        if status == TICKET_STATUS_CLOSED:
+            url = self._url(ticket_id)
+            if url is None:
+                return None
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+            return InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=texts.OPEN_IN_GLPI, url=url)]]
+            )
+        if status == TICKET_STATUS_SOLVED:
+            return notify.tech_ticket_keyboard_solved(ticket_id)
         if status != 1:  # taken / in progress
             return notify.tech_ticket_keyboard_taken(ticket_id)
         return notify.tech_ticket_keyboard(ticket_id)

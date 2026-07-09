@@ -654,8 +654,8 @@ class GlpiClient:
         )
         return _extract_id(resp)
 
-    async def get_ticket_solution(self, ticket_id: int) -> tuple[str | None, str] | None:
-        """The latest ITILSolution of a ticket as ``(author_name, content)``.
+    async def get_ticket_solution(self, ticket_id: int) -> tuple[int, str | None, str] | None:
+        """The latest ITILSolution as ``(author_users_id, author_name, content)``.
 
         Used to include the actual solution text in the requester notification
         when a ticket is solved/closed from the GLPI web UI.
@@ -676,7 +676,7 @@ class GlpiClient:
                 name = user.display_name if user else None
             except GlpiError:
                 pass
-        return name, content
+        return uid, name, content
 
     async def add_solution(self, ticket_id: int, content: str) -> int:
         """Add an ITILSolution to a ticket (moves it to *solved*); returns its id."""

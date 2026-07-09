@@ -150,6 +150,18 @@ deploy/
 5. **Tech actions.** Inline buttons on the tech-group notification: "Take" (assign to the
    pressing technician, status -> Processing), "Close" (asks for a solution text via FSM),
    "Comment". Only users with is_tech may press; others get a toast.
+   - **ITIL solution cycle:** a tech's "Close" sets the ticket to **solved (5), not closed**;
+     the solution goes into ITILSolution. The requester gets «По заявке №N предложено
+     решение — <техник>: <текст>. Проблема решена?» with «✅ Подтвердить» /
+     «↩️ Вернуть в работу» buttons (same prompt when the ticket is solved from the GLPI
+     web UI, detected by the sync loop). Confirm -> closed (6), thank-you to the requester,
+     "заявитель подтвердил решение" to the card history + group ping. Return -> ask for a
+     reason (text), status back to assigned (2), reason as a requester followup; the solving
+     tech (DM, when linked) and the group get «↩️ Заявитель вернул заявку №N в работу:
+     <причина>». Card buttons follow the status: solved -> Reply + passive «ждёт
+     подтверждения»; closed -> only an "Open in GLPI" URL button. If the requester never
+     reacts the ticket stays solved — GLPI's own auto-close timer may close it (the bot
+     does nothing).
 6. **Attachments both ways.** Photos/documents from TG uploaded to GLPI on ticket creation
    and in comments. TG file size limits apply (20 MB via Bot API) — reject larger with a
    clear message.

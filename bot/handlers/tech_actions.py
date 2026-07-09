@@ -169,6 +169,11 @@ def build_tech_actions_router(
             prompt=texts.tech_ask_solution(ticket_id),
         )
 
+    @router.callback_query(F.data.startswith("ta:wait:"))
+    async def on_wait(cb: CallbackQuery) -> None:
+        # Passive indicator on a solved card — nothing to do, just explain.
+        await cb.answer(texts.WAITING_TOAST, show_alert=True)
+
     # /cancel must precede the state text handlers, or the comment/solution
     # steps would swallow it as content.
     @router.message(StateFilter(TechAction), Command("cancel"))
@@ -248,27 +253,30 @@ def build_tech_actions_router(
             return
         await state.clear()
         await message.answer(texts.TECH_SOLUTION_DONE)
-        # Tell the REQUESTER right now, with the actual solution text — and bump
-        # the tracked status so the sync loop doesn't follow up with a bare
-        # "status changed" duplicate for the same transition.
+        # ITIL cycle: the ticket is SOLVED (not closed). Ask the REQUESTER to
+        # confirm or return it to work, right now with the actual solution text;
+        # bump the tracked status so the sync loop stays silent, and remember
+        # who solved it for the return-to-work ping.
         if repo is not None:
+            await repo.set_solver(ticket_id, tg_id=message.from_user.id, name=link.display_name)
             tracked = await repo.get_tracked_ticket(ticket_id)
             if tracked is not None:
                 await notify.send_text(
                     bot,
                     tracked.requester_tg_id,
-                    texts.solved_notice(
+                    texts.solution_proposed(
                         ticket_id=ticket_id, tech_name=link.display_name, solution=solution
                     ),
+                    reply_markup=notify.solution_confirm_keyboard(ticket_id),
                 )
                 await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_SOLVED, active=True)
-        announcement = texts.tech_closed_announcement(
+        announcement = texts.tech_solved_announcement(
             ticket_id=ticket_id, name=link.display_name, solution=solution
         )
         handled = cards is not None and await cards.record_event(
             bot,
             ticket_id,
-            texts.hist_closed(link.display_name),
+            texts.hist_solved(link.display_name),
             status=TICKET_STATUS_SOLVED,
             reply=announcement,
         )
