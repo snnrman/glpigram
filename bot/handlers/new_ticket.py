@@ -141,7 +141,13 @@ def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
         ]
     ]
     if is_tech:
-        rows.append([KeyboardButton(text=texts.BTN_STATS)])
+        # Tech row: two short labels so the 2-per-row layout never wraps.
+        rows.append(
+            [
+                KeyboardButton(text=texts.BTN_TECH_TICKETS),
+                KeyboardButton(text=texts.BTN_STATS),
+            ]
+        )
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 

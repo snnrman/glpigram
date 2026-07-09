@@ -29,6 +29,7 @@ from .handlers.my_tickets import build_my_tickets_router
 from .handlers.new_ticket import build_new_ticket_router
 from .handlers.stats import build_stats_router
 from .handlers.tech_actions import build_tech_actions_router
+from .handlers.tech_tickets import build_tech_tickets_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
 from .schedule import WorkSchedule
@@ -92,6 +93,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         cards=cards,
     )
     stats = build_stats_router(client, repo)
+    tech_tickets = build_tech_tickets_router(client, ticket_front_base=settings.glpi_front_base)
     business = build_new_ticket_router(
         client,
         category_cache,
@@ -100,7 +102,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         schedule=schedule,
         quiet_min_urgency=settings.quiet_min_urgency,
     )
-    for router in (tech, my_tickets, stats, business):
+    for router in (tech, tech_tickets, my_tickets, stats, business):
         router.message.middleware(auth)
         router.callback_query.middleware(auth)
         dp.include_router(router)

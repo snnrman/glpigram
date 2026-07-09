@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus linked-user counters (total / technicians / new in 7 days). The
   handler re-checks `is_tech` itself, so a direct /stats is refused for
   regular users; a role change flips the menu on the next interaction.
+- **«👨‍💻 В работе» for technicians** — the tech menu lists tickets assigned
+  to the pressing technician in two groups (in work / awaiting the
+  requester's confirmation); tapping one opens a detail view with the same
+  Reply/Close actions as the group card.
 
 ## [0.2.0] - 2026-07-09
 

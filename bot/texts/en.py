@@ -180,6 +180,8 @@ BTN_CANCEL = "❌ Cancel"
 # --- errors / fallbacks ---
 STATS_TECH_ONLY = "📊 Statistics are available to technicians only."
 STATS_USERS_UNAVAILABLE = "👥 User statistics are temporarily unavailable."
+BTN_TECH_TICKETS = "👨\u200d💻 In progress"  # tech menu: tickets assigned to me
+TECH_TICKETS_EMPTY = "No active tickets are assigned to you."
 
 GLPI_ERROR = (
     "An error occurred while talking to GLPI. The ticket was not created — try again later."
@@ -611,3 +613,19 @@ def stats_users_block(total: int, techs: int, recent: int) -> str:
         f"Linked: <b>{total}</b> · technicians: <b>{techs}</b>\n"
         f"New in 7 days: <b>{recent}</b>"
     )
+
+
+def tech_tickets_list(in_work: list[tuple[int, str]], waiting: list[tuple[int, str]]) -> str:
+    """Tech's assigned tickets, two groups; open a ticket with the buttons below."""
+    parts = ["👨\u200d💻 <b>Tickets assigned to you</b>"]
+    if in_work:
+        parts.append(
+            "⚙️ In progress:\n"
+            + "\n".join(f"• #{tid} — {html.escape(title)}" for tid, title in in_work)
+        )
+    if waiting:
+        parts.append(
+            "⏳ Awaiting confirmation:\n"
+            + "\n".join(f"• #{tid} — {html.escape(title)}" for tid, title in waiting)
+        )
+    return "\n\n".join(parts)
