@@ -18,12 +18,22 @@ from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update
 from aiogram.types import User as TgUser
 
 from bot import texts
+from bot.db.repo import LinkedUser
 from bot.handlers.new_ticket import NewTicket, build_new_ticket_router
 
 pytestmark = pytest.mark.asyncio
 
 BOT_ID = 42
 CHAT = 1001
+
+
+def _fake_link(is_tech: bool = False) -> LinkedUser:
+    """Bare test dispatchers have no auth middleware -> inject `link` as workflow data."""
+    return LinkedUser(
+        tg_id=CHAT, glpi_users_id=7, display_name="U", is_tech=is_tech, linked_at=0, checked_at=0
+    )
+
+
 _DATE = datetime(2020, 1, 1, tzinfo=UTC)
 
 
@@ -104,6 +114,7 @@ def _cb_update(bot: FakeBot, uid: int, data: str) -> Update:
 
 async def _attaching_dispatcher(storage: MemoryStorage, ctx: FSMContext) -> Dispatcher:
     dp = Dispatcher(storage=storage)
+    dp["link"] = _fake_link()
     dp.include_router(build_new_ticket_router(MagicMock(), MagicMock(), MagicMock()))
     await ctx.set_state(NewTicket.attaching)
     await ctx.set_data(
@@ -122,6 +133,7 @@ async def _attaching_dispatcher(storage: MemoryStorage, ctx: FSMContext) -> Disp
 async def test_two_attachments_then_done_word_completes():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
+    dp["link"] = _fake_link()
     # client/category_cache/repo aren't touched during the attaching step.
     dp.include_router(build_new_ticket_router(MagicMock(), MagicMock(), MagicMock()))
     bot = FakeBot()
@@ -203,6 +215,7 @@ async def _dispatcher_at(state, data=None):
     """Dispatcher + FSM context pre-seeded into an arbitrary /new step."""
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
+    dp["link"] = _fake_link()
     dp.include_router(build_new_ticket_router(MagicMock(), MagicMock(), MagicMock()))
     ctx = FSMContext(storage=storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
     await ctx.set_state(state)

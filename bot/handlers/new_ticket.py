@@ -127,18 +127,22 @@ def _offer_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Persistent reply keyboard shown after /start and every finished dialog."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text=texts.BTN_NEW_TICKET),
-                KeyboardButton(text=texts.BTN_MY_TICKETS),
-            ]
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
+def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
+    """Persistent reply keyboard shown after /start and every finished dialog.
+
+    The role is evaluated at render time (``link.is_tech`` is refreshed by the
+    auth middleware from the GLPI group, ~5 min TTL), so a technician added to
+    or removed from the group gets the right menu on their next interaction.
+    """
+    rows = [
+        [
+            KeyboardButton(text=texts.BTN_NEW_TICKET),
+            KeyboardButton(text=texts.BTN_MY_TICKETS),
+        ]
+    ]
+    if is_tech:
+        rows.append([KeyboardButton(text=texts.BTN_STATS)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
 def build_new_ticket_router(
@@ -169,7 +173,7 @@ def build_new_ticket_router(
             return None
         return f"{ticket_front_base}/front/ticket.form.php?id={ticket_id}"
 
-    async def _open_category_step(message: Message, state: FSMContext) -> None:
+    async def _open_category_step(message: Message, state: FSMContext, *, is_tech: bool) -> None:
         """Load categories and enter the choosing_category state, or report failure.
 
         Any ``description`` already stored in the FSM data is preserved so the
@@ -180,11 +184,15 @@ def build_new_ticket_router(
         except GlpiError as exc:
             log.warning("new_ticket_categories_failed error=%s", exc)
             await state.clear()
-            await message.answer(texts.NEW_NO_CATEGORIES, reply_markup=main_menu_keyboard())
+            await message.answer(
+                texts.NEW_NO_CATEGORIES, reply_markup=main_menu_keyboard(is_tech=is_tech)
+            )
             return
         if not categories:
             await state.clear()
-            await message.answer(texts.NEW_NO_CATEGORIES, reply_markup=main_menu_keyboard())
+            await message.answer(
+                texts.NEW_NO_CATEGORIES, reply_markup=main_menu_keyboard(is_tech=is_tech)
+            )
             return
         await state.set_state(NewTicket.choosing_category)
         await message.answer(
@@ -192,22 +200,24 @@ def build_new_ticket_router(
         )
 
     @router.message(Command("new"))
-    async def cmd_new(message: Message, state: FSMContext) -> None:
+    async def cmd_new(message: Message, state: FSMContext, link: LinkedUser) -> None:
         await state.clear()
-        await _open_category_step(message, state)
+        await _open_category_step(message, state, is_tech=link.is_tech)
 
     # Persistent menu buttons work from any state (they restart / route the flow).
     @router.message(F.text == texts.BTN_NEW_TICKET)
-    async def btn_new_ticket(message: Message, state: FSMContext) -> None:
+    async def btn_new_ticket(message: Message, state: FSMContext, link: LinkedUser) -> None:
         await state.clear()
-        await _open_category_step(message, state)
+        await _open_category_step(message, state, is_tech=link.is_tech)
 
     # /cancel must be registered BEFORE the state text handlers, or the title/
     # description steps would swallow it as content (found by the FSM tests).
     @router.message(StateFilter(NewTicket), Command("cancel"))
-    async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    async def cmd_cancel(message: Message, state: FSMContext, link: LinkedUser) -> None:
         await state.clear()
-        await message.answer(texts.NEW_CANCELLED, reply_markup=main_menu_keyboard())
+        await message.answer(
+            texts.NEW_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+        )
 
     # Steps that wait for a button press: don't ignore typed text silently.
     @router.message(
@@ -382,7 +392,7 @@ def build_new_ticket_router(
         await state.clear()
         await cb.message.answer(
             texts.ticket_created(ticket_id, _ticket_url(ticket_id)),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(is_tech=link.is_tech),
         )
         if files and uploaded < len(files):
             await cb.message.answer(texts.attachments_partial_failure(uploaded, len(files)))
