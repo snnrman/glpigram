@@ -7,9 +7,8 @@ import re
 
 # --- /start + main menu ---
 START_GREETING = (
-    "Hello! This is GLPIgram — your support bot.\n"
-    "Create tickets and track their status right here.\n\n"
-    "Pick an action on the keyboard below or send /new."
+    "Hello! This is GLPIgram — the tech-support bot.\n"
+    "Press “🆕 New ticket” to create a ticket, or “📋 My tickets” to see yours."
 )
 # Reply-keyboard buttons (persistent main menu).
 BTN_NEW_TICKET = "🆕 New ticket"
@@ -25,9 +24,9 @@ CMD_TICKETS_DESCRIPTION = "My tickets"
 
 # --- account linking (feature 2) ---
 LINK_WELCOME = (
-    "Hello! This is GLPIgram — your support bot.\n"
-    "To get started, link your work account.\n\n"
-    "Send your last and first name, or your work login (the one you use for Windows sign-in)."
+    "Hi! This is GLPIgram — the tech-support bot.\n"
+    "To create tickets you need to sign in — send your work login "
+    "(as for Windows sign-in) or your first and last name."
 )
 LINK_ASK_LOGIN = "Send your work login (as for Windows sign-in):"
 LINK_USER_NOT_FOUND = (

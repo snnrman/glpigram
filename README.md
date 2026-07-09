@@ -100,7 +100,7 @@ under systemd). See [.env.example](.env.example).
 | `WORK_DAYS` | — | `1-5` | Working ISO weekdays, Mon=1..Sun=7 |
 | `QUIET_MIN_URGENCY` | — | `4` | Off-hours: urgency ≥ this bypasses the quiet queue (GLPI scale 1–5) |
 | `BOT_LANGUAGE` | — | `ru` | UI language: `ru` or `en` |
-| `WELCOME_MESSAGE` | — | — | Custom /start greeting, used verbatim in both languages; HTML allowed, `\n` for line breaks |
+| `WELCOME_MESSAGE` | — | — | Custom /start greeting for linked users (unlinked always get the sign-in prompt); verbatim in both languages, HTML allowed, `\n` for line breaks |
 | `CATEGORY_CACHE_TTL` | — | `600` | Category list cache, seconds |
 | `DB_PATH` | — | `/var/lib/glpi-tgbot/glpi-tgbot.sqlite3` | SQLite database path |
 | `LOG_LEVEL` | — | `INFO` | Logging level |

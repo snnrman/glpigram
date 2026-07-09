@@ -205,17 +205,16 @@ async def test_confirm_outside_tech_group_is_refused(repo):
     assert texts.CB_TECH_GROUP_ONLY in bot.toasts
 
 
-async def test_start_uses_welcome_message_when_set(repo, monkeypatch):
-    monkeypatch.setenv("WELCOME_MESSAGE", "Кастомное <b>приветствие</b>.\\nСтрока два.")
+async def test_start_unlinked_ignores_welcome_message(repo, monkeypatch):
+    # WELCOME_MESSAGE is for LINKED users only: an unlinked user must always
+    # get the sign-in prompt (a "create tickets" welcome would mislead them).
+    monkeypatch.setenv("WELCOME_MESSAGE", "Кастомное <b>приветствие</b>.")
     dp, ctx = _harness(repo, _client())
     bot = FakeBot()
     await dp.feed_update(bot, _user_msg(bot, 1, "/start"))
     msgs = _chat_msgs(bot, USER_CHAT)
-    # verbatim custom text (with rendered \n), then the functional login prompt
-    assert msgs[0] == "Кастомное <b>приветствие</b>.\nСтрока два."
-    assert texts.LINK_ASK_LOGIN in msgs
-    assert texts.LINK_WELCOME not in msgs
-    assert await ctx.get_state() == Linking.awaiting_login  # flow intact
+    assert msgs == [texts.LINK_WELCOME]  # auth text, custom ignored
+    assert await ctx.get_state() == Linking.awaiting_login  # straight into linking
 
 
 async def test_start_linked_uses_welcome_message_when_set(repo, monkeypatch):
@@ -234,3 +233,13 @@ async def test_start_falls_back_to_default_when_unset(repo, monkeypatch):
     bot = FakeBot()
     await dp.feed_update(bot, _user_msg(bot, 1, "/start"))
     assert _chat_msgs(bot, USER_CHAT) == [texts.LINK_WELCOME]
+
+
+async def test_start_linked_without_welcome_uses_default_greeting(repo):
+    await repo.upsert_link(tg_id=USER_CHAT, glpi_users_id=1, display_name="U", is_tech=False, now=0)
+    dp, ctx = _harness(repo, _client())
+    bot = FakeBot()
+    await dp.feed_update(bot, _user_msg(bot, 1, "/start"))
+    assert _chat_msgs(bot, USER_CHAT) == [texts.START_GREETING]
+    assert "🆕 Новая заявка" in texts.START_GREETING  # points at the menu buttons
+    assert await ctx.get_state() is None  # no linking FSM for linked users
