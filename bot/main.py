@@ -79,7 +79,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
     # FSM-state and menu-button handlers win over the /new free-text fallback.
     cards = CardService(repo, front_base=settings.glpi_front_base)
     tech = build_tech_actions_router(
-        client, tech_group_chat_id=settings.tech_group_chat_id, cards=cards
+        client, tech_group_chat_id=settings.tech_group_chat_id, cards=cards, repo=repo
     )
     my_tickets = build_my_tickets_router(
         client,

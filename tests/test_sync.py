@@ -69,6 +69,7 @@ class FakeClient:
         self.requesters = requesters or {}  # ticket_id -> (glpi_id, name)
         self.documents = documents or {}  # ticket_id -> list[Document]
         self.blobs = {}  # document_id -> bytes
+        self.solutions = {}  # ticket_id -> (tech_name, text)
 
     async def list_recent_tickets(self, *, limit=100):
         return list(self.recent)
@@ -90,6 +91,9 @@ class FakeClient:
 
     async def get_user(self, user_id):
         return None  # card history then shows an author-less comment line
+
+    async def get_ticket_solution(self, ticket_id):
+        return self.solutions.get(ticket_id)  # (tech_name, text) or None
 
 
 @pytest.fixture
@@ -580,3 +584,62 @@ async def test_sync_followup_edits_card_without_group_ping(repo):
     # a comment by the team (sync filters out the requester's own) is
     # history-only: no self-ping into the group
     assert not any(c == TECH_CHAT and "Новый комментарий" in t for c, t in bot.sent)
+
+
+# --- solution text reaches the requester ---------------------------------------
+async def test_web_solved_notifies_requester_with_solution_text(repo):
+    bot = FakeBot()
+    client = FakeClient(tickets={10: _ticket(10, status=5)})
+    client.solutions[10] = ("Техник", "почищен кэш принтера")
+    await repo.track_ticket(
+        ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    to_requester = [t for c, t in bot.sent if c == REQUESTER_TG]
+    assert to_requester == [
+        "✅ Ваша заявка №10 решена — Техник: почищен кэш принтера"
+    ]  # solution text, not a bare status line
+
+
+async def test_web_solved_without_solution_falls_back_to_status_change(repo):
+    bot = FakeBot()
+    client = FakeClient(tickets={10: _ticket(10, status=5)})  # no solution recorded
+    await repo.track_ticket(
+        ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    to_requester = [t for c, t in bot.sent if c == REQUESTER_TG]
+    assert len(to_requester) == 1 and "статус изменён" in to_requester[0]
+
+
+async def test_solved_to_closed_transition_is_a_plain_status_change(repo):
+    # 5 -> 6: the solution was already delivered when it became solved.
+    bot = FakeBot()
+    client = FakeClient(tickets={10: _ticket(10, status=6)})
+    client.solutions[10] = ("Техник", "почищен кэш")
+    await repo.track_ticket(
+        ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    await repo.set_ticket_status(10, status=5, active=True)  # already solved & notified
+
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    to_requester = [t for c, t in bot.sent if c == REQUESTER_TG]
+    assert len(to_requester) == 1 and "статус изменён" in to_requester[0]
+    assert "почищен кэш" not in to_requester[0]
+
+
+async def test_bot_closed_ticket_not_renotified_by_sync(repo):
+    # The bot-close path bumps last_status to 5 right after notifying the
+    # requester itself -> the next sync tick must stay silent.
+    bot = FakeBot()
+    client = FakeClient(tickets={10: _ticket(10, status=5)})
+    client.solutions[10] = ("Техник", "решение")
+    await repo.track_ticket(
+        ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    await repo.set_ticket_status(10, status=5, active=True)  # what on_solution_text does
+
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert [t for c, t in bot.sent if c == REQUESTER_TG] == []  # no duplicate

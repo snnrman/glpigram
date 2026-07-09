@@ -29,7 +29,13 @@ from aiogram import Bot
 
 from .. import texts, timeutil
 from ..db.repo import Repo, TrackedTicket
-from ..glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, GlpiClient, GlpiError
+from ..glpi.client import (
+    TICKET_STATUS_CLOSED,
+    TICKET_STATUS_NEW,
+    TICKET_STATUS_SOLVED,
+    GlpiClient,
+    GlpiError,
+)
 from ..schedule import WorkSchedule
 from . import notify
 from .cards import CardService
@@ -245,6 +251,25 @@ class SyncService:
             )
         return await self._send_new_card(ticket)
 
+    async def _notify_solved(self, row: TrackedTicket, ticket) -> None:
+        """Solution text + author when available; plain status change otherwise."""
+        solution = None
+        try:
+            solution = await self._client.get_ticket_solution(ticket.id)
+        except GlpiError as exc:
+            log.warning("sync_solution_lookup_failed id=%s error=%s", ticket.id, exc)
+        if solution is None:
+            await notify.notify_status_change(
+                self._bot, row.requester_tg_id, ticket, self._ticket_url(ticket.id)
+            )
+            return
+        tech_name, content = solution
+        await notify.send_text(
+            self._bot,
+            row.requester_tg_id,
+            texts.solved_notice(ticket_id=ticket.id, tech_name=tech_name, solution=content),
+        )
+
     async def _author_name(self, user_id: int, cache: dict) -> str | None:
         if not user_id:
             return None
@@ -294,9 +319,15 @@ class SyncService:
             return
 
         if ticket.status != row.last_status:
-            await notify.notify_status_change(
-                self._bot, row.requester_tg_id, ticket, self._ticket_url(ticket.id)
-            )
+            done = (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED)
+            if ticket.status in done and row.last_status not in done:
+                # Solved/closed from the GLPI web UI: the requester deserves the
+                # actual solution text, not a bare "status changed".
+                await self._notify_solved(row, ticket)
+            else:
+                await notify.notify_status_change(
+                    self._bot, row.requester_tg_id, ticket, self._ticket_url(ticket.id)
+                )
             # Reflect it on the living card too; skip when a button action
             # already recorded this exact state (no duplicate history line).
             await self._cards.record_event(

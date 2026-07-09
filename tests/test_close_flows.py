@@ -275,3 +275,23 @@ async def test_requester_comment_pings_group_once_plus_history(env):
     # ...plus exactly ONE short reply ping to the group
     group_msgs = [t for c, t in bot.sent if c == GROUP]
     assert group_msgs == [texts.reply_new_comment(TICKET)]
+
+
+async def test_bot_close_notifies_requester_with_solution_immediately(env):
+    dp, client, repo = env
+    await _seed_card(repo)
+    # the ticket was created via the bot -> the requester is known
+    await repo.track_ticket(
+        ticket_id=TICKET, requester_tg_id=REQUESTER_ID, requester_glpi_id=8, status=1, now=0
+    )
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:close:{TICKET}"))
+    await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "заменил картридж"))
+
+    # the requester gets the solution text right away — not a bare status line
+    to_requester = [t for c, t in bot.sent if c == REQUESTER_ID]
+    assert to_requester == ["✅ Ваша заявка №5 решена — Техник: заменил картридж"]
+    # and the tracked status is bumped so the sync loop won't send a duplicate
+    tracked = await repo.get_tracked_ticket(TICKET)
+    assert tracked.last_status == 5

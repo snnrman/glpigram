@@ -654,6 +654,30 @@ class GlpiClient:
         )
         return _extract_id(resp)
 
+    async def get_ticket_solution(self, ticket_id: int) -> tuple[str | None, str] | None:
+        """The latest ITILSolution of a ticket as ``(author_name, content)``.
+
+        Used to include the actual solution text in the requester notification
+        when a ticket is solved/closed from the GLPI web UI.
+        """
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/ITILSolution", idempotent=True)
+        rows = resp.json()
+        if not isinstance(rows, list) or not rows:
+            return None
+        last = max(rows, key=lambda r: int(r.get("id", 0) or 0))
+        content = str(last.get("content") or "").strip()
+        if not content:
+            return None
+        name = None
+        uid = int(last.get("users_id", 0) or 0)
+        if uid:
+            try:
+                user = await self.get_user(uid)
+                name = user.display_name if user else None
+            except GlpiError:
+                pass
+        return name, content
+
     async def add_solution(self, ticket_id: int, content: str) -> int:
         """Add an ITILSolution to a ticket (moves it to *solved*); returns its id."""
         resp = await self._request(

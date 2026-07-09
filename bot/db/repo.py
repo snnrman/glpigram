@@ -244,6 +244,13 @@ class Repo:
                 (ticket_id, requester_tg_id, requester_glpi_id, status, now),
             )
 
+    async def get_tracked_ticket(self, ticket_id: int) -> TrackedTicket | None:
+        async with self._conn.execute(
+            "SELECT * FROM bot_tickets WHERE ticket_id = ?", (ticket_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return TrackedTicket._from_row(row) if row else None
+
     async def active_tracked_tickets(self) -> list[TrackedTicket]:
         async with self._conn.execute(
             "SELECT * FROM bot_tickets WHERE active = 1 ORDER BY ticket_id"
