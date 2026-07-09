@@ -145,19 +145,17 @@ def build_linking_router(
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await state.clear()
-        custom = texts.custom_welcome()  # WELCOME_MESSAGE overrides the default
         link = await repo.get_by_tg(message.from_user.id)
         if link is not None:
+            # WELCOME_MESSAGE replaces the greeting for LINKED users only.
+            custom = texts.custom_welcome()
             await message.answer(custom or texts.START_GREETING, reply_markup=main_menu_keyboard())
             return
+        # Unlinked users always get the sign-in prompt — a custom welcome about
+        # "create tickets" would mislead someone who can't create them yet —
+        # and land straight in the linking FSM, no extra taps.
         await state.set_state(Linking.awaiting_login)
-        if custom:
-            # Verbatim operator text, then the functional login prompt so the
-            # linking flow still explains itself.
-            await message.answer(custom)
-            await message.answer(texts.LINK_ASK_LOGIN)
-        else:
-            await message.answer(texts.LINK_WELCOME)
+        await message.answer(texts.LINK_WELCOME)
 
     async def _send_link_request(bot: Bot, requester, user) -> bool:
         """Post the admin confirmation card into the tech group. Returns success."""
