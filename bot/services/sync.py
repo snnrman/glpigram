@@ -251,6 +251,28 @@ class SyncService:
             )
         return await self._send_new_card(ticket)
 
+    async def _propose_solution(self, row: TrackedTicket, ticket) -> None:
+        """Web-solved ticket: solution text (when any) + confirm/return buttons."""
+        author_uid, tech_name, content = 0, None, ""
+        try:
+            solution = await self._client.get_ticket_solution(ticket.id)
+            if solution is not None:
+                author_uid, tech_name, content = solution
+        except GlpiError as exc:
+            log.warning("sync_solution_lookup_failed id=%s error=%s", ticket.id, exc)
+        await notify.send_text(
+            self._bot,
+            row.requester_tg_id,
+            texts.solution_proposed(ticket_id=ticket.id, tech_name=tech_name, solution=content),
+            reply_markup=notify.solution_confirm_keyboard(ticket.id),
+        )
+        # Remember the solver so a return-to-work can ping them directly.
+        if tech_name:
+            solver_link = await self._repo.get_by_glpi(author_uid) if author_uid else None
+            await self._repo.set_solver(
+                ticket.id, tg_id=solver_link.tg_id if solver_link else None, name=tech_name
+            )
+
     async def _notify_solved(self, row: TrackedTicket, ticket) -> None:
         """Solution text + author when available; plain status change otherwise."""
         solution = None
@@ -263,7 +285,7 @@ class SyncService:
                 self._bot, row.requester_tg_id, ticket, self._ticket_url(ticket.id)
             )
             return
-        tech_name, content = solution
+        _, tech_name, content = solution
         await notify.send_text(
             self._bot,
             row.requester_tg_id,
@@ -320,9 +342,13 @@ class SyncService:
 
         if ticket.status != row.last_status:
             done = (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED)
-            if ticket.status in done and row.last_status not in done:
-                # Solved/closed from the GLPI web UI: the requester deserves the
-                # actual solution text, not a bare "status changed".
+            if ticket.status == TICKET_STATUS_SOLVED and row.last_status not in done:
+                # Solved from the GLPI web UI: propose the solution to the
+                # requester with confirm/return buttons (ITIL cycle).
+                await self._propose_solution(row, ticket)
+            elif ticket.status == TICKET_STATUS_CLOSED and row.last_status not in done:
+                # Closed outright (no confirmation step possible anymore): the
+                # requester still deserves the solution text when there is one.
                 await self._notify_solved(row, ticket)
             else:
                 await notify.notify_status_change(

@@ -391,3 +391,22 @@ class Repo:
                 """,
                 (status, taken_by, history, last_followup_id, ticket_id),
             )
+
+    # -- solution cycle (ITIL): who solved, for return-to-work pings --------
+    async def set_solver(self, ticket_id: int, *, tg_id: int | None, name: str) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO ticket_solvers (ticket_id, tg_id, name) VALUES (?, ?, ?)
+                ON CONFLICT(ticket_id) DO UPDATE SET tg_id = excluded.tg_id,
+                                                     name = excluded.name
+                """,
+                (ticket_id, tg_id, name),
+            )
+
+    async def get_solver(self, ticket_id: int) -> tuple[int | None, str] | None:
+        async with self._conn.execute(
+            "SELECT tg_id, name FROM ticket_solvers WHERE ticket_id = ?", (ticket_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return (row["tg_id"], row["name"]) if row else None

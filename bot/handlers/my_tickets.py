@@ -32,6 +32,7 @@ from ..glpi.client import (
     OPEN_TICKET_STATUSES,
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_NEW,
+    TICKET_STATUS_PROCESSING_ASSIGNED,
     GlpiClient,
     GlpiError,
 )
@@ -48,6 +49,7 @@ _MAX_FOLLOWUPS = 5
 class MyTickets(StatesGroup):
     commenting = State()
     closing = State()
+    returning = State()  # reason for returning a solved ticket to work
 
 
 def _list_keyboard(summaries: list[TicketSummary]) -> InlineKeyboardMarkup:
@@ -393,6 +395,94 @@ def build_my_tickets_router(
     @router.message(MyTickets.closing)
     async def on_close_not_text(message: Message) -> None:
         await message.answer(texts.MYT_CLOSE_PROMPT, reply_markup=_close_prompt_keyboard())
+
+    # -- ITIL solution cycle: requester confirms or returns to work ---------
+    async def _own_tracked(cb: CallbackQuery, ticket_id: int):
+        """The tracked row, but only if the presser is that ticket's requester."""
+        tracked = await repo.get_tracked_ticket(ticket_id)
+        if tracked is None or tracked.requester_tg_id != cb.from_user.id:
+            await cb.answer(texts.STALE_BUTTON, show_alert=True)
+            return None
+        return tracked
+
+    @router.callback_query(F.data.startswith("rs:ok:"))
+    async def on_solution_confirm(cb: CallbackQuery, bot: Bot) -> None:
+        ticket_id = int(cb.data.split(":")[2])
+        tracked = await _own_tracked(cb, ticket_id)
+        if tracked is None:
+            return
+        await cb.answer()
+        try:
+            await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
+        except GlpiError as exc:
+            log.warning("solution_confirm_failed id=%s error=%s", ticket_id, exc)
+            await _show(cb, texts.GLPI_ERROR, None)
+            return
+        await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
+        await _show(cb, texts.closed_thanks(ticket_id), None)  # buttons gone
+        handled = cards is not None and await cards.record_event(
+            bot,
+            ticket_id,
+            texts.hist_confirmed(),
+            status=TICKET_STATUS_CLOSED,
+            reply=texts.reply_confirmed(ticket_id),
+        )
+        if not handled and tech_group_chat_id is not None:
+            await notify.send_text(bot, tech_group_chat_id, texts.reply_confirmed(ticket_id))
+
+    @router.callback_query(F.data.startswith("rs:back:"))
+    async def on_solution_return(cb: CallbackQuery, state: FSMContext) -> None:
+        ticket_id = int(cb.data.split(":")[2])
+        if await _own_tracked(cb, ticket_id) is None:
+            return
+        await state.set_state(MyTickets.returning)
+        await state.update_data(return_ticket_id=ticket_id)
+        await _show(cb, texts.ask_return_reason(ticket_id), None)
+        await cb.answer()
+
+    @router.message(MyTickets.returning, F.text)
+    async def on_return_reason(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
+        ticket_id = (await state.get_data())["return_ticket_id"]
+        reason = message.text.strip()
+        try:
+            followup_id = await client.add_followup(ticket_id, f"{link.display_name}:\n{reason}")
+            await client.set_ticket_status(ticket_id, TICKET_STATUS_PROCESSING_ASSIGNED)
+        except GlpiError as exc:
+            log.warning("solution_return_failed id=%s error=%s", ticket_id, exc)
+            await message.answer(texts.GLPI_ERROR)  # stay in state to retry
+            return
+        await state.clear()
+        # No echo of the requester's own reason; sync must not re-notify the
+        # status flip they caused themselves.
+        try:
+            await repo.set_ticket_followup_cursor(ticket_id, followup_id)
+            await repo.set_ticket_status(
+                ticket_id, status=TICKET_STATUS_PROCESSING_ASSIGNED, active=True
+            )
+        except Exception:  # noqa: BLE001 - untracked ticket / DB hiccup is non-fatal
+            log.exception("solution_return_bookkeeping_failed id=%s", ticket_id)
+        await message.answer(texts.RETURNED_ACK)
+        ping = texts.returned_to_work(ticket_id, reason)
+        # DM the technician who proposed the solution, when we know them.
+        solver = await repo.get_solver(ticket_id)
+        if solver and solver[0]:
+            await notify.send_text(bot, solver[0], ping)
+        handled = cards is not None and await cards.record_event(
+            bot,
+            ticket_id,
+            texts.hist_returned(),
+            status=TICKET_STATUS_PROCESSING_ASSIGNED,
+            followup_id=followup_id,
+            reply=ping,
+        )
+        if not handled and tech_group_chat_id is not None:
+            await notify.send_text(bot, tech_group_chat_id, ping)
+
+    @router.message(MyTickets.returning)
+    async def on_return_not_text(message: Message) -> None:
+        await message.answer(texts.NEW_EXPECT_TEXT)
 
     # -- remind about a ticket --------------------------------------------
     @router.callback_query(F.data.startswith("mt:remind:"))

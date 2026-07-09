@@ -84,12 +84,26 @@ async def test_reply_ping_is_a_reply_to_the_card(repo):
     assert reply_params.message_id == MSG_ID  # edit doesn't notify; the reply does
 
 
-async def test_closed_card_loses_all_buttons(repo):
+async def test_solved_card_keeps_reply_and_waiting_button(repo):
     cards, bot = _service(repo), FakeBot()
     await _register(repo, cards)
 
-    await cards.record_event(bot, TICKET, texts.hist_closed("Техник"), status=5)
-    assert bot.edits[0][3] is None  # no keyboard on a solved/closed card
+    await cards.record_event(bot, TICKET, texts.hist_solved("Техник"), status=5)
+    kb = bot.edits[0][3]
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert data == [f"ta:comment:{TICKET}", f"ta:wait:{TICKET}"]  # no Close anymore
+
+
+async def test_closed_card_has_only_the_glpi_link_button(repo):
+    cards, bot = _service(repo), FakeBot()
+    await _register(repo, cards)
+
+    await cards.record_event(bot, TICKET, texts.hist_confirmed(), status=6)
+    kb = bot.edits[0][3]
+    buttons = [b for row in kb.inline_keyboard for b in row]
+    assert len(buttons) == 1
+    assert buttons[0].url == f"https://glpi.local/front/ticket.form.php?id={TICKET}"
+    assert buttons[0].callback_data is None
 
 
 async def test_no_card_returns_false_for_legacy_fallback(repo):

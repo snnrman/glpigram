@@ -265,10 +265,10 @@ def tech_card_solved(name: str) -> str:
     return f"✅ Closed by: {html.escape(name)}"
 
 
-def tech_closed_announcement(*, ticket_id: int, name: str, solution: str) -> str:
-    """Group message after a technician closes a ticket from the card."""
+def tech_solved_announcement(*, ticket_id: int, name: str, solution: str) -> str:
+    """Group message after a technician proposes a solution from the card."""
     body = html.escape(clean_glpi_text(solution, limit=500))
-    return f"✅ <b>Ticket #{ticket_id} closed by {html.escape(name)}:</b>\n{body}"
+    return f"✅ <b>{html.escape(name)} proposed a solution for ticket #{ticket_id}:</b>\n{body}"
 
 
 # --- quiet hours / off-hours (feature: quiet hours) ---
@@ -508,10 +508,6 @@ def hist_status(status: int) -> str:
     return f"🔄 {ticket_status_label(status)}"
 
 
-def hist_closed(name: str) -> str:
-    return f"✅ Closed by: {html.escape(name)}"
-
-
 def hist_closed_by_requester() -> str:
     return "🔒 Closed by the requester"
 
@@ -525,3 +521,51 @@ def solved_notice(*, ticket_id: int, tech_name: str | None, solution: str) -> st
     body = html.escape(clean_glpi_text(solution, limit=800))
     who = f" — {html.escape(tech_name)}" if tech_name else ""
     return f"✅ Your ticket #{ticket_id} has been solved{who}: {body}"
+
+
+# --- ITIL solution cycle: solved -> requester confirms or returns to work ---
+BTN_CONFIRM_SOLUTION = "✅ Confirm"
+BTN_RETURN_TO_WORK = "↩️ Return to work"
+# Full-width row on a solved card; length is fine.
+BTN_TECH_WAITING = "⏳ Solved, awaiting confirmation"
+WAITING_TOAST = "A solution has been proposed — waiting for the requester to confirm."
+RETURNED_ACK = "↩️ The ticket has been returned to work."
+
+
+def solution_proposed(*, ticket_id: int, tech_name: str | None, solution: str) -> str:
+    """Requester prompt: the solution text + confirm/return buttons follow."""
+    who = f" — {html.escape(tech_name)}" if tech_name else ""
+    head = f"✅ A solution has been proposed for ticket #{ticket_id}{who}"
+    body = html.escape(clean_glpi_text(solution, limit=800)) if solution else ""
+    if body:
+        head += f": {body}"
+    return head + "\n\nIs the problem solved?"
+
+
+def closed_thanks(ticket_id: int) -> str:
+    return f"Ticket #{ticket_id} is closed, thank you!"
+
+
+def ask_return_reason(ticket_id: int) -> str:
+    return f"Describe what is still unresolved in ticket #{ticket_id}:"
+
+
+def returned_to_work(ticket_id: int, reason: str) -> str:
+    body = html.escape(clean_glpi_text(reason, limit=500))
+    return f"↩️ The requester returned ticket #{ticket_id} to work: {body}"
+
+
+def reply_confirmed(ticket_id: int) -> str:
+    return f"👍 The requester confirmed the solution of ticket #{ticket_id}"
+
+
+def hist_solved(name: str) -> str:
+    return f"✅ Solution proposed: {html.escape(name)}"
+
+
+def hist_confirmed() -> str:
+    return "👍 Requester confirmed the solution"
+
+
+def hist_returned() -> str:
+    return "↩️ Returned to work by the requester"

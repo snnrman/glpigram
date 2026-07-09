@@ -73,3 +73,12 @@ CREATE TABLE IF NOT EXISTS ticket_cards (
     last_followup_id  INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL DEFAULT 0
 );
+
+-- Who proposed the solution (ITIL cycle): lets the bot DM the right technician
+-- when the requester returns a solved ticket to work. tg_id is NULL when the
+-- solver has no Telegram link (solved from the GLPI web UI by an unlinked user).
+CREATE TABLE IF NOT EXISTS ticket_solvers (
+    ticket_id INTEGER PRIMARY KEY,
+    tg_id     INTEGER,
+    name      TEXT NOT NULL DEFAULT ''
+);

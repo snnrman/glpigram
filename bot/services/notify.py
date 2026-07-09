@@ -87,9 +87,11 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> Message | None:
     return None  # pragma: no cover - loop always returns
 
 
-async def send_text(bot: Bot, chat_id: int, text: str) -> Message | None:
+async def send_text(
+    bot: Bot, chat_id: int, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
+) -> Message | None:
     """Best-effort plain message (e.g. the deferred-batch header)."""
-    return await _send(bot, chat_id, text)
+    return await _send(bot, chat_id, text, reply_markup=reply_markup)
 
 
 async def safe_edit(cb: CallbackQuery, text: str, reply_markup=None) -> bool:
@@ -205,6 +207,42 @@ def tech_ticket_keyboard_taken(ticket_id: int) -> InlineKeyboardMarkup:
                     text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}"
                 ),
             ]
+        ]
+    )
+
+
+def tech_ticket_keyboard_solved(ticket_id: int) -> InlineKeyboardMarkup:
+    """Solved card: Reply stays; Close becomes a passive "awaiting confirmation"."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_COMMENT, callback_data=f"ta:comment:{ticket_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_WAITING, callback_data=f"ta:wait:{ticket_id}"
+                )
+            ],
+        ]
+    )
+
+
+def solution_confirm_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    """Requester's prompt under a proposed solution: confirm or return to work."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_CONFIRM_SOLUTION, callback_data=f"rs:ok:{ticket_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_RETURN_TO_WORK, callback_data=f"rs:back:{ticket_id}"
+                )
+            ],
         ]
     )
 

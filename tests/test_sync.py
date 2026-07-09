@@ -590,7 +590,7 @@ async def test_sync_followup_edits_card_without_group_ping(repo):
 async def test_web_solved_notifies_requester_with_solution_text(repo):
     bot = FakeBot()
     client = FakeClient(tickets={10: _ticket(10, status=5)})
-    client.solutions[10] = ("Техник", "почищен кэш принтера")
+    client.solutions[10] = (42, "Техник", "почищен кэш принтера")
     await repo.track_ticket(
         ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
     )
@@ -598,11 +598,11 @@ async def test_web_solved_notifies_requester_with_solution_text(repo):
     await _service(bot, client, repo)._poll_tracked_tickets()
     to_requester = [t for c, t in bot.sent if c == REQUESTER_TG]
     assert to_requester == [
-        "✅ Ваша заявка №10 решена — Техник: почищен кэш принтера"
-    ]  # solution text, not a bare status line
+        "✅ По заявке №10 предложено решение — Техник: почищен кэш принтера\n\nПроблема решена?"
+    ]  # the ITIL proposal with buttons, not a bare status line
 
 
-async def test_web_solved_without_solution_falls_back_to_status_change(repo):
+async def test_web_solved_without_solution_still_asks_for_confirmation(repo):
     bot = FakeBot()
     client = FakeClient(tickets={10: _ticket(10, status=5)})  # no solution recorded
     await repo.track_ticket(
@@ -611,14 +611,14 @@ async def test_web_solved_without_solution_falls_back_to_status_change(repo):
 
     await _service(bot, client, repo)._poll_tracked_tickets()
     to_requester = [t for c, t in bot.sent if c == REQUESTER_TG]
-    assert len(to_requester) == 1 and "статус изменён" in to_requester[0]
+    assert len(to_requester) == 1 and "Проблема решена?" in to_requester[0]
 
 
 async def test_solved_to_closed_transition_is_a_plain_status_change(repo):
     # 5 -> 6: the solution was already delivered when it became solved.
     bot = FakeBot()
     client = FakeClient(tickets={10: _ticket(10, status=6)})
-    client.solutions[10] = ("Техник", "почищен кэш")
+    client.solutions[10] = (42, "Техник", "почищен кэш")
     await repo.track_ticket(
         ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
     )
@@ -635,7 +635,7 @@ async def test_bot_closed_ticket_not_renotified_by_sync(repo):
     # requester itself -> the next sync tick must stay silent.
     bot = FakeBot()
     client = FakeClient(tickets={10: _ticket(10, status=5)})
-    client.solutions[10] = ("Техник", "решение")
+    client.solutions[10] = (42, "Техник", "решение")
     await repo.track_ticket(
         ticket_id=10, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
     )
