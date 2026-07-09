@@ -78,25 +78,32 @@ def link_name_pick_one(glpi_name: str) -> str:
 def link_request(*, tg_id: int, tg_name: str, login: str, glpi_name: str, glpi_id: int) -> str:
     return (
         "🔗 <b>Запрос на привязку аккаунта</b>\n\n"
-        f"Telegram: {tg_name} (id <code>{tg_id}</code>)\n"
-        f"GLPI: <b>{glpi_name}</b> (логин <code>{login}</code>, id {glpi_id})\n\n"
+        f"Telegram: {html.escape(tg_name)} (id <code>{tg_id}</code>)\n"
+        f"GLPI: <b>{html.escape(glpi_name)}</b> "
+        f"(логин <code>{html.escape(login)}</code>, id {glpi_id})\n\n"
         "Подтвердить привязку?"
     )
 
 
 def link_request_resolved(*, glpi_name: str, login: str, approved: bool, by: str) -> str:
     head = "✅ Привязка подтверждена" if approved else "❌ Привязка отклонена"
-    return f"{head}\n{glpi_name} (логин <code>{login}</code>)\nОбработал: {by}"
+    return (
+        f"{head}\n{html.escape(glpi_name)} (логин <code>{html.escape(login)}</code>)\n"
+        f"Обработал: {html.escape(by)}"
+    )
 
 
 def admin_link_ok(*, tg_id: int, glpi_name: str, login: str) -> str:
-    return f"✅ Привязано: id <code>{tg_id}</code> → {glpi_name} (логин <code>{login}</code>)."
+    return (
+        f"✅ Привязано: id <code>{tg_id}</code> → {html.escape(glpi_name)} "
+        f"(логин <code>{html.escape(login)}</code>)."
+    )
 
 
 def admin_unlink_result(*, login: str, removed: bool) -> str:
     if removed:
-        return f"✅ Привязка для логина <code>{login}</code> удалена."
-    return f"Активная привязка для логина <code>{login}</code> не найдена."
+        return f"✅ Привязка для логина <code>{html.escape(login)}</code> удалена."
+    return f"Активная привязка для логина <code>{html.escape(login)}</code> не найдена."
 
 
 # --- /new dialog ---
@@ -183,10 +190,7 @@ USE_BUTTONS = "Пожалуйста, воспользуйтесь кнопкам
 
 
 def ticket_created(ticket_id: int, url: str | None) -> str:
-    line = f"✅ Заявка №{ticket_id} создана."
-    if url:
-        line += f"\n{url}"
-    return line
+    return f"✅ Заявка {_ticket_ref(ticket_id, url)} создана."
 
 
 def urgency_label(urgency: int) -> str:
@@ -204,10 +208,10 @@ def confirm_summary(
 ) -> str:
     lines = (
         f"{NEW_CONFIRM_HEADER}\n\n"
-        f"<b>Категория:</b> {category_name}\n"
+        f"<b>Категория:</b> {html.escape(category_name)}\n"
         f"<b>Срочность:</b> {urgency_label(urgency)}\n"
-        f"<b>Заголовок:</b> {title}\n"
-        f"<b>Описание:</b>\n{description}"
+        f"<b>Заголовок:</b> {html.escape(title)}\n"
+        f"<b>Описание:</b>\n{html.escape(description)}"
     )
     if attachments:
         lines += f"\n<b>Вложений:</b> {attachments}"
@@ -347,8 +351,10 @@ def clean_glpi_text(raw: str, *, limit: int = 1000) -> str:
     return text
 
 
-def _url_line(url: str | None) -> str:
-    return f"\n{url}" if url else ""
+def _ticket_ref(ticket_id: int, url: str | None) -> str:
+    """The ticket number, clickable when the GLPI url is known (HTML mode)."""
+    ref = f"№{ticket_id}"
+    return f'<a href="{url}">{ref}</a>' if url else ref
 
 
 def user_mention(name: str, tg_id: int | None) -> str:
@@ -394,20 +400,18 @@ def notify_new_ticket(
 
 def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | None) -> str:
     return (
-        f"🔔 <b>Заявка №{ticket_id}</b>: статус изменён\n"
+        f"🔔 <b>Заявка {_ticket_ref(ticket_id, url)}</b>: статус изменён\n"
         f"{html.escape(title)}\n"
         f"Новый статус: {ticket_status_label(status)}"
-        f"{_url_line(url)}"
     )
 
 
 def notify_followup(*, ticket_id: int, title: str, body: str, url: str | None) -> str:
     snippet = html.escape(clean_glpi_text(body))
     return (
-        f"💬 <b>Новый комментарий по заявке №{ticket_id}</b>\n"
+        f"💬 <b>Новый комментарий по заявке {_ticket_ref(ticket_id, url)}</b>\n"
         f"{html.escape(title)}\n\n"
         f"{snippet}"
-        f"{_url_line(url)}"
     )
 
 
@@ -487,13 +491,12 @@ def ticket_detail(
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
     return (
-        f"<b>Заявка №{ticket_id}</b>\n"
+        f"<b>Заявка {_ticket_ref(ticket_id, url)}</b>\n"
         f"{html.escape(title)}\n\n"
         f"Статус: {ticket_status_label(status)}\n"
         f"{urgency_row}"
         f"{_assignee_line(assignee)}\n\n"
         f"<b>Последние комментарии:</b>\n{body}"
-        f"{_url_line(url)}"
     )
 
 

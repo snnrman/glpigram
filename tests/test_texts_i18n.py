@@ -79,3 +79,43 @@ def test_urgency_line_full_scale_and_unknown():
     assert ru.urgency_line(9) == "Срочность: 9"  # unknown -> no crash
     assert en.urgency_line(4) == "🔴 Urgency: high"
     assert en.urgency_line(9) == "Urgency: 9"
+
+
+# --- clickable ticket links + escaping (no bare URLs in HTML mode) -------------
+URL = "https://glpi.local/front/ticket.form.php?id=49"
+
+
+def test_ticket_links_are_anchors_not_bare_urls():
+    for mod, ref in ((ru, "№49"), (en, "#49")):
+        created = mod.ticket_created(49, URL)
+        assert f'<a href="{URL}">{ref}</a>' in created
+        assert "\n" not in created  # no separate URL line anymore
+        status = mod.notify_status_change(ticket_id=49, title="t", status=2, url=URL)
+        follow = mod.notify_followup(ticket_id=49, title="t", body="x", url=URL)
+        detail = mod.ticket_detail(
+            ticket_id=49, title="t", status=2, assignee=None, followups=[], url=URL
+        )
+        for out in (created, status, follow, detail):
+            assert f'href="{URL}"' in out
+            assert f"\n{URL}" not in out and not out.endswith(URL)  # never bare
+
+
+def test_ticket_links_degrade_without_url():
+    assert ru.ticket_created(49, None) == "✅ Заявка №49 создана."
+    assert en.ticket_created(49, None) == "✅ Ticket #49 created."
+
+
+def test_user_supplied_text_is_escaped_in_html_messages():
+    hostile = "<b>Иван & Ко</b>"
+    for mod in (ru, en):
+        summary = mod.confirm_summary(hostile, 3, hostile, hostile)
+        request = mod.link_request(
+            tg_id=1, tg_name=hostile, glpi_id=2, glpi_name=hostile, login=hostile
+        )
+        resolved = mod.link_request_resolved(
+            approved=True, glpi_name=hostile, login=hostile, by=hostile
+        )
+        admin = mod.admin_link_ok(tg_id=1, glpi_name=hostile, login=hostile)
+        for out in (summary, request, resolved, admin):
+            assert "<b>Иван" not in out
+            assert "&lt;b&gt;Иван &amp; Ко&lt;/b&gt;" in out

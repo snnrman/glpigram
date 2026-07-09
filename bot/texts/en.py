@@ -74,25 +74,32 @@ def link_name_pick_one(glpi_name: str) -> str:
 def link_request(*, tg_id: int, tg_name: str, login: str, glpi_name: str, glpi_id: int) -> str:
     return (
         "🔗 <b>Account linking request</b>\n\n"
-        f"Telegram: {tg_name} (id <code>{tg_id}</code>)\n"
-        f"GLPI: <b>{glpi_name}</b> (login <code>{login}</code>, id {glpi_id})\n\n"
+        f"Telegram: {html.escape(tg_name)} (id <code>{tg_id}</code>)\n"
+        f"GLPI: <b>{html.escape(glpi_name)}</b> "
+        f"(login <code>{html.escape(login)}</code>, id {glpi_id})\n\n"
         "Confirm the link?"
     )
 
 
 def link_request_resolved(*, glpi_name: str, login: str, approved: bool, by: str) -> str:
     head = "✅ Link confirmed" if approved else "❌ Link rejected"
-    return f"{head}\n{glpi_name} (login <code>{login}</code>)\nHandled by: {by}"
+    return (
+        f"{head}\n{html.escape(glpi_name)} (login <code>{html.escape(login)}</code>)\n"
+        f"Handled by: {html.escape(by)}"
+    )
 
 
 def admin_link_ok(*, tg_id: int, glpi_name: str, login: str) -> str:
-    return f"✅ Linked: id <code>{tg_id}</code> → {glpi_name} (login <code>{login}</code>)."
+    return (
+        f"✅ Linked: id <code>{tg_id}</code> → {html.escape(glpi_name)} "
+        f"(login <code>{html.escape(login)}</code>)."
+    )
 
 
 def admin_unlink_result(*, login: str, removed: bool) -> str:
     if removed:
-        return f"✅ The link for login <code>{login}</code> has been removed."
-    return f"No active link found for login <code>{login}</code>."
+        return f"✅ The link for login <code>{html.escape(login)}</code> has been removed."
+    return f"No active link found for login <code>{html.escape(login)}</code>."
 
 
 # --- /new dialog ---
@@ -179,10 +186,7 @@ USE_BUTTONS = "Please use the buttons above."
 
 
 def ticket_created(ticket_id: int, url: str | None) -> str:
-    line = f"✅ Ticket #{ticket_id} created."
-    if url:
-        line += f"\n{url}"
-    return line
+    return f"✅ Ticket {_ticket_ref(ticket_id, url)} created."
 
 
 def urgency_label(urgency: int) -> str:
@@ -200,10 +204,10 @@ def confirm_summary(
 ) -> str:
     lines = (
         f"{NEW_CONFIRM_HEADER}\n\n"
-        f"<b>Category:</b> {category_name}\n"
+        f"<b>Category:</b> {html.escape(category_name)}\n"
         f"<b>Urgency:</b> {urgency_label(urgency)}\n"
-        f"<b>Title:</b> {title}\n"
-        f"<b>Description:</b>\n{description}"
+        f"<b>Title:</b> {html.escape(title)}\n"
+        f"<b>Description:</b>\n{html.escape(description)}"
     )
     if attachments:
         lines += f"\n<b>Attachments:</b> {attachments}"
@@ -334,8 +338,10 @@ def clean_glpi_text(raw: str, *, limit: int = 1000) -> str:
     return text
 
 
-def _url_line(url: str | None) -> str:
-    return f"\n{url}" if url else ""
+def _ticket_ref(ticket_id: int, url: str | None) -> str:
+    """The ticket number, clickable when the GLPI url is known (HTML mode)."""
+    ref = f"#{ticket_id}"
+    return f'<a href="{url}">{ref}</a>' if url else ref
 
 
 def user_mention(name: str, tg_id: int | None) -> str:
@@ -381,20 +387,18 @@ def notify_new_ticket(
 
 def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | None) -> str:
     return (
-        f"🔔 <b>Ticket #{ticket_id}</b>: status changed\n"
+        f"🔔 <b>Ticket {_ticket_ref(ticket_id, url)}</b>: status changed\n"
         f"{html.escape(title)}\n"
         f"New status: {ticket_status_label(status)}"
-        f"{_url_line(url)}"
     )
 
 
 def notify_followup(*, ticket_id: int, title: str, body: str, url: str | None) -> str:
     snippet = html.escape(clean_glpi_text(body))
     return (
-        f"💬 <b>New comment on ticket #{ticket_id}</b>\n"
+        f"💬 <b>New comment on ticket {_ticket_ref(ticket_id, url)}</b>\n"
         f"{html.escape(title)}\n\n"
         f"{snippet}"
-        f"{_url_line(url)}"
     )
 
 
@@ -475,13 +479,12 @@ def ticket_detail(
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
     return (
-        f"<b>Ticket #{ticket_id}</b>\n"
+        f"<b>Ticket {_ticket_ref(ticket_id, url)}</b>\n"
         f"{html.escape(title)}\n\n"
         f"Status: {ticket_status_label(status)}\n"
         f"{urgency_row}"
         f"{_assignee_line(assignee)}\n\n"
         f"<b>Recent comments:</b>\n{body}"
-        f"{_url_line(url)}"
     )
 
 
