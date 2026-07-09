@@ -179,6 +179,7 @@ BTN_CANCEL = "❌ Cancel"
 
 # --- errors / fallbacks ---
 STATS_TECH_ONLY = "📊 Statistics are available to technicians only."
+STATS_USERS_UNAVAILABLE = "👥 User statistics are temporarily unavailable."
 
 GLPI_ERROR = (
     "An error occurred while talking to GLPI. The ticket was not created — try again later."
@@ -601,3 +602,12 @@ def stats_summary(counts: dict[int, int]) -> str:
         if count
     )
     return f"📊 <b>Open tickets: {total}</b>\n\n{lines}"
+
+
+def stats_users_block(total: int, techs: int, recent: int) -> str:
+    """Linked-users section of /stats (counts from the bot's own SQLite)."""
+    return (
+        f"👥 <b>Users</b>\n"
+        f"Linked: <b>{total}</b> · technicians: <b>{techs}</b>\n"
+        f"New in 7 days: <b>{recent}</b>"
+    )

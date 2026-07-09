@@ -411,6 +411,22 @@ class Repo:
             row = await cur.fetchone()
         return (row["tg_id"], row["name"]) if row else None
 
+    async def user_stats(self, *, now: int) -> tuple[int, int, int]:
+        """Linked-user counters for /stats: (total, of them techs, linked last 7 days).
+
+        ``linked_at`` is a unix timestamp (like every date column here).
+        """
+        week_ago = now - 7 * 86400
+        async with self._conn.execute(
+            "SELECT COUNT(*) AS total,"
+            " COALESCE(SUM(is_tech), 0) AS techs,"
+            " COALESCE(SUM(linked_at >= ?), 0) AS recent"
+            " FROM users",
+            (week_ago,),
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row["total"]), int(row["techs"]), int(row["recent"])
+
     # -- unassigned-tickets reminder (anti-spam state) ----------------------
     async def get_last_unassigned_remind(self, ticket_id: int) -> int | None:
         async with self._conn.execute(

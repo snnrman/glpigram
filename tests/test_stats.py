@@ -83,7 +83,7 @@ async def env(tmp_path):
     client = AsyncMock()
     client.count_open_tickets_by_status.return_value = {1: 3, 2: 5, 5: 1}
     dp = build_dispatcher(client, repo, Settings())
-    yield dp, client
+    yield dp, client, repo
     await repo.close()
 
 
@@ -99,26 +99,54 @@ def _dm(bot, uid, from_id, text):
 
 
 async def test_tech_gets_stats_by_command(env):
-    dp, client = env
+    dp, client, _repo = env
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, TECH_ID, "/stats"))
     chat, text, markup = bot.sent[-1]
     assert chat == TECH_ID
-    assert text == texts.stats_summary({1: 3, 2: 5, 5: 1})
-    assert "9" in text  # total
+    assert text.startswith(texts.stats_summary({1: 3, 2: 5, 5: 1}))
+    assert "9" in text  # ticket total
+    # users section: 2 linked (both just now), 1 tech
+    assert text.endswith(texts.stats_users_block(2, 1, 2))
     # the reply re-renders the tech menu (role evaluated at render time)
     assert [b.text for b in markup.keyboard[-1]] == [texts.BTN_STATS]
 
 
 async def test_tech_gets_stats_by_menu_button(env):
-    dp, client = env
+    dp, client, _repo = env
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, TECH_ID, texts.BTN_STATS))
-    assert bot.sent[-1][1] == texts.stats_summary({1: 3, 2: 5, 5: 1})
+    assert texts.stats_users_block(2, 1, 2) in bot.sent[-1][1]
+
+
+async def test_old_links_drop_out_of_the_7_day_count(env):
+    dp, client, repo = env
+    old = int(time.time()) - 8 * 86400
+    await repo.upsert_link(
+        tg_id=3003, glpi_users_id=10, display_name="Старый", is_tech=False, now=old
+    )
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, TECH_ID, "/stats"))
+    assert texts.stats_users_block(3, 1, 2) in bot.sent[-1][1]  # total 3, recent still 2
+
+
+async def test_users_section_failure_is_logged_not_silent(env, caplog):
+    dp, client, repo = env
+    bot = FakeBot()
+
+    async def boom(**kwargs):
+        raise RuntimeError("no such column: linked_at")
+
+    repo.user_stats = boom
+    await dp.feed_update(bot, _dm(bot, 1, TECH_ID, "/stats"))
+    text = bot.sent[-1][1]
+    assert text.startswith(texts.stats_summary({1: 3, 2: 5, 5: 1}))  # tickets survive
+    assert texts.STATS_USERS_UNAVAILABLE in text  # section visibly degraded
+    assert any("stats_users_failed" in r.message for r in caplog.records)  # and logged
 
 
 async def test_regular_user_is_refused_even_by_direct_command(env):
-    dp, client = env
+    dp, client, _repo = env
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, USER_ID, "/stats"))
     assert bot.sent[-1][1] == texts.STATS_TECH_ONLY
@@ -126,7 +154,7 @@ async def test_regular_user_is_refused_even_by_direct_command(env):
 
 
 async def test_regular_user_typing_the_button_text_is_refused_too(env):
-    dp, client = env
+    dp, client, _repo = env
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, USER_ID, texts.BTN_STATS))
     assert bot.sent[-1][1] == texts.STATS_TECH_ONLY
