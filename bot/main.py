@@ -27,6 +27,7 @@ from .handlers.fallback import build_fallback_router, register_error_handler
 from .handlers.linking import build_linking_router
 from .handlers.my_tickets import build_my_tickets_router
 from .handlers.new_ticket import build_new_ticket_router
+from .handlers.stats import build_stats_router
 from .handlers.tech_actions import build_tech_actions_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
@@ -90,6 +91,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         schedule=schedule,
         cards=cards,
     )
+    stats = build_stats_router(client)
     business = build_new_ticket_router(
         client,
         category_cache,
@@ -98,7 +100,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         schedule=schedule,
         quiet_min_urgency=settings.quiet_min_urgency,
     )
-    for router in (tech, my_tickets, business):
+    for router in (tech, my_tickets, stats, business):
         router.message.middleware(auth)
         router.callback_query.middleware(auth)
         dp.include_router(router)

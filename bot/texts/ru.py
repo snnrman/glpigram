@@ -14,6 +14,7 @@ START_GREETING = (
 # Reply-keyboard buttons (persistent main menu).
 BTN_NEW_TICKET = "🆕 Новая заявка"
 BTN_MY_TICKETS = "📋 Мои заявки"
+BTN_STATS = "📊 Статистика"  # tech-only menu button -> /stats
 
 # --- free-text outside a dialog ---
 FREETEXT_OFFER = "Создать заявку с этим текстом в качестве описания?"
@@ -183,6 +184,8 @@ BTN_CONFIRM = "✅ Отправить"
 BTN_CANCEL = "❌ Отмена"
 
 # --- errors / fallbacks ---
+STATS_TECH_ONLY = "📊 Статистика доступна только техникам."
+
 GLPI_ERROR = "Произошла ошибка при обращении к GLPI. Заявка не создана — попробуйте ещё раз позже."
 GENERIC_ERROR = "Что-то пошло не так. Попробуйте ещё раз."
 STALE_BUTTON = "Кнопка устарела. Откройте меню заново."
@@ -597,3 +600,16 @@ def unassigned_line(ticket_id: int, title: str, hours: int) -> str:
 
 def btn_take_ticket(ticket_id: int) -> str:
     return f"🙋 Взять №{ticket_id}"
+
+
+def stats_summary(counts: dict[int, int]) -> str:
+    """Open-queue breakdown for /stats; ``counts`` maps GLPI status -> amount."""
+    total = sum(counts.values())
+    if not total:
+        return "📊 Открытых заявок нет 🎉"
+    lines = "\n".join(
+        f"{ticket_status_label(status)} — <b>{count}</b>"
+        for status, count in sorted(counts.items())
+        if count
+    )
+    return f"📊 <b>Открытые заявки: {total}</b>\n\n{lines}"

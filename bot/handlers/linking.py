@@ -149,7 +149,10 @@ def build_linking_router(
         if link is not None:
             # WELCOME_MESSAGE replaces the greeting for LINKED users only.
             custom = texts.custom_welcome()
-            await message.answer(custom or texts.START_GREETING, reply_markup=main_menu_keyboard())
+            await message.answer(
+                custom or texts.START_GREETING,
+                reply_markup=main_menu_keyboard(is_tech=link.is_tech),
+            )
             return
         # Unlinked users always get the sign-in prompt — a custom welcome about
         # "create tickets" would mislead someone who can't create them yet —
@@ -289,7 +292,7 @@ def build_linking_router(
         # Cards can sit in the group past Telegram's 48h edit limit (a weekend
         # request confirmed on Monday) — a failed edit must not swallow the
         # user notification or make the admin think the confirm failed.
-        await _notify_user(bot, tg_id, texts.LINK_CONFIRMED, with_menu=True)
+        await _notify_user(bot, tg_id, texts.LINK_CONFIRMED, menu_is_tech=is_tech)
         await notify.safe_edit(
             cb,
             texts.link_request_resolved(
@@ -314,7 +317,7 @@ def build_linking_router(
             login = user.name if user else ""
         except GlpiError:
             pass
-        await _notify_user(bot, tg_id, texts.LINK_REJECTED, with_menu=False)
+        await _notify_user(bot, tg_id, texts.LINK_REJECTED, menu_is_tech=None)
         await notify.safe_edit(
             cb,
             texts.link_request_resolved(
@@ -370,14 +373,16 @@ def build_linking_router(
         await message.answer(
             texts.admin_link_ok(tg_id=target_tg_id, glpi_name=user.display_name, login=user.name)
         )
-        await _notify_user(bot, target_tg_id, texts.LINK_CONFIRMED, with_menu=True)
+        await _notify_user(bot, target_tg_id, texts.LINK_CONFIRMED, menu_is_tech=is_tech)
 
-    async def _notify_user(bot: Bot, tg_id: int, text: str, *, with_menu: bool) -> None:
-        """Best-effort private message to the requesting user (they may have blocked the bot)."""
+    async def _notify_user(bot: Bot, tg_id: int, text: str, *, menu_is_tech: bool | None) -> None:
+        """Best-effort private message to the requesting user (they may have blocked the bot).
+
+        ``menu_is_tech``: None -> no menu keyboard, else the role for it.
+        """
         try:
-            await bot.send_message(
-                tg_id, text, reply_markup=main_menu_keyboard() if with_menu else None
-            )
+            markup = None if menu_is_tech is None else main_menu_keyboard(is_tech=menu_is_tech)
+            await bot.send_message(tg_id, text, reply_markup=markup)
         except Exception as exc:  # noqa: BLE001 - aiogram raises many send errors
             log.warning("notify_user_failed tg_id=%s error=%s", tg_id, exc)
 

@@ -13,6 +13,7 @@ START_GREETING = (
 # Reply-keyboard buttons (persistent main menu).
 BTN_NEW_TICKET = "🆕 New ticket"
 BTN_MY_TICKETS = "📋 My tickets"
+BTN_STATS = "📊 Statistics"  # tech-only menu button -> /stats
 
 # --- free-text outside a dialog ---
 FREETEXT_OFFER = "Create a ticket with this text as the description?"
@@ -177,6 +178,8 @@ BTN_CONFIRM = "✅ Submit"
 BTN_CANCEL = "❌ Cancel"
 
 # --- errors / fallbacks ---
+STATS_TECH_ONLY = "📊 Statistics are available to technicians only."
+
 GLPI_ERROR = (
     "An error occurred while talking to GLPI. The ticket was not created — try again later."
 )
@@ -585,3 +588,16 @@ def unassigned_line(ticket_id: int, title: str, hours: int) -> str:
 
 def btn_take_ticket(ticket_id: int) -> str:
     return f"🙋 Take #{ticket_id}"
+
+
+def stats_summary(counts: dict[int, int]) -> str:
+    """Open-queue breakdown for /stats; ``counts`` maps GLPI status -> amount."""
+    total = sum(counts.values())
+    if not total:
+        return "📊 No open tickets 🎉"
+    lines = "\n".join(
+        f"{ticket_status_label(status)} — <b>{count}</b>"
+        for status, count in sorted(counts.items())
+        if count
+    )
+    return f"📊 <b>Open tickets: {total}</b>\n\n{lines}"

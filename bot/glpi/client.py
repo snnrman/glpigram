@@ -752,6 +752,41 @@ class GlpiClient:
             )
         return summaries
 
+    async def count_open_tickets_by_status(self) -> dict[int, int]:
+        """Counts of not-yet-closed tickets grouped by status (for /stats).
+
+        One paginated /search/Ticket query with GLPI's virtual status value
+        ``notclosed`` (accepted by the status searchOption alongside plain
+        ids); grouping happens client-side from the status column.
+        """
+        counts: dict[int, int] = {}
+        start, page = 0, 200
+        while True:
+            params = {
+                "criteria[0][field]": SO_TICKET_STATUS,
+                "criteria[0][searchtype]": "equals",
+                "criteria[0][value]": "notclosed",
+                "forcedisplay[0]": SEARCHOPTION_ID,
+                "forcedisplay[1]": SO_TICKET_STATUS,
+                "range": f"{start}-{start + page - 1}",
+            }
+            resp = await self._request("GET", "/search/Ticket", params=params, idempotent=True)
+            payload = resp.json()
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            if not rows:
+                return counts
+            for row in rows:
+                try:
+                    status = int(row.get(str(SO_TICKET_STATUS)) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if status in OPEN_TICKET_STATUSES:
+                    counts[status] = counts.get(status, 0) + 1
+            start += len(rows)
+            total = int(payload.get("totalcount") or 0)
+            if start >= total:
+                return counts
+
     # -- attachments (feature 6) ------------------------------------------
     async def upload_document(
         self, filename: str, content: bytes, *, mime: str = "application/octet-stream"

@@ -173,6 +173,16 @@ deploy/
    and in comments. TG file size limits apply (20 MB via Bot API) — reject larger with a
    clear message.
 
+7. **Role-based menu + /stats.** The persistent reply menu is built per role at render
+   time (after /start and after every finished dialog): everyone gets «🆕 Новая заявка» +
+   «📋 Мои заявки»; technicians (is_tech, refreshed from the GLPI group by the auth
+   middleware, ~5 min cache) additionally get «📊 Статистика» -> /stats — an open-queue
+   breakdown by status (one paginated `/search/Ticket` with the virtual status value
+   `notclosed`, grouped client-side). Hiding the button is NOT the access control: the
+   handler re-checks is_tech itself, so a direct /stats (or the button text typed by
+   hand) is refused for regular users. A role change in the GLPI group updates the menu
+   on the user's next interaction.
+
 Out of scope for now: SLA warnings, Claude-based auto-classification, multi-entity support.
 Keep the code structured so these can be added later.
 
