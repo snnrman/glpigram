@@ -569,3 +569,16 @@ def hist_confirmed() -> str:
 
 def hist_returned() -> str:
     return "↩️ Returned to work by the requester"
+
+
+# --- unassigned-tickets reminder (tech group) ---
+UNASSIGNED_HEADER = "⚠️ <b>Unassigned tickets:</b>"
+
+
+def unassigned_line(ticket_id: int, title: str, hours: int) -> str:
+    short = title if len(title) <= 40 else title[:39] + "…"
+    return f"#{ticket_id} “{html.escape(short)}” ({hours}h)"
+
+
+def btn_take_ticket(ticket_id: int) -> str:
+    return f"🙋 Take #{ticket_id}"

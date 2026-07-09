@@ -127,6 +127,13 @@ deploy/
      and nothing is sent. If the ticket was taken meanwhile (status ≠ New), the button/action
      is refused.
 4. **Sync loop (GLPI -> TG).** Poll every 45 s:
+   - **Unassigned reminder:** during working hours, New (unassigned) tickets older than
+     `UNASSIGNED_REMIND_HOURS` (default 2 WORKING hours; GLPI's UTC dates converted via
+     the schedule) are collected into ONE summary to the tech group — «⚠️ Заявки без
+     исполнителя: №44 «...» (2ч)…» with a Take button per ticket (the regular take
+     handler). Per-ticket anti-spam: not more often than `REMIND_INTERVAL_HOURS`
+     (default 3 working hours), state in SQLite (survives restarts). A taken ticket
+     stops matching status=New and drops out automatically.
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
    - status changes on tickets created via the bot -> notify the requester
    - new followups by others on the user's tickets -> forward text to the requester

@@ -50,6 +50,16 @@ class Settings(BaseSettings):
         description="Min hours between a requester's reminders about the same ticket.",
     )
 
+    # --- Unassigned-tickets reminder for the tech group ---
+    unassigned_remind_hours: float = Field(
+        default=2,
+        description="Remind the group about New tickets older than this many WORKING hours.",
+    )
+    remind_interval_hours: float = Field(
+        default=3,
+        description="Min WORKING hours between repeated reminders about the same ticket.",
+    )
+
     # --- Quiet hours (off-hours) for tech-group notifications ---
     work_hours: str = Field(default="09:00-18:00", description='Working hours, "HH:MM-HH:MM".')
     work_days: str = Field(default="1-5", description="Working ISO weekdays, Mon=1..Sun=7.")

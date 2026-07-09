@@ -410,3 +410,21 @@ class Repo:
         ) as cur:
             row = await cur.fetchone()
         return (row["tg_id"], row["name"]) if row else None
+
+    # -- unassigned-tickets reminder (anti-spam state) ----------------------
+    async def get_last_unassigned_remind(self, ticket_id: int) -> int | None:
+        async with self._conn.execute(
+            "SELECT last_remind_at FROM unassigned_reminders WHERE ticket_id = ?", (ticket_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["last_remind_at"] if row else None
+
+    async def set_last_unassigned_remind(self, ticket_id: int, when: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO unassigned_reminders (ticket_id, last_remind_at) VALUES (?, ?)
+                ON CONFLICT(ticket_id) DO UPDATE SET last_remind_at = excluded.last_remind_at
+                """,
+                (ticket_id, when),
+            )
