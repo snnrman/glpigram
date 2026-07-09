@@ -173,10 +173,18 @@ deploy/
    and in comments. TG file size limits apply (20 MB via Bot API) — reject larger with a
    clear message.
 
-7. **Role-based menu + /stats.** The persistent reply menu is built per role at render
-   time (after /start and after every finished dialog): everyone gets «🆕 Новая заявка» +
-   «📋 Мои заявки»; technicians (is_tech, refreshed from the GLPI group by the auth
-   middleware, ~5 min cache) additionally get «📊 Статистика» -> /stats — an open-queue
+7. **Role-based menu, /stats, «👨‍💻 В работе».** The persistent reply menu is built per
+   role at render time (after /start and after every finished dialog): everyone gets
+   «🆕 Новая заявка» + «📋 Мои заявки»; technicians (is_tech, refreshed from the GLPI
+   group by the auth middleware, ~5 min cache) additionally get a second SHORT
+   two-button row (labels must not wrap): «👨‍💻 В работе» + «📊 Статистика».
+   - «👨‍💻 В работе» lists the tech's open assigned tickets (Ticket_User type=2,
+     searchOption 5) in two groups — «В работе» (assigned/processing/waiting) and
+     «Ждут подтверждения» (solved); empty -> «На вас нет активных заявок». Tapping a
+     ticket opens a detail view whose Reply/Close buttons reuse the `ta:` callbacks
+     (same DM dialogs and living-card updates as the group card); solved tickets hide
+     Close. Handlers re-check is_tech themselves.
+   - «📊 Статистика» -> /stats — an open-queue
    breakdown by status (one paginated `/search/Ticket` with the virtual status value
    `notclosed`, grouped client-side). Hiding the button is NOT the access control: the
    handler re-checks is_tech itself, so a direct /stats (or the button text typed by

@@ -45,10 +45,10 @@ def test_menu_for_regular_user_has_no_stats():
     assert _labels(main_menu_keyboard()) == [[texts.BTN_NEW_TICKET, texts.BTN_MY_TICKETS]]
 
 
-def test_menu_for_tech_adds_stats_row():
+def test_menu_for_tech_adds_short_two_button_row():
     assert _labels(main_menu_keyboard(is_tech=True)) == [
         [texts.BTN_NEW_TICKET, texts.BTN_MY_TICKETS],
-        [texts.BTN_STATS],
+        [texts.BTN_TECH_TICKETS, texts.BTN_STATS],
     ]
 
 
@@ -109,7 +109,7 @@ async def test_tech_gets_stats_by_command(env):
     # users section: 2 linked (both just now), 1 tech
     assert text.endswith(texts.stats_users_block(2, 1, 2))
     # the reply re-renders the tech menu (role evaluated at render time)
-    assert [b.text for b in markup.keyboard[-1]] == [texts.BTN_STATS]
+    assert [b.text for b in markup.keyboard[-1]] == [texts.BTN_TECH_TICKETS, texts.BTN_STATS]
 
 
 async def test_tech_gets_stats_by_menu_button(env):

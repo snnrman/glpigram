@@ -186,6 +186,8 @@ BTN_CANCEL = "❌ Отмена"
 # --- errors / fallbacks ---
 STATS_TECH_ONLY = "📊 Статистика доступна только техникам."
 STATS_USERS_UNAVAILABLE = "👥 Статистика пользователей временно недоступна."
+BTN_TECH_TICKETS = "👨\u200d💻 В работе"  # tech menu: tickets assigned to me
+TECH_TICKETS_EMPTY = "На вас нет активных заявок."
 
 GLPI_ERROR = "Произошла ошибка при обращении к GLPI. Заявка не создана — попробуйте ещё раз позже."
 GENERIC_ERROR = "Что-то пошло не так. Попробуйте ещё раз."
@@ -623,3 +625,19 @@ def stats_users_block(total: int, techs: int, recent: int) -> str:
         f"Привязано: <b>{total}</b> · техников: <b>{techs}</b>\n"
         f"Новых за 7 дней: <b>{recent}</b>"
     )
+
+
+def tech_tickets_list(in_work: list[tuple[int, str]], waiting: list[tuple[int, str]]) -> str:
+    """Tech's assigned tickets, two groups; open a ticket with the buttons below."""
+    parts = ["👨\u200d💻 <b>Заявки на вас</b>"]
+    if in_work:
+        parts.append(
+            "⚙️ В работе:\n"
+            + "\n".join(f"• №{tid} — {html.escape(title)}" for tid, title in in_work)
+        )
+    if waiting:
+        parts.append(
+            "⏳ Ждут подтверждения:\n"
+            + "\n".join(f"• №{tid} — {html.escape(title)}" for tid, title in waiting)
+        )
+    return "\n\n".join(parts)

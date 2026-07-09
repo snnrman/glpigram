@@ -704,17 +704,32 @@ class GlpiClient:
     async def search_user_open_tickets(
         self, requester_users_id: int, *, limit: int = 50
     ) -> list[TicketSummary]:
-        """Not-yet-closed tickets where the user is requester, newest first.
+        """Not-yet-closed tickets where the user is requester, newest first."""
+        return await self._search_open_tickets(SO_TICKET_REQUESTER, requester_users_id, limit)
 
-        Uses /search/Ticket filtered by requester; only closed tickets are
-        dropped client-side (status is numeric without expand_dropdowns), so the
-        requester can still see and close *solved* tickets. Assignee ids are
-        resolved to names.
+    async def search_tech_open_tickets(
+        self, tech_users_id: int, *, limit: int = 50
+    ) -> list[TicketSummary]:
+        """Not-yet-closed tickets assigned to the technician, newest first.
+
+        Filters on the assignee searchOption (id 5), i.e. the Ticket_User
+        link with type=2 (assigned technician).
+        """
+        return await self._search_open_tickets(SO_TICKET_ASSIGN, tech_users_id, limit)
+
+    async def _search_open_tickets(
+        self, user_field: int, users_id: int, limit: int
+    ) -> list[TicketSummary]:
+        """Shared /search/Ticket by a user-typed field (requester or assignee).
+
+        Only closed tickets are dropped client-side (status is numeric without
+        expand_dropdowns), so *solved* tickets are still listed. Assignee ids
+        are resolved to names.
         """
         params = {
-            "criteria[0][field]": SO_TICKET_REQUESTER,
+            "criteria[0][field]": user_field,
             "criteria[0][searchtype]": "equals",
-            "criteria[0][value]": requester_users_id,
+            "criteria[0][value]": users_id,
             "forcedisplay[0]": SEARCHOPTION_ID,
             "forcedisplay[1]": SO_TICKET_NAME,
             "forcedisplay[2]": SO_TICKET_STATUS,

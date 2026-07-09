@@ -746,3 +746,29 @@ async def test_download_document_uses_octet_stream_accept(mock):
     # the raw file comes back only with this Accept header (JSON meta otherwise)
     assert route.calls.last.request.headers["Accept"] == "application/octet-stream"
     await client.close()
+
+
+async def test_search_tech_open_tickets_filters_by_assignee_field(mock):
+    await _init_route(mock)
+    route = mock.get(f"{BASE}/search/Ticket").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "totalcount": 2,
+                "data": [
+                    {"2": 9, "1": "Моя", "12": 2, "5": "9"},
+                    {"2": 8, "1": "Закрытая", "12": 6, "5": "9"},  # closed -> dropped
+                ],
+            },
+        )
+    )
+    mock.get(f"{BASE}/User/9").mock(
+        return_value=httpx.Response(200, json={"id": 9, "name": "tech", "realname": "Петров"})
+    )
+    client = make_client()
+    result = await client.search_tech_open_tickets(9)
+    await client.close()
+    assert [t.id for t in result] == [9]
+    params = dict(route.calls[0].request.url.params)
+    assert params["criteria[0][field]"] == "5"  # assignee searchOption (Ticket_User type=2)
+    assert params["criteria[0][value]"] == "9"
