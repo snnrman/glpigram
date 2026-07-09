@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Role-based menu + /stats** — the persistent reply menu is rendered per
   role: technicians (GLPI-group membership, ~5 min cache) get an extra
-  «📊 Статистика» button; /stats posts an open-queue breakdown by status.
-  The handler re-checks `is_tech` itself, so a direct /stats is refused for
+  «📊 Статистика» button; /stats posts an open-queue breakdown by status
+  plus linked-user counters (total / technicians / new in 7 days). The
+  handler re-checks `is_tech` itself, so a direct /stats is refused for
   regular users; a role change flips the menu on the next interaction.
 
 ## [0.2.0] - 2026-07-09

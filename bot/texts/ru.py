@@ -185,6 +185,7 @@ BTN_CANCEL = "❌ Отмена"
 
 # --- errors / fallbacks ---
 STATS_TECH_ONLY = "📊 Статистика доступна только техникам."
+STATS_USERS_UNAVAILABLE = "👥 Статистика пользователей временно недоступна."
 
 GLPI_ERROR = "Произошла ошибка при обращении к GLPI. Заявка не создана — попробуйте ещё раз позже."
 GENERIC_ERROR = "Что-то пошло не так. Попробуйте ещё раз."
@@ -613,3 +614,12 @@ def stats_summary(counts: dict[int, int]) -> str:
         if count
     )
     return f"📊 <b>Открытые заявки: {total}</b>\n\n{lines}"
+
+
+def stats_users_block(total: int, techs: int, recent: int) -> str:
+    """Linked-users section of /stats (counts from the bot's own SQLite)."""
+    return (
+        f"👥 <b>Пользователи</b>\n"
+        f"Привязано: <b>{total}</b> · техников: <b>{techs}</b>\n"
+        f"Новых за 7 дней: <b>{recent}</b>"
+    )

@@ -91,7 +91,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         schedule=schedule,
         cards=cards,
     )
-    stats = build_stats_router(client)
+    stats = build_stats_router(client, repo)
     business = build_new_ticket_router(
         client,
         category_cache,
