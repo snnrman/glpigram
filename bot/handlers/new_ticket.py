@@ -162,6 +162,9 @@ def build_new_ticket_router(
 ) -> Router:
     """Wire the /new dialog with its GLPI dependencies (closure-injected)."""
     router = Router(name="new_ticket")
+    # Dialogs and menu buttons are private-chat only: in groups the bot
+    # must not react to free text (callbacks are not affected).
+    router.message.filter(F.chat.type == "private")
 
     def _quiet_notice(urgency: int) -> str | None:
         """Off-hours note for the requester after creation (None in work hours)."""

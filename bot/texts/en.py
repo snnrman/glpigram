@@ -275,12 +275,6 @@ def tech_card_solved(name: str) -> str:
     return f"✅ Closed by: {html.escape(name)}"
 
 
-def tech_solved_announcement(*, ticket_id: int, name: str, solution: str) -> str:
-    """Group message after a technician proposes a solution from the card."""
-    body = html.escape(clean_glpi_text(solution, limit=500))
-    return f"✅ <b>{html.escape(name)} proposed a solution for ticket #{ticket_id}:</b>\n{body}"
-
-
 # --- quiet hours / off-hours (feature: quiet hours) ---
 QUIET_URGENT_NOTICE = (
     "The ticket is marked as urgent — the technicians have been notified "

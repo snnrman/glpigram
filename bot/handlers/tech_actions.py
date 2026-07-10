@@ -69,6 +69,9 @@ def build_tech_actions_router(
     repo: Repo | None = None,
 ) -> Router:
     router = Router(name="tech_actions")
+    # FSM dialogs live in private chats only; in groups the bot reacts solely
+    # to its inline buttons (callbacks are not affected by this filter).
+    router.message.filter(F.chat.type == "private")
 
     async def _start_dm_dialog(
         cb: CallbackQuery,
@@ -270,22 +273,18 @@ def build_tech_actions_router(
                     reply_markup=notify.solution_confirm_keyboard(ticket_id),
                 )
                 await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_SOLVED, active=True)
-        announcement = texts.tech_solved_announcement(
-            ticket_id=ticket_id, name=link.display_name, solution=solution
-        )
+        # The solution text (with confirm/return buttons) goes ONLY to the
+        # requester — the group gets just a history line on the card, no
+        # solution body and no ping (it doesn't need the team's attention).
         handled = cards is not None and await cards.record_event(
             bot,
             ticket_id,
             texts.hist_solved(link.display_name),
             status=TICKET_STATUS_SOLVED,
-            reply=announcement,
         )
         if not handled:
-            # No living card (pre-feature ticket) -> legacy edit + plain message.
+            # No living card (pre-feature ticket) -> legacy in-place edit only.
             await _mark_card_solved(bot, data, link.display_name)
-            group = data.get("card_chat_id") or tech_group_chat_id
-            if group is not None:
-                await notify.send_text(bot, group, announcement)
 
     @router.message(StateFilter(TechAction))
     async def on_expect_text(message: Message) -> None:

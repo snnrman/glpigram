@@ -142,7 +142,9 @@ def build_linking_router(
         return True
 
     # -- /start + login submission ----------------------------------------
-    @router.message(CommandStart())
+    # /start and the login dialog are private-only; the admin commands
+    # (/link, /unlink) stay usable in the tech group (reply-based linking).
+    @router.message(CommandStart(), F.chat.type == "private")
     async def cmd_start(message: Message, state: FSMContext) -> None:
         await state.clear()
         link = await repo.get_by_tg(message.from_user.id)
@@ -181,7 +183,7 @@ def build_linking_router(
             log.exception("link_request_send_failed chat=%s error=%s", tech_group_chat_id, exc)
             return False
 
-    @router.message(Linking.awaiting_login, F.text)
+    @router.message(Linking.awaiting_login, F.text, F.chat.type == "private")
     async def on_login(message: Message, state: FSMContext, bot: Bot) -> None:
         if tech_group_chat_id is None:
             log.error("linking_no_tech_group_chat_configured")
@@ -258,7 +260,7 @@ def build_linking_router(
         await cb.message.edit_text(texts.LINK_ASK_LOGIN)
         await cb.answer()
 
-    @router.message(Linking.awaiting_login)
+    @router.message(Linking.awaiting_login, F.chat.type == "private")
     async def on_login_not_text(message: Message) -> None:
         await message.answer(texts.LINK_ASK_LOGIN)
 
