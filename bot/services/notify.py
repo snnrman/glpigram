@@ -195,6 +195,13 @@ async def notify_closed_by_requester(
     )
 
 
+def dialog_cancel_keyboard() -> InlineKeyboardMarkup:
+    """Single ❌ Отмена button under every text-awaiting FSM prompt."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="dlg:cancel")]]
+    )
+
+
 def tech_ticket_keyboard_taken(ticket_id: int) -> InlineKeyboardMarkup:
     """Card buttons once taken: Take is gone; Reply/Close plus Reassign."""
     return InlineKeyboardMarkup(

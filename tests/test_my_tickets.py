@@ -57,9 +57,9 @@ def test_detail_keyboard_taken_hides_remind_and_close():
     assert "mt:remind:5" not in data and "mt:close:5" not in data
 
 
-def test_close_prompt_keyboard_has_no_comment_button():
+def test_close_prompt_keyboard_has_no_comment_and_cancel_buttons():
     data = [b.callback_data for row in _close_prompt_keyboard().inline_keyboard for b in row]
-    assert data == ["mt:close_empty"]
+    assert data == ["mt:close_empty", "dlg:cancel"]
 
 
 def test_notify_closed_by_requester_mentions_assignee_and_escapes():

@@ -40,6 +40,7 @@ from ..glpi.models import TicketSummary
 from ..schedule import WorkSchedule
 from ..services import attachments, notify
 from ..services.cards import CardService
+from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +92,8 @@ def _close_prompt_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=texts.BTN_MYT_CLOSE_NO_COMMENT, callback_data="mt:close_empty"
                 )
-            ]
+            ],
+            [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="dlg:cancel")],
         ]
     )
 
@@ -220,9 +222,24 @@ def build_my_tickets_router(
     # /cancel must precede the state text handlers, or the comment/close-reason
     # steps would swallow it as content.
     @router.message(StateFilter(MyTickets), Command("cancel"))
-    async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    async def cmd_cancel(message: Message, state: FSMContext, link: LinkedUser) -> None:
         await state.clear()
-        await message.answer(texts.NEW_CANCELLED)
+        await message.answer(
+            texts.DIALOG_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+        )
+
+    @router.callback_query(StateFilter(MyTickets), F.data == "dlg:cancel")
+    async def on_cancel_button(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
+        await state.clear()
+        if isinstance(cb.message, Message):
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception as exc:  # noqa: BLE001 - the prompt may be old/deleted
+                log.debug("cancel_markup_cleanup_failed error=%s", exc)
+            await cb.message.answer(
+                texts.DIALOG_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+            )
+        await cb.answer()
 
     # -- add comment -------------------------------------------------------
     @router.callback_query(F.data.startswith("mt:comment:"))
@@ -230,7 +247,9 @@ def build_my_tickets_router(
         ticket_id = int(cb.data.split(":")[2])
         await state.set_state(MyTickets.commenting)
         await state.update_data(ticket_id=ticket_id)
-        await cb.message.answer(texts.myt_ask_comment(ticket_id))
+        await cb.message.answer(
+            texts.myt_ask_comment(ticket_id), reply_markup=notify.dialog_cancel_keyboard()
+        )
         await cb.answer()
 
     @router.message(MyTickets.commenting, F.text)
@@ -440,7 +459,7 @@ def build_my_tickets_router(
             return
         await state.set_state(MyTickets.returning)
         await state.update_data(return_ticket_id=ticket_id)
-        await _show(cb, texts.ask_return_reason(ticket_id), None)
+        await _show(cb, texts.ask_return_reason(ticket_id), notify.dialog_cancel_keyboard())
         await cb.answer()
 
     @router.message(MyTickets.returning, F.text)

@@ -256,17 +256,17 @@ TECH_TAKEN_TOAST = "Заявка взята в работу."
 # before replying, the DM state is overwritten and the latest prompt is the
 # only reliable statement of which ticket the reply will go to.
 def tech_ask_solution(ticket_id: int) -> str:
-    return f"Введите текст решения — заявка №{ticket_id} будет закрыта:"
+    return f"Введите текст решения — заявка №{ticket_id} будет закрыта. Или нажмите «Отмена»."
 
 
 def tech_ask_comment(ticket_id: int) -> str:
-    return f"Введите текст комментария к заявке №{ticket_id}:"
+    return f"Введите текст комментария к заявке №{ticket_id} — или нажмите «Отмена»."
 
 
 TECH_SOLUTION_DONE = "✅ Решение сохранено, заявка закрыта."
 TECH_COMMENT_DONE = "💬 Комментарий добавлен."
 TECH_EXPECT_TEXT = "Пожалуйста, отправьте текст."
-TECH_ACTION_CANCELLED = "Действие отменено."
+DIALOG_CANCELLED = "❌ Отменено."
 # Shown as a toast when the bot can't DM the technician (they never opened it).
 TECH_DM_FAILED = "Откройте личный чат с ботом (/start) и повторите."
 
@@ -432,7 +432,7 @@ BTN_MYT_BACK = "⬅️ К списку"
 # On its own row in the close prompt (full width) — length is not a concern.
 BTN_MYT_CLOSE_NO_COMMENT = "Закрыть без комментария"
 
-MYT_CLOSE_PROMPT = "Напишите причину закрытия или закройте без комментария."
+MYT_CLOSE_PROMPT = "Напишите причину закрытия, закройте без комментария — или нажмите «Отмена»."
 MYT_CLOSE_DONE = "✅ Заявка закрыта."
 MYT_REMIND_SENT = "🔔 Напоминание отправлено."
 # Toast when the ticket was taken between opening the detail and tapping remind.
@@ -474,7 +474,7 @@ def btn_open_ticket(ticket_id: int, title: str) -> str:
 
 
 def myt_ask_comment(ticket_id: int) -> str:
-    return f"Введите текст комментария к заявке №{ticket_id}:"
+    return f"Введите текст комментария к заявке №{ticket_id} — или нажмите «Отмена»."
 
 
 def _assignee_line(assignee: str | None) -> str:
@@ -565,7 +565,7 @@ def closed_thanks(ticket_id: int) -> str:
 
 
 def ask_return_reason(ticket_id: int) -> str:
-    return f"Опишите, что осталось нерешённым по заявке №{ticket_id}:"
+    return f"Опишите, что осталось нерешённым по заявке №{ticket_id} — или нажмите «Отмена»."
 
 
 def returned_to_work(ticket_id: int, reason: str) -> str:

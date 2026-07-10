@@ -202,6 +202,15 @@ deploy/
 Out of scope for now: SLA warnings, Claude-based auto-classification, multi-entity support.
 Keep the code structured so these can be added later.
 
+## Dialog cancellation
+
+Every FSM state that awaits text input (comment, solution, close reason, return
+reason, /new title & description, login) must offer an explicit way out: an inline
+«❌ Отмена» button on the prompt (callback `dlg:cancel`, `nt:cancel` inside /new) AND
+the /cancel command. The prompt text mentions the button («…или нажмите Отмена»).
+On cancel: clear the state, reply «❌ Отменено.» with the role menu attached
+(tech buttons for techs), never touch the ticket in GLPI.
+
 ## Group hygiene
 
 In group chats the bot reacts ONLY to its inline buttons (Take/Reply/Close, linking

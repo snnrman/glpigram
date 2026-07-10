@@ -36,6 +36,7 @@ from ..glpi.client import (
 )
 from ..services import attachments, notify
 from ..services.cards import CardService
+from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,15 @@ def _card_keyboard_after_take(ticket_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+async def _drop_prompt_buttons(cb: CallbackQuery) -> None:
+    """Best-effort removal of the prompt's inline keyboard after a cancel."""
+    if isinstance(cb.message, Message):
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception as exc:  # noqa: BLE001 - the prompt may be old/deleted
+            log.debug("cancel_markup_cleanup_failed error=%s", exc)
 
 
 def build_tech_actions_router(
@@ -85,7 +95,7 @@ def build_tech_actions_router(
         """Prompt for text in the technician's DM and seed that chat's FSM state."""
         tech_id = cb.from_user.id
         try:
-            await bot.send_message(tech_id, prompt)
+            await bot.send_message(tech_id, prompt, reply_markup=notify.dialog_cancel_keyboard())
         except Exception as exc:  # noqa: BLE001 - tech hasn't opened a DM with the bot
             log.warning("tech_dm_failed tech=%s error=%s", tech_id, exc)
             await cb.answer(texts.TECH_DM_FAILED, show_alert=True)
@@ -291,9 +301,21 @@ def build_tech_actions_router(
     # /cancel must precede the state text handlers, or the comment/solution
     # steps would swallow it as content.
     @router.message(StateFilter(TechAction), Command("cancel"))
-    async def on_cancel(message: Message, state: FSMContext) -> None:
+    async def on_cancel(message: Message, state: FSMContext, link: LinkedUser) -> None:
         await state.clear()
-        await message.answer(texts.TECH_ACTION_CANCELLED)
+        await message.answer(
+            texts.DIALOG_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+        )
+
+    @router.callback_query(StateFilter(TechAction), F.data == "dlg:cancel")
+    async def on_cancel_button(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
+        await state.clear()
+        await _drop_prompt_buttons(cb)
+        if isinstance(cb.message, Message):
+            await cb.message.answer(
+                texts.DIALOG_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+            )
+        await cb.answer()
 
     # -- DM text handlers --------------------------------------------------
     @router.message(TechAction.commenting, F.text)
