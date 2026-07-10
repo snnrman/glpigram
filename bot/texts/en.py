@@ -252,17 +252,17 @@ TECH_TAKEN_TOAST = "Ticket taken."
 # before replying, the DM state is overwritten and the latest prompt is the
 # only reliable statement of which ticket the reply will go to.
 def tech_ask_solution(ticket_id: int) -> str:
-    return f"Enter the solution text — ticket #{ticket_id} will be closed:"
+    return f"Enter the solution text — ticket #{ticket_id} will be closed. Or press Cancel."
 
 
 def tech_ask_comment(ticket_id: int) -> str:
-    return f"Enter a comment for ticket #{ticket_id}:"
+    return f"Enter a comment for ticket #{ticket_id} — or press Cancel."
 
 
 TECH_SOLUTION_DONE = "✅ Solution saved, ticket closed."
 TECH_COMMENT_DONE = "💬 Comment added."
 TECH_EXPECT_TEXT = "Please send text."
-TECH_ACTION_CANCELLED = "Action cancelled."
+DIALOG_CANCELLED = "❌ Cancelled."
 # Shown as a toast when the bot can't DM the technician (they never opened it).
 TECH_DM_FAILED = "Open a private chat with the bot (/start) and try again."
 
@@ -419,7 +419,7 @@ BTN_MYT_BACK = "⬅️ Back to list"
 # On its own row in the close prompt (full width) — length is not a concern.
 BTN_MYT_CLOSE_NO_COMMENT = "Close without a comment"
 
-MYT_CLOSE_PROMPT = "Write the reason for closing, or close without a comment."
+MYT_CLOSE_PROMPT = "Write the reason for closing, close without a comment — or press Cancel."
 MYT_CLOSE_DONE = "✅ Ticket closed."
 MYT_REMIND_SENT = "🔔 Reminder sent."
 # Toast when the ticket was taken between opening the detail and tapping remind.
@@ -462,7 +462,7 @@ def btn_open_ticket(ticket_id: int, title: str) -> str:
 
 
 def myt_ask_comment(ticket_id: int) -> str:
-    return f"Enter a comment for ticket #{ticket_id}:"
+    return f"Enter a comment for ticket #{ticket_id} — or press Cancel."
 
 
 def _assignee_line(assignee: str | None) -> str:
@@ -553,7 +553,7 @@ def closed_thanks(ticket_id: int) -> str:
 
 
 def ask_return_reason(ticket_id: int) -> str:
-    return f"Describe what is still unresolved in ticket #{ticket_id}:"
+    return f"Describe what is still unresolved in ticket #{ticket_id} — or press Cancel."
 
 
 def returned_to_work(ticket_id: int, reason: str) -> str:

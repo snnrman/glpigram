@@ -127,6 +127,13 @@ def _offer_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _cancel_keyboard() -> InlineKeyboardMarkup:
+    """Cancel-only row for the free-text steps (title / description)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:cancel")]]
+    )
+
+
 def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
     """Persistent reply keyboard shown after /start and every finished dialog.
 
@@ -257,7 +264,7 @@ def build_new_ticket_router(
         urgency = int(cb.data.rsplit(":", 1)[1])
         await state.update_data(urgency=urgency)
         await state.set_state(NewTicket.entering_title)
-        await cb.message.edit_text(texts.NEW_ENTER_TITLE)
+        await cb.message.edit_text(texts.NEW_ENTER_TITLE, reply_markup=_cancel_keyboard())
         await cb.answer()
 
     @router.message(NewTicket.entering_title, F.text)
@@ -273,7 +280,7 @@ def build_new_ticket_router(
             await _open_attach_step(message, state)
             return
         await state.set_state(NewTicket.entering_description)
-        await message.answer(texts.NEW_ENTER_DESCRIPTION)
+        await message.answer(texts.NEW_ENTER_DESCRIPTION, reply_markup=_cancel_keyboard())
 
     @router.message(NewTicket.entering_title)
     async def on_title_not_text(message: Message, state: FSMContext) -> None:
@@ -428,9 +435,16 @@ def build_new_ticket_router(
 
     # Cancel from any state (inline button).
     @router.callback_query(F.data == "nt:cancel")
-    async def on_cancel_cb(cb: CallbackQuery, state: FSMContext) -> None:
+    async def on_cancel_cb(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
         await state.clear()
-        await cb.message.edit_text(texts.NEW_CANCELLED)
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception as exc:  # noqa: BLE001 - the prompt may be old/deleted
+            log.debug("cancel_markup_cleanup_failed error=%s", exc)
+        # One message: the cancel confirmation carries the role menu back.
+        await cb.message.answer(
+            texts.NEW_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+        )
         await cb.answer()
 
     # --- free text outside a dialog: offer to turn it into a ticket ----------

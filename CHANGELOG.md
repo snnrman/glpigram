@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Explicit cancel in every dialog** — each text-awaiting step (comment,
+  solution, close/return reason, /new title & description, login) carries an
+  inline «❌ Отмена» button and honours /cancel; cancelling clears the state,
+  answers «Отменено» with the role menu and never touches the ticket.
 - **Handoff («🔄 Передать»)** — a technician can reassign a ticket to another
   linked tech from the group card or the «В работе» detail view; the pick
   dialog lives in the presser's DM. GLPI swaps the Ticket_User assignee link,

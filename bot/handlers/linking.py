@@ -183,6 +183,11 @@ def build_linking_router(
             log.exception("link_request_send_failed chat=%s error=%s", tech_group_chat_id, exc)
             return False
 
+    @router.message(Linking.awaiting_login, Command("cancel"), F.chat.type == "private")
+    async def cmd_cancel_linking(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer(texts.DIALOG_CANCELLED)
+
     @router.message(Linking.awaiting_login, F.text, F.chat.type == "private")
     async def on_login(message: Message, state: FSMContext, bot: Bot) -> None:
         if tech_group_chat_id is None:
