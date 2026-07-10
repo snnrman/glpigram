@@ -26,6 +26,9 @@ log = logging.getLogger(__name__)
 
 def build_stats_router(client: GlpiClient, repo: Repo) -> Router:
     router = Router(name="stats")
+    # Dialogs and menu buttons are private-chat only: in groups the bot
+    # must not react to free text (callbacks are not affected).
+    router.message.filter(F.chat.type == "private")
 
     @router.message(Command("stats"))
     @router.message(F.text == texts.BTN_STATS)

@@ -107,6 +107,9 @@ def build_my_tickets_router(
     cards: CardService | None = None,
 ) -> Router:
     router = Router(name="my_tickets")
+    # Dialogs and menu buttons are private-chat only: in groups the bot
+    # must not react to free text (callbacks are not affected).
+    router.message.filter(F.chat.type == "private")
 
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:

@@ -194,6 +194,16 @@ deploy/
 Out of scope for now: SLA warnings, Claude-based auto-classification, multi-entity support.
 Keep the code structured so these can be added later.
 
+## Group hygiene
+
+In group chats the bot reacts ONLY to its inline buttons (Take/Reply/Close, linking
+approvals) and the explicit admin commands /link and /unlink. Free text, menu-button
+texts, /start and every FSM dialog are private-chat only — router-level
+`router.message.filter(F.chat.type == "private")` on all business routers (linking:
+per-handler, so the admin commands keep working in the group). A tech's solution text
+with confirm/return buttons goes ONLY to the requester's DM; the group card gets just a
+history line («Решение предложено: <техник>»), never the solution body.
+
 ## Conventions
 
 - All user-facing strings live in `bot/texts/` (`ru.py` + `en.py`, selected by the

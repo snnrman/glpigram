@@ -145,7 +145,7 @@ async def test_tech_close_prompts_tech_dm_only(env):
     assert await dp.storage.get_state(_key(REQUESTER_ID, REQUESTER_ID)) is None
 
 
-async def test_tech_solution_goes_to_glpi_and_group_announcement(env):
+async def test_tech_solution_goes_to_glpi_not_to_the_group(env):
     dp, client, _ = env
     bot = FakeBot()
     await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, f"ta:close:{TICKET}"))
@@ -156,12 +156,9 @@ async def test_tech_solution_goes_to_glpi_and_group_announcement(env):
     client.add_solution.assert_awaited_once_with(TICKET, "Техник:\nперезагрузил сервер")
     client.add_followup.assert_not_awaited()
     client.set_ticket_status.assert_not_awaited()
-    # group announcement with the solution text
-    group_msgs = [t for c, t in bot.sent if c == GROUP]
-    assert any(
-        "Техник предложил решение по заявке №5" in t and "перезагрузил сервер" in t
-        for t in group_msgs
-    )
+    # the solution text goes ONLY to the requester (confirm/return flow);
+    # the group gets no announcement message at all
+    assert not any(c == GROUP for c, _t in bot.sent)
     # tech got the confirmation, state cleared
     assert (TECH_ID, texts.TECH_SOLUTION_DONE) in bot.sent
     assert await dp.storage.get_state(_key(TECH_ID, TECH_ID)) is None
@@ -227,7 +224,7 @@ async def test_take_appears_once_history_only_no_ping(env):
     assert not any(chat == GROUP for chat, _ in bot.sent)
 
 
-async def test_tech_close_pings_group_once_plus_history(env):
+async def test_tech_close_updates_card_history_without_group_ping(env):
     dp, client, repo = env
     await _seed_card(repo)
     bot = FakeBot()
@@ -239,10 +236,9 @@ async def test_tech_close_pings_group_once_plus_history(env):
 
     # history line in the card edit...
     assert any("✅ Решение предложено: Техник" in text for _, _, text in bot.edits)
-    # ...plus exactly ONE reply ping with the solution
+    # ...and NO group message: the solution body belongs to the requester only
     group_msgs = [t for c, t in bot.sent if c == GROUP]
-    assert len(group_msgs) - len(group_before) == 1
-    assert "предложил решение" in group_msgs[-1]
+    assert group_msgs == group_before
 
 
 async def test_tech_dm_comment_history_only_no_ping(env):

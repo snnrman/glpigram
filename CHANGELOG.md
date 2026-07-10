@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The solution text was announced to the tech group; it now goes only to the
+  requester (who has the confirm/return buttons), the group card gets just a
+  history line.
+- In group chats the bot reacted to plain text (free-text ticket offer, FSM
+  steps); groups are now inline-buttons-only — all dialogs, menu buttons and
+  /start work exclusively in private chats.
+
 ### Added
 
 - **Role-based menu + /stats** — the persistent reply menu is rendered per

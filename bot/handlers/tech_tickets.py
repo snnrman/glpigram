@@ -62,6 +62,9 @@ def build_tech_tickets_router(
     client: GlpiClient, *, ticket_front_base: str | None = None
 ) -> Router:
     router = Router(name="tech_tickets")
+    # Dialogs and menu buttons are private-chat only: in groups the bot
+    # must not react to free text (callbacks are not affected).
+    router.message.filter(F.chat.type == "private")
 
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:
