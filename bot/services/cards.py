@@ -124,6 +124,7 @@ class CardService:
             requester_tg_id=card.requester_tg_id,
             attachments_count=card.attachments_count,
             history=history,
+            assignee=new_taken or None,
         )
         try:
             await bot.edit_message_text(

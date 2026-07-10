@@ -177,6 +177,117 @@ def build_tech_actions_router(
         # Passive indicator on a solved card — nothing to do, just explain.
         await cb.answer(texts.WAITING_TOAST, show_alert=True)
 
+    # -- Handoff: reassign the ticket to another technician -----------------
+    def _handoff_keyboard(ticket_id: int, techs) -> InlineKeyboardMarkup:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=t.display_name, callback_data=f"ta:hto:{ticket_id}:{t.glpi_users_id}"
+                )
+            ]
+            for t in techs
+        ]
+        rows.append([InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ta:hx")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @router.callback_query(F.data.startswith("ta:handoff:"))
+    async def on_handoff(cb: CallbackQuery, link: LinkedUser, bot: Bot) -> None:
+        if not link.is_tech:
+            await cb.answer(texts.TECH_ONLY, show_alert=True)
+            return
+        if repo is None:
+            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            return
+        ticket_id = int(cb.data.split(":")[2])
+        techs = await repo.list_techs()
+        if not techs:
+            await cb.answer(texts.HANDOFF_NO_TECHS, show_alert=True)
+            return
+        # The pick dialog lives in the pressing tech's DM, not in the group.
+        try:
+            await bot.send_message(
+                cb.from_user.id,
+                texts.handoff_pick(ticket_id),
+                reply_markup=_handoff_keyboard(ticket_id, techs),
+            )
+        except Exception as exc:  # noqa: BLE001 - tech hasn't opened a DM with the bot
+            log.warning("handoff_dm_failed tech=%s error=%s", cb.from_user.id, exc)
+            await cb.answer(texts.TECH_DM_FAILED, show_alert=True)
+            return
+        await cb.answer()
+
+    @router.callback_query(F.data == "ta:hx")
+    async def on_handoff_cancel(cb: CallbackQuery) -> None:
+        card = cb.message if isinstance(cb.message, Message) else None
+        if card is not None:
+            try:
+                await card.edit_text(texts.HANDOFF_CANCELLED)
+            except Exception as exc:  # noqa: BLE001 - editing is best-effort
+                log.warning("handoff_cancel_edit_failed error=%s", exc)
+        await cb.answer()
+
+    @router.callback_query(F.data.startswith("ta:hto:"))
+    async def on_handoff_pick(cb: CallbackQuery, link: LinkedUser, bot: Bot) -> None:
+        if not link.is_tech:
+            await cb.answer(texts.TECH_ONLY, show_alert=True)
+            return
+        _, _, tid, uid = cb.data.split(":")
+        ticket_id, new_glpi_id = int(tid), int(uid)
+        target = await repo.get_by_glpi(new_glpi_id) if repo is not None else None
+        if target is None:
+            await cb.answer(texts.HANDOFF_TARGET_GONE, show_alert=True)
+            return
+        try:
+            prev_names = await client.get_ticket_assignees(ticket_id)
+        except GlpiError:
+            prev_names = []
+        try:
+            await client.reassign_ticket(ticket_id, new_glpi_id)
+        except GlpiError as exc:
+            log.exception("handoff_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
+            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            return
+        ticket = None
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError:
+            pass
+        # New executor's DM (skip a self-handoff — the presser knows already).
+        if target.tg_id != cb.from_user.id:
+            await notify.send_text(
+                bot,
+                target.tg_id,
+                texts.handoff_to_new(
+                    ticket_id,
+                    ticket.name if ticket else "",
+                    ticket.urgency or None if ticket else None,
+                ),
+            )
+        # Requester's DM (bot-created tickets are tracked).
+        tracked = await repo.get_tracked_ticket(ticket_id)
+        if tracked is not None:
+            await notify.send_text(
+                bot,
+                tracked.requester_tg_id,
+                texts.handoff_to_requester(ticket_id, target.display_name),
+            )
+        # Card: history line + assignee in the header (no group ping).
+        if cards is not None:
+            await cards.record_event(
+                bot,
+                ticket_id,
+                texts.hist_handoff(", ".join(prev_names) or None, target.display_name),
+                status=TICKET_STATUS_PROCESSING_ASSIGNED,
+                taken_by=target.display_name,
+            )
+        pick_msg = cb.message if isinstance(cb.message, Message) else None
+        if pick_msg is not None:
+            try:
+                await pick_msg.edit_text(texts.handoff_done(ticket_id, target.display_name))
+            except Exception as exc:  # noqa: BLE001 - editing is best-effort
+                log.warning("handoff_done_edit_failed error=%s", exc)
+        await cb.answer()
+
     # /cancel must precede the state text handlers, or the comment/solution
     # steps would swallow it as content.
     @router.message(StateFilter(TechAction), Command("cancel"))

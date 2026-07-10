@@ -637,6 +637,37 @@ class GlpiClient:
         )
         await self.set_ticket_status(ticket_id, TICKET_STATUS_PROCESSING_ASSIGNED)
 
+    async def reassign_ticket(self, ticket_id: int, new_tech_users_id: int) -> None:
+        """Replace the assigned technician (Ticket_User type=2), keep *assigned*.
+
+        Drops every existing assignee link except the new tech, adds the new
+        link when missing, then (re)sets the status to processing/assigned.
+        """
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/Ticket_User", idempotent=True)
+        links = resp.json()
+        already_assigned = False
+        for link in links if isinstance(links, list) else []:
+            if int(link.get("type", 0) or 0) != TICKET_USER_ASSIGN:
+                continue
+            if int(link.get("users_id", 0) or 0) == new_tech_users_id:
+                already_assigned = True
+                continue
+            await self._request("DELETE", f"/Ticket_User/{link['id']}", idempotent=False)
+        if not already_assigned:
+            await self._request(
+                "POST",
+                "/Ticket_User",
+                json={
+                    "input": {
+                        "tickets_id": ticket_id,
+                        "users_id": new_tech_users_id,
+                        "type": TICKET_USER_ASSIGN,
+                    }
+                },
+                idempotent=False,
+            )
+        await self.set_ticket_status(ticket_id, TICKET_STATUS_PROCESSING_ASSIGNED)
+
     async def add_followup(self, ticket_id: int, content: str, *, is_private: bool = False) -> int:
         """Add an ITILFollowup to a ticket; returns the new followup id."""
         resp = await self._request(

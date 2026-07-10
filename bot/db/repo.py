@@ -411,6 +411,14 @@ class Repo:
             row = await cur.fetchone()
         return (row["tg_id"], row["name"]) if row else None
 
+    async def list_techs(self) -> list[LinkedUser]:
+        """All linked technicians (handoff candidates), alphabetical."""
+        async with self._conn.execute(
+            "SELECT * FROM users WHERE is_tech = 1 ORDER BY display_name"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [LinkedUser._from_row(r) for r in rows]
+
     async def user_stats(self, *, now: int) -> tuple[int, int, int]:
         """Linked-user counters for /stats: (total, of them techs, linked last 7 days).
 

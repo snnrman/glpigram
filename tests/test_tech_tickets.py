@@ -156,7 +156,7 @@ async def test_open_detail_has_reply_and_close_for_in_work(env):
     text, kb = bot.edits[-1]
     assert "Принтер" in text and texts.ticket_status_label(2) in text
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert data == ["ta:comment:5", "ta:close:5", "tt:list"]
+    assert data == ["ta:comment:5", "ta:close:5", "ta:handoff:5", "tt:list"]
 
 
 async def test_solved_detail_hides_close(env):
