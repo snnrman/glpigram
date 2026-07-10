@@ -50,12 +50,13 @@ def _detail_keyboard(ticket_id: int, *, status: int) -> InlineKeyboardMarkup:
         actions.append(
             InlineKeyboardButton(text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}")
         )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            actions,
-            [InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data="tt:list")],
-        ]
-    )
+    tail = [InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data="tt:list")]
+    if status != TICKET_STATUS_SOLVED:
+        tail.insert(
+            0,
+            InlineKeyboardButton(text=texts.BTN_HANDOFF, callback_data=f"ta:handoff:{ticket_id}"),
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[actions, tail])
 
 
 def build_tech_tickets_router(

@@ -196,7 +196,7 @@ async def notify_closed_by_requester(
 
 
 def tech_ticket_keyboard_taken(ticket_id: int) -> InlineKeyboardMarkup:
-    """Card buttons once taken: Take is gone, Reply/Close remain."""
+    """Card buttons once taken: Take is gone; Reply/Close plus Reassign."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -206,7 +206,8 @@ def tech_ticket_keyboard_taken(ticket_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}"
                 ),
-            ]
+            ],
+            [InlineKeyboardButton(text=texts.BTN_HANDOFF, callback_data=f"ta:handoff:{ticket_id}")],
         ]
     )
 

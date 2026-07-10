@@ -361,6 +361,7 @@ def notify_new_ticket(
     requester_tg_id: int | None = None,
     attachments_count: int = 0,
     history: list[str] | None = None,
+    assignee: str | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title + author, then a named link instead of a bare URL. The
@@ -371,6 +372,8 @@ def notify_new_ticket(
         head += f"\n{urgency_card_line(urgency)}"
     if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)
         head += f"\nStatus: {ticket_status_label(status)}"
+    if assignee:
+        head += f"\n🙋 Assignee: {html.escape(assignee)}"
     # One compact body block: emoji markers for eye-scanning, no extra air.
     body = [f"📝 {html.escape(title)}"]
     if requester_name:
@@ -623,3 +626,33 @@ def tech_tickets_list(in_work: list[tuple[int, str]], waiting: list[tuple[int, s
             + "\n".join(f"• #{tid} — {html.escape(title)}" for tid, title in waiting)
         )
     return "\n\n".join(parts)
+
+
+# --- handoff (reassign the ticket to another technician) ---
+BTN_HANDOFF = "🔄 Reassign"
+HANDOFF_NO_TECHS = "Nobody to hand over to: no technicians are linked in the bot."
+HANDOFF_TARGET_GONE = "This technician is no longer linked to the bot."
+HANDOFF_CANCELLED = "🔄 Reassignment cancelled."
+
+
+def handoff_pick(ticket_id: int) -> str:
+    return f"🔄 Who should take over ticket #{ticket_id}?"
+
+
+def handoff_done(ticket_id: int, name: str) -> str:
+    return f"🔄 Ticket #{ticket_id} handed over to {html.escape(name)}."
+
+
+def handoff_to_new(ticket_id: int, title: str, urgency: int | None) -> str:
+    line = f"🔄 Ticket #{ticket_id} has been reassigned to you: {html.escape(title)}"
+    if urgency is not None:
+        line += f", urgency {urgency_label(urgency)}"
+    return line
+
+
+def handoff_to_requester(ticket_id: int, name: str) -> str:
+    return f"🔄 Your ticket #{ticket_id} is now handled by {html.escape(name)}"
+
+
+def hist_handoff(frm: str | None, to: str) -> str:
+    return f"🔄 Handed over: {html.escape(frm or '—')} → {html.escape(to)}"

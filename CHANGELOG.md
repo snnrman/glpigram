@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Handoff («🔄 Передать»)** — a technician can reassign a ticket to another
+  linked tech from the group card or the «В работе» detail view; the pick
+  dialog lives in the presser's DM. GLPI swaps the Ticket_User assignee link,
+  the new tech and the requester get DMs, the card history records
+  «Передано: кто → кому» and the card header now shows the assignee.
 - **Role-based menu + /stats** — the persistent reply menu is rendered per
   role: technicians (GLPI-group membership, ~5 min cache) get an extra
   «📊 Статистика» button; /stats posts an open-queue breakdown by status

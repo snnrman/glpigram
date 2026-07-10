@@ -169,6 +169,14 @@ deploy/
      подтверждения»; closed -> only an "Open in GLPI" URL button. If the requester never
      reacts the ticket stays solved — GLPI's own auto-close timer may close it (the bot
      does nothing).
+   - **Handoff («🔄 Передать»):** on taken cards and in the «👨‍💻 В работе» detail view
+     (techs only, is_tech re-checked in handlers). The pick list — all linked techs from
+     SQLite (is_tech cache of TECH_GROUP_ID membership) — is sent to the pressing tech's
+     DM, never the group. Picking one calls `reassign_ticket` (drop old Ticket_User
+     type=2 links, add the new one, status stays assigned/2). Notifications: new tech's
+     DM («на вас переназначена…» with title + urgency; skipped on self-handoff),
+     requester's DM («вашу заявку теперь ведёт…»), card history «🔄 Передано: кто → кому»
+     + the card header now renders the assignee («🙋 Исполнитель: …») on every edit.
 6. **Attachments both ways.** Photos/documents from TG uploaded to GLPI on ticket creation
    and in comments. TG file size limits apply (20 MB via Bot API) — reject larger with a
    clear message.
