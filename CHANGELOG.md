@@ -1,11 +1,45 @@
 # Changelog
 
+> 🇷🇺 [Читать по-русски](CHANGELOG.ru.md)
+
 All notable changes to GLPIgram are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-07-14
+
+### Added
+
+- **Handoff («🔄 Передать»)** — a technician can reassign a ticket to another
+  linked tech from the group card or the «В работе» detail view; the pick
+  dialog lives in the presser's DM. GLPI swaps the Ticket_User assignee link,
+  the new tech and the requester get DMs, the card history records
+  «Передано: кто → кому» and the card header now shows the assignee.
+- **Explicit cancel in every dialog** — each text-awaiting step (comment,
+  solution, close/return reason, /new title & description, login) carries an
+  inline «❌ Отмена» button and honours /cancel; cancelling clears the state,
+  answers «Отменено» with the role menu and never touches the ticket.
+- **«👨‍💻 В работе» for technicians** — the tech menu lists tickets assigned
+  to the pressing technician in two groups (in work / awaiting the
+  requester's confirmation); tapping one opens a detail view with the same
+  Reply/Close actions as the group card.
+- **Role-based menu + /stats** — the persistent reply menu is rendered per
+  role: technicians (GLPI-group membership, ~5 min cache) get an extra
+  «📊 Статистика» button; /stats posts an open-queue breakdown by status
+  plus linked-user counters (total / technicians / new in 7 days). The
+  handler re-checks `is_tech` itself, so a direct /stats is refused for
+  regular users; a role change flips the menu on the next interaction.
+- **Bilingual changelog** — CHANGELOG.md (English) and CHANGELOG.ru.md
+  (Russian), cross-linked in the header like the READMEs.
+
+### Changed
+
+- The solved → closed confirmation cycle is finalized: if the requester never
+  reacts to a proposed solution, the ticket is left in *solved* for GLPI's own
+  auto-close timer — the bot never force-closes an unconfirmed ticket.
 
 ### Fixed
 
@@ -15,28 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In group chats the bot reacted to plain text (free-text ticket offer, FSM
   steps); groups are now inline-buttons-only — all dialogs, menu buttons and
   /start work exclusively in private chats.
-
-### Added
-
-- **Explicit cancel in every dialog** — each text-awaiting step (comment,
-  solution, close/return reason, /new title & description, login) carries an
-  inline «❌ Отмена» button and honours /cancel; cancelling clears the state,
-  answers «Отменено» with the role menu and never touches the ticket.
-- **Handoff («🔄 Передать»)** — a technician can reassign a ticket to another
-  linked tech from the group card or the «В работе» detail view; the pick
-  dialog lives in the presser's DM. GLPI swaps the Ticket_User assignee link,
-  the new tech and the requester get DMs, the card history records
-  «Передано: кто → кому» and the card header now shows the assignee.
-- **Role-based menu + /stats** — the persistent reply menu is rendered per
-  role: technicians (GLPI-group membership, ~5 min cache) get an extra
-  «📊 Статистика» button; /stats posts an open-queue breakdown by status
-  plus linked-user counters (total / technicians / new in 7 days). The
-  handler re-checks `is_tech` itself, so a direct /stats is refused for
-  regular users; a role change flips the menu on the next interaction.
-- **«👨‍💻 В работе» for technicians** — the tech menu lists tickets assigned
-  to the pressing technician in two groups (in work / awaiting the
-  requester's confirmation); tapping one opens a detail view with the same
-  Reply/Close actions as the group card.
+- Raw GLPI ticket URLs printed on their own line (creation confirmation,
+  status-change and followup notifications, the /tickets detail view) are
+  replaced with the ticket number as a clickable link; an escaping audit
+  covers user- and GLPI-supplied strings interpolated into HTML messages.
 
 ## [0.2.0] - 2026-07-09
 
