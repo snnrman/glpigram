@@ -11,7 +11,7 @@ from aiogram import Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Chat, Message, Update
+from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update
 from aiogram.types import User as TgUser
 
 from bot import texts
@@ -373,3 +373,65 @@ async def test_detail_view_shows_urgency(repo):
     await dp.feed_update(bot, _cb_update(bot, 1, f"mt:open:{TICKET}"))
     texts_sent = [t for _, t in bot.sent if t]
     assert any("🟡 Срочность: средняя" in t for t in texts_sent)
+
+
+# --- requester's comment attachment reaches the tech group (both directions) ---
+class MediaFakeBot(FakeBot):
+    """FakeBot that also records photo/document sends and serves downloads."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.photos: list[tuple[object, str]] = []
+        self.documents: list[tuple[object, str]] = []
+
+    async def download(self, file_id, **kwargs):
+        import io
+
+        return io.BytesIO(b"BYTES")
+
+    async def send_photo(self, chat_id, photo, **kwargs):
+        self.photos.append((chat_id, photo.filename))
+
+    async def send_document(self, chat_id, document, **kwargs):
+        self.documents.append((chat_id, document.filename))
+
+
+def _photo_update(bot: FakeBot, uid: int) -> Update:
+    photo = PhotoSize(file_id="F1", file_unique_id="U1", width=90, height=90, file_size=1000)
+    msg = Message(
+        message_id=uid,
+        date=_DATE,
+        chat=Chat(id=CHAT, type="private"),
+        from_user=TgUser(id=CHAT, is_bot=False, first_name="U"),
+        photo=[photo],
+    ).as_(bot)
+    return Update(update_id=uid, message=msg)
+
+
+async def test_requester_comment_photo_reaches_tech_group(repo):
+    bot = MediaFakeBot()
+    client = AsyncMock()
+    client.attach_document_to_ticket.return_value = 1
+    client.add_followup.return_value = 555
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="Печать", content="c", status=1, urgency=3
+    )
+    client.get_ticket_assignees.return_value = []
+    client.list_followups.return_value = []
+    router = build_my_tickets_router(
+        client, repo, tech_group_chat_id=TECH_CHAT, ticket_front_base="https://glpi.local"
+    )
+    router.message.middleware(_inject_link)
+    router.callback_query.middleware(_inject_link)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
+    await ctx.set_state(MyTickets.commenting)
+    await ctx.set_data({"ticket_id": TICKET})
+
+    await dp.feed_update(bot, _photo_update(bot, 1))
+
+    # uploaded to GLPI as a document on the ticket...
+    client.attach_document_to_ticket.assert_awaited_once()
+    # ...and forwarded to the tech group as a photo
+    assert bot.photos and bot.photos[-1][0] == TECH_CHAT

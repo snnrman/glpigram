@@ -96,6 +96,7 @@ async def env(tmp_path):
         chat_id=GROUP,
         message_id=CARD_MSG,
         title="Принтер",
+        description="описание",
         urgency=4,
         requester_name="Заявитель",
         requester_tg_id=REQUESTER_ID,

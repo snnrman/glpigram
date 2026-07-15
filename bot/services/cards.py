@@ -63,6 +63,7 @@ class CardService:
             chat_id=chat_id,
             message_id=message_id,
             title=ticket.name,
+            description=ticket.content or "",
             urgency=ticket.urgency,
             requester_name=requester_name or "",
             requester_tg_id=requester_tg_id,
@@ -117,6 +118,7 @@ class CardService:
         text = texts.notify_new_ticket(
             ticket_id=ticket_id,
             title=card.title,
+            description=card.description,
             status=new_status,
             url=self._url(ticket_id),
             urgency=card.urgency or None,

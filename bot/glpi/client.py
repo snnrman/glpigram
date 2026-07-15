@@ -880,9 +880,13 @@ class GlpiClient:
         await self.link_document(doc_id, "Ticket", ticket_id)
         return doc_id
 
-    async def list_ticket_documents(self, ticket_id: int) -> list[Document]:
-        """Documents attached to a ticket (Document_Item links + metadata)."""
-        resp = await self._request("GET", f"/Ticket/{ticket_id}/Document_Item", idempotent=True)
+    async def _list_item_documents(self, itemtype: str, item_id: int) -> list[Document]:
+        """Documents attached to any item via Document_Item links + metadata.
+
+        Shared by tickets and followups: GLPI stores an attachment as a Document
+        linked to its owner through a ``Document_Item`` row (itemtype/items_id).
+        """
+        resp = await self._request("GET", f"/{itemtype}/{item_id}/Document_Item", idempotent=True)
         links = resp.json()
         if not isinstance(links, list):
             return []
@@ -901,6 +905,18 @@ class GlpiClient:
             if isinstance(raw, dict):
                 docs.append(Document.from_api(raw))
         return docs
+
+    async def list_ticket_documents(self, ticket_id: int) -> list[Document]:
+        """Documents attached to a ticket (Document_Item links + metadata)."""
+        return await self._list_item_documents("Ticket", ticket_id)
+
+    async def list_followup_documents(self, followup_id: int) -> list[Document]:
+        """Documents attached to a followup (files added with a GLPI-web reply).
+
+        Web-UI followup attachments are linked to the ``ITILFollowup`` item, not
+        the parent ticket, so they need this dedicated lookup.
+        """
+        return await self._list_item_documents("ITILFollowup", followup_id)
 
     async def download_document(self, document_id: int) -> bytes:
         """Download a document's file content.

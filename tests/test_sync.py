@@ -43,6 +43,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
         self.photos: list[tuple[int, list[str]]] = []  # (chat_id, [filenames])
+        self.documents: list[tuple[int, str]] = []  # (chat_id, filename)
         self.edits: list[tuple[int, int, str]] = []  # (chat_id, message_id, text)
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -62,16 +63,27 @@ class FakeBot:
     async def send_media_group(self, chat_id, media, **kwargs):
         self.photos.append((chat_id, [m.media.filename for m in media]))
 
+    async def send_document(self, chat_id, document, **kwargs):
+        self.documents.append((chat_id, document.filename))
+
 
 class FakeClient:
     def __init__(
-        self, *, recent=None, tickets=None, followups=None, requesters=None, documents=None
+        self,
+        *,
+        recent=None,
+        tickets=None,
+        followups=None,
+        requesters=None,
+        documents=None,
+        followup_documents=None,
     ) -> None:
         self.recent = recent or []
         self.tickets = tickets or {}
         self.followups = followups or {}
         self.requesters = requesters or {}  # ticket_id -> (glpi_id, name)
         self.documents = documents or {}  # ticket_id -> list[Document]
+        self.followup_documents = followup_documents or {}  # followup_id -> list[Document]
         self.blobs = {}  # document_id -> bytes
         self.solutions = {}  # ticket_id -> (tech_name, text)
 
@@ -89,6 +101,9 @@ class FakeClient:
 
     async def list_ticket_documents(self, ticket_id):
         return list(self.documents.get(ticket_id, []))
+
+    async def list_followup_documents(self, followup_id):
+        return list(self.followup_documents.get(followup_id, []))
 
     async def download_document(self, document_id):
         return self.blobs.get(document_id, b"IMAGEBYTES")
@@ -245,6 +260,83 @@ async def test_followups_forward_only_others_public(repo):
     bot.sent.clear()
     await svc._poll_tracked_tickets()
     assert bot.sent == []
+
+
+# --- followup attachments forwarded to the requester (the bug) ---------------
+async def _tracked_ticket_with_followup(repo, client):
+    await repo.track_ticket(
+        ticket_id=20, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+
+
+async def test_followup_image_is_forwarded_to_requester(repo):
+    bot = FakeBot()
+    fup = Followup(id=2, tickets_id=20, content="смотри фото", users_id=99)
+    client = FakeClient(
+        tickets={20: _ticket(20, status=1)},
+        followups={20: [fup]},
+        followup_documents={2: [Document(id=7, filename="err.png", mime="image/png", filesize=50)]},
+    )
+    await _tracked_ticket_with_followup(repo, client)
+    svc = _service(bot, client, repo)
+
+    await svc._poll_tracked_tickets()
+    # text forwarded to the requester...
+    assert any(c == REQUESTER_TG and "смотри фото" in t for c, t in bot.sent)
+    # ...and the image too
+    assert bot.photos and bot.photos[0][0] == REQUESTER_TG
+    assert "err.png" in bot.photos[0][1]
+
+    # next tick must not re-send anything (followup cursor advanced)
+    bot.sent.clear()
+    bot.photos.clear()
+    await svc._poll_tracked_tickets()
+    assert bot.sent == [] and bot.photos == []
+
+
+async def test_followup_non_image_forwarded_as_document(repo):
+    bot = FakeBot()
+    fup = Followup(id=2, tickets_id=20, content="акт", users_id=99)
+    client = FakeClient(
+        tickets={20: _ticket(20, status=1)},
+        followups={20: [fup]},
+        followup_documents={
+            2: [Document(id=8, filename="act.pdf", mime="application/pdf", filesize=100)]
+        },
+    )
+    await _tracked_ticket_with_followup(repo, client)
+
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert bot.documents and bot.documents[0] == (REQUESTER_TG, "act.pdf")
+
+
+async def test_followup_oversized_document_becomes_link(repo):
+    bot = FakeBot()
+    fup = Followup(id=2, tickets_id=20, content="дамп", users_id=99)
+    huge = 60 * 1024 * 1024  # above the 50 MB upload cap -> not downloaded, linked
+    client = FakeClient(
+        tickets={20: _ticket(20, status=1)},
+        followups={20: [fup]},
+        followup_documents={
+            2: [Document(id=9, filename="dump.iso", mime="application/octet-stream", filesize=huge)]
+        },
+    )
+    await _tracked_ticket_with_followup(repo, client)
+
+    await _service(bot, client, repo, front_base="https://glpi.local")._poll_tracked_tickets()
+    assert bot.documents == [] and bot.photos == []
+    assert any("dump.iso" in t and "glpi.local" in t for _, t in bot.sent)
+
+
+async def test_followup_without_attachments_still_forwards_text(repo):
+    bot = FakeBot()
+    fup = Followup(id=2, tickets_id=20, content="просто текст", users_id=99)
+    client = FakeClient(tickets={20: _ticket(20, status=1)}, followups={20: [fup]})
+    await _tracked_ticket_with_followup(repo, client)
+
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert any("просто текст" in t for _, t in bot.sent)
+    assert bot.photos == [] and bot.documents == []  # nothing attached, no crash
 
 
 async def test_deleted_ticket_is_deactivated(repo):
@@ -448,7 +540,8 @@ async def test_new_ticket_card_shows_urgency(repo):
 
 
 async def test_new_ticket_card_layout(repo):
-    """Pin the card format: №+urgency head, ONE blank line, compact 📝/👤/🔗 body."""
+    """Pin the card format: №+urgency head, ONE blank line, compact body with a
+    bold title, the description snippet, then 👤/🔗."""
     bot = FakeBot()
     client = FakeClient(
         recent=[_ticket(36, name="тест", urgency=3)], requesters={36: (42, "Олег Каленский")}
@@ -461,9 +554,10 @@ async def test_new_ticket_card_layout(repo):
     assert len(blocks) == 2  # exactly one blank line in the whole card
     assert blocks[0] == "🆕 <b>Заявка №36</b>\n🟡 <b>Средняя срочность</b>"
     body = blocks[1].split("\n")
-    assert body[0] == "📝 тест"  # title NOT bold
-    assert body[1].startswith("👤 ")
-    assert body[2] == (
+    assert body[0] == "📝 <b>тест</b>"  # title bold
+    assert body[1] == "c"  # description (ticket.content), plain text under title
+    assert body[2].startswith("👤 ")
+    assert body[3] == (
         '🔗 <a href="https://glpi.local/front/ticket.form.php?id=36">Открыть в GLPI</a>'
     )
     assert "Статус" not in text  # implied by 🆕 for a New ticket

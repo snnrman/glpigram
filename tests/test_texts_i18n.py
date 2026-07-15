@@ -130,3 +130,49 @@ def test_user_supplied_text_is_escaped_in_html_messages():
         for out in (summary, request, resolved, admin):
             assert "<b>Иван" not in out
             assert "&lt;b&gt;Иван &amp; Ко&lt;/b&gt;" in out
+
+
+# --- ticket description in cards / detail views -------------------------------
+def test_description_block_strips_html_escapes_and_truncates():
+    for mod in (ru, en):
+        # HTML tags stripped, entities decoded then re-escaped for HTML parse mode
+        assert mod.description_block("<p>a &amp; b</p>") == "a &amp; b"
+        # empty / markup-only content yields nothing (no empty line downstream)
+        assert mod.description_block("") == ""
+        assert mod.description_block(None) == ""
+        assert mod.description_block("<br>") == ""
+        # long content capped at ~200 chars with an ellipsis
+        out = mod.description_block("x" * 500)
+        assert out.endswith("…") and len(out) <= mod.DESCRIPTION_LIMIT + 1
+
+
+def test_new_ticket_card_includes_description_below_bold_title():
+    for mod in (ru, en):
+        card = mod.notify_new_ticket(
+            ticket_id=7, title="Печать", description="<b>сломан</b> принтер", status=1, url=None
+        )
+        assert "📝 <b>Печать</b>" in card  # title is bold
+        assert "сломан принтер" in card  # tags stripped from the description
+        assert "<b>сломан</b>" not in card  # raw markup never leaks
+
+
+def test_new_ticket_card_without_description_has_no_empty_line():
+    for mod in (ru, en):
+        card = mod.notify_new_ticket(ticket_id=7, title="t", description="", status=1, url=None)
+        assert "\n\n\n" not in card  # no blank line where the description would be
+
+
+def test_ticket_detail_shows_description_and_skips_when_empty():
+    withd = ru.ticket_detail(
+        ticket_id=7,
+        title="t",
+        description="важное <i>дело</i>",
+        status=1,
+        assignee=None,
+        followups=[],
+    )
+    assert "важное дело" in withd and "<i>" not in withd
+    without = ru.ticket_detail(
+        ticket_id=7, title="t", description="", status=1, assignee=None, followups=[]
+    )
+    assert "\n\n\n" not in without

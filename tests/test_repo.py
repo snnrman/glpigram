@@ -150,3 +150,43 @@ async def test_concurrent_writes_do_not_interleave(repo):
     for uid in range(20):
         link = await repo.get_by_tg(uid)
         assert link is not None and link.glpi_users_id == uid + 100
+
+
+async def test_ticket_cards_description_migration(tmp_path):
+    """A legacy ticket_cards table (no 'description' column) is migrated on connect."""
+    import aiosqlite
+
+    path = str(tmp_path / "legacy.sqlite3")
+    db = await aiosqlite.connect(path)
+    await db.execute(
+        """CREATE TABLE ticket_cards (
+            ticket_id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+            title TEXT NOT NULL DEFAULT '', urgency INTEGER NOT NULL DEFAULT 0,
+            requester_name TEXT NOT NULL DEFAULT '', requester_tg_id INTEGER,
+            attachments_count INTEGER NOT NULL DEFAULT 0, status INTEGER NOT NULL DEFAULT 1,
+            taken_by TEXT NOT NULL DEFAULT '', history TEXT NOT NULL DEFAULT '[]',
+            last_followup_id INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0)"""
+    )
+    await db.commit()
+    await db.close()
+
+    r = Repo(path)
+    await r.connect()  # must ALTER TABLE ... ADD COLUMN description
+    try:
+        await r.save_card(
+            ticket_id=1,
+            chat_id=-1,
+            message_id=2,
+            title="t",
+            description="DESC",
+            urgency=3,
+            requester_name="x",
+            requester_tg_id=None,
+            attachments_count=0,
+            status=1,
+            now=0,
+        )
+        card = await r.get_card(1)
+        assert card.description == "DESC"
+    finally:
+        await r.close()

@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS ticket_cards (
     chat_id           INTEGER NOT NULL,
     message_id        INTEGER NOT NULL,
     title             TEXT    NOT NULL DEFAULT '',
+    description       TEXT    NOT NULL DEFAULT '',  -- ticket content, for re-renders
     urgency           INTEGER NOT NULL DEFAULT 0,
     requester_name    TEXT    NOT NULL DEFAULT '',
     requester_tg_id   INTEGER,
