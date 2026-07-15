@@ -81,6 +81,17 @@ def test_urgency_line_full_scale_and_unknown():
     assert en.urgency_line(9) == "Urgency: 9"
 
 
+def test_urgent_prod_level_label_and_card_mark():
+    # The dedicated urgent (prod) level (GLPI urgency 5) has a distinct label in
+    # the /new summary and an explicit, loud banner on the tech-group card.
+    assert ru.urgency_label(5) == ru.URGENCY_URGENT_LABEL == "🔴 Срочно (прод)"
+    assert en.urgency_label(5) == en.URGENCY_URGENT_LABEL == "🔴 Urgent (prod)"
+    assert "СРОЧНО (прод)" in ru.urgency_card_line(5)
+    assert "URGENT (prod)" in en.urgency_card_line(5)
+    # Ordinary high (4) stays the generic scale wording — no urgent banner.
+    assert "высокая" in ru.urgency_card_line(4).lower()
+
+
 # --- clickable ticket links + escaping (no bare URLs in HTML mode) -------------
 URL = "https://glpi.local/front/ticket.form.php?id=49"
 

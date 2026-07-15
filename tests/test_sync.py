@@ -108,14 +108,13 @@ async def repo(tmp_path):
     await r.close()
 
 
-def _service(bot, client, repo, *, now=WORKING, quiet_min_urgency=4, front_base=None, **kw):
+def _service(bot, client, repo, *, now=WORKING, front_base=None, **kw):
     return SyncService(
         bot,
         client,
         repo,
         tech_group_chat_id=TECH_CHAT,
         schedule=_SCHEDULE,
-        quiet_min_urgency=quiet_min_urgency,
         interval=45,
         front_base=front_base,
         now_provider=lambda: now,
@@ -283,14 +282,37 @@ async def test_low_urgency_offhours_deferred_then_flushed_next_workday(repo):
     assert await repo.list_deferred() == []
 
 
-async def test_high_urgency_offhours_sent_immediately(repo):
+async def test_high_urgency_offhours_deferred(repo):
+    # Ordinary HIGH (4) no longer breaks quiet hours: it waits until morning.
     bot = FakeBot()
-    high = _ticket(3, status=1, urgency=4)  # >= QUIET_MIN_URGENCY
-    client = FakeClient(recent=[high])
+    high = _ticket(3, status=1, urgency=4)
+    client = FakeClient(recent=[high], tickets={3: high})
     await repo.set_cursor("last_ticket_id", 2)
 
     await _service(bot, client, repo, now=OFFHOURS_NIGHT).tick()
+    assert _tech(bot) == []  # nothing hits the group overnight
+    assert len(await repo.list_deferred()) == 1
+    assert await repo.get_cursor("last_ticket_id") == 3  # cursor still advances
+
+    # Monday 09:00: the deferred high-urgency card is flushed with the backlog.
+    bot.sent.clear()
+    client.recent = []
+    await _service(bot, client, repo, now=MONDAY_OPEN).tick()
     assert any("Заявка №3" in m for m in _tech(bot))
+    assert await repo.list_deferred() == []
+
+
+async def test_urgent_prod_offhours_sent_immediately(repo):
+    # The dedicated urgent (prod) level (urgency 5) is the ONLY breakthrough.
+    bot = FakeBot()
+    urgent = _ticket(3, status=1, urgency=5)
+    client = FakeClient(recent=[urgent])
+    await repo.set_cursor("last_ticket_id", 2)
+
+    await _service(bot, client, repo, now=OFFHOURS_NIGHT).tick()
+    msgs = _tech(bot)
+    assert any("Заявка №3" in m for m in msgs)
+    assert any("СРОЧНО (прод)" in m for m in msgs)  # explicit urgent mark
     assert await repo.list_deferred() == []
 
 

@@ -61,12 +61,12 @@ class Settings(BaseSettings):
     )
 
     # --- Quiet hours (off-hours) for tech-group notifications ---
+    # Only the dedicated "🔴 Срочно (прод)" level (URGENCY_URGENT) bypasses the
+    # quiet queue; ordinary urgency (low/medium/high) is deferred to the morning.
+    # There is intentionally no urgency-threshold knob — the breakthrough is tied
+    # to the product-level urgent choice, not to a numeric GLPI urgency.
     work_hours: str = Field(default="09:00-18:00", description='Working hours, "HH:MM-HH:MM".')
     work_days: str = Field(default="1-5", description="Working ISO weekdays, Mon=1..Sun=7.")
-    quiet_min_urgency: int = Field(
-        default=4,
-        description="Off-hours: only tickets with urgency >= this bypass the quiet queue.",
-    )
 
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(

@@ -100,7 +100,6 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         repo,
         ticket_front_base=settings.glpi_front_base,
         schedule=schedule,
-        quiet_min_urgency=settings.quiet_min_urgency,
     )
     for router in (tech, tech_tickets, my_tickets, stats, business):
         router.message.middleware(auth)
@@ -149,7 +148,6 @@ async def _run(settings: Settings) -> None:
             repo,
             tech_group_chat_id=settings.tech_group_chat_id,
             schedule=_work_schedule(settings),
-            quiet_min_urgency=settings.quiet_min_urgency,
             interval=settings.sync_interval,
             front_base=settings.glpi_front_base,
             unassigned_remind_hours=settings.unassigned_remind_hours,

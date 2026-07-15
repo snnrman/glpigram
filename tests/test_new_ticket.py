@@ -321,3 +321,46 @@ async def test_album_stores_all_photos_but_confirms_once():
     await dp.feed_update(bot, _photo_update(bot, 4))
     confirmations = [t for t, _ in bot.sent if t and "Вложение добавлено" in t]
     assert len(confirmations) == 2
+
+
+# --- urgency step: ordinary levels vs. the urgent (prod) warning gate ---------
+_URG_DATA = {"category_id": 5, "category_name": "Прод"}
+
+
+async def test_ordinary_urgency_goes_straight_to_title():
+    dp, ctx = await _dispatcher_at(NewTicket.choosing_urgency, data=dict(_URG_DATA))
+    bot = FakeBot()
+    await dp.feed_update(bot, _cb_update(bot, 1, "nt:urg:4"))  # ordinary high
+    assert await ctx.get_state() == NewTicket.entering_title
+    assert (await ctx.get_data())["urgency"] == 4
+    assert _last_text(bot) == texts.NEW_ENTER_TITLE
+
+
+async def test_urgent_prod_shows_warning_and_does_not_store_urgency():
+    dp, ctx = await _dispatcher_at(NewTicket.choosing_urgency, data=dict(_URG_DATA))
+    bot = FakeBot()
+    await dp.feed_update(bot, _cb_update(bot, 1, "nt:urg:5"))  # urgent (prod)
+    # Warning is shown; nothing is created as urgent yet.
+    assert _last_text(bot) == texts.URGENT_WARNING
+    assert await ctx.get_state() == NewTicket.choosing_urgency
+    assert "urgency" not in await ctx.get_data()
+
+
+async def test_urgent_prod_confirm_stores_urgency_5_and_proceeds():
+    dp, ctx = await _dispatcher_at(NewTicket.choosing_urgency, data=dict(_URG_DATA))
+    bot = FakeBot()
+    await dp.feed_update(bot, _cb_update(bot, 1, "nt:urg:5"))
+    await dp.feed_update(bot, _cb_update(bot, 2, "nt:urg_confirm"))
+    assert await ctx.get_state() == NewTicket.entering_title
+    assert (await ctx.get_data())["urgency"] == 5  # maps to GLPI very-high
+    assert _last_text(bot) == texts.NEW_ENTER_TITLE
+
+
+async def test_urgent_prod_decline_returns_to_choices_without_urgency():
+    dp, ctx = await _dispatcher_at(NewTicket.choosing_urgency, data=dict(_URG_DATA))
+    bot = FakeBot()
+    await dp.feed_update(bot, _cb_update(bot, 1, "nt:urg:5"))
+    await dp.feed_update(bot, _cb_update(bot, 2, "nt:urg_decline"))
+    assert await ctx.get_state() == NewTicket.choosing_urgency
+    assert "urgency" not in await ctx.get_data()
+    assert _last_text(bot) == texts.NEW_CHOOSE_URGENCY
