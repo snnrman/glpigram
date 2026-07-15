@@ -83,14 +83,17 @@ deploy/
 1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,
    cached 10 min) -> urgency -> title -> description -> optional photos/files ->
    confirm -> create ticket. Reply with ticket number and link.
-   - **Urgency levels.** Three ordinary levels — «🟢 Низкая» (GLPI urgency 2),
-     «🟡 Средняя» (3), «🔴 Высокая» (4) — plus a dedicated «🔴 Срочно (прод)»
-     level (GLPI urgency 5, `URGENCY_URGENT`) on its own row. Selecting «Срочно»
-     shows a warning («⚠️ Категория для срочных задач, связанных с продакшеном.
-     Уведомление придёт команде в любое время суток…») with «Подтвердить» /
-     «Отмена»; without confirmation the ticket is NOT created as urgent
-     (declining returns to the level choices). Only «Срочно (прод)» breaks
-     through quiet hours (see feature 4); ordinary «Высокая» does NOT.
+   - **Urgency levels.** The keyboard lists the dedicated «🔴 Срочно (прод)»
+     level (GLPI urgency 5, `URGENCY_URGENT`) FIRST, alone on its own row, then
+     the three ordinary levels — «🟠 Высокая» (GLPI urgency 4), «🟡 Средняя» (3),
+     «🟢 Низкая» (2) — then «❌ Отмена» last. Red 🔴 is reserved for «Срочно» as
+     the visual marker of exclusivity; ordinary «Высокая» is orange 🟠 everywhere
+     (buttons, cards, detail views). Selecting «Срочно» shows a warning
+     («⚠️ Категория для срочных задач, связанных с продакшеном. Уведомление придёт
+     команде в любое время суток…») with «Подтвердить» / «Отмена»; without
+     confirmation the ticket is NOT created as urgent (declining returns to the
+     level choices). Only «Срочно (прод)» breaks through quiet hours (see
+     feature 4); ordinary «Высокая» does NOT.
 2. **Account linking (AD-based).** GLPI users are synced from Active Directory via LDAP;
    `User.name` equals the AD sAMAccountName and is the linking key.
    `/start` requires linking. The user may send **either an AD login or their full name**:

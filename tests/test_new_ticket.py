@@ -19,7 +19,7 @@ from aiogram.types import User as TgUser
 
 from bot import texts
 from bot.db.repo import LinkedUser
-from bot.handlers.new_ticket import NewTicket, build_new_ticket_router
+from bot.handlers.new_ticket import NewTicket, _urgency_keyboard, build_new_ticket_router
 
 pytestmark = pytest.mark.asyncio
 
@@ -364,3 +364,19 @@ async def test_urgent_prod_decline_returns_to_choices_without_urgency():
     assert await ctx.get_state() == NewTicket.choosing_urgency
     assert "urgency" not in await ctx.get_data()
     assert _last_text(bot) == texts.NEW_CHOOSE_URGENCY
+
+
+async def test_urgency_keyboard_order_and_emoji():
+    # async only to match this module's global asyncio mark; no awaits needed.
+    kb = _urgency_keyboard()
+    rows = kb.inline_keyboard
+    # Urgent (prod) is the FIRST button, alone on its own row, red-marked.
+    assert [b.callback_data for b in rows[0]] == ["nt:urg:5"]
+    assert "🔴" in rows[0][0].text
+    # Then the ordinary levels, descending, each on its own row.
+    assert [b.callback_data for b in rows[1]] == ["nt:urg:4"]  # high
+    assert "🟠" in rows[1][0].text and "🔴" not in rows[1][0].text  # orange, not red
+    assert [b.callback_data for b in rows[2]] == ["nt:urg:3"]  # medium
+    assert [b.callback_data for b in rows[3]] == ["nt:urg:2"]  # low
+    # Cancel last.
+    assert [b.callback_data for b in rows[-1]] == ["nt:cancel"]

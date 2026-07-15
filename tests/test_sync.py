@@ -536,7 +536,7 @@ async def test_new_ticket_card_shows_urgency(repo):
 
     await _service(bot, client, repo)._poll_new_tickets()
     text = bot.sent[0][1]
-    assert "🔴 <b>Высокая срочность</b>" in text
+    assert "🟠 <b>Высокая срочность</b>" in text
 
 
 async def test_new_ticket_card_layout(repo):

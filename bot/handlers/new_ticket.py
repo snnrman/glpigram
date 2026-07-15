@@ -46,9 +46,7 @@ log = logging.getLogger(__name__)
 
 MAX_TITLE_LEN = 250
 
-# Ordinary levels shown first (descending). The dedicated urgent (prod) level is
-# rendered on its own row below them and gated behind a confirmation, so it is
-# never tapped by reflex.
+# Ordinary levels (descending), shown below the exceptional urgent (prod) level.
 _URGENCY_CHOICES = (
     (URGENCY_HIGH, texts.URGENCY_HIGH_LABEL),
     (URGENCY_MEDIUM, texts.URGENCY_MEDIUM_LABEL),
@@ -75,17 +73,18 @@ def _categories_keyboard(categories: list[ITILCategory]) -> InlineKeyboardMarkup
 
 
 def _urgency_keyboard() -> InlineKeyboardMarkup:
+    # Exceptional urgent (prod) level first, on its own row — it opens a warning
+    # and is the only red marker, set apart from the ordinary levels below.
     rows = [
-        [InlineKeyboardButton(text=label, callback_data=f"nt:urg:{value}")]
-        for value, label in _URGENCY_CHOICES
-    ]
-    # Dedicated urgent (prod) level on its own row — selecting it opens a warning.
-    rows.append(
         [
             InlineKeyboardButton(
                 text=texts.URGENCY_URGENT_LABEL, callback_data=f"nt:urg:{URGENCY_URGENT}"
             )
         ]
+    ]
+    rows.extend(
+        [InlineKeyboardButton(text=label, callback_data=f"nt:urg:{value}")]
+        for value, label in _URGENCY_CHOICES
     )
     rows.append([InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

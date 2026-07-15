@@ -149,7 +149,7 @@ def attachments_partial_failure(uploaded: int, total: int) -> str:
 # --- urgency labels ---
 URGENCY_LOW_LABEL = "🟢 Низкая"
 URGENCY_MEDIUM_LABEL = "🟡 Средняя"
-URGENCY_HIGH_LABEL = "🔴 Высокая"
+URGENCY_HIGH_LABEL = "🟠 Высокая"
 # Dedicated "prod" level (GLPI urgency 5): the only one that breaks quiet hours.
 URGENCY_URGENT_LABEL = "🔴 Срочно (прод)"
 # Explicit banner on the tech-group card for an urgent (prod) ticket.
@@ -161,13 +161,13 @@ _URGENCY_SCALE = {
     1: ("⚪", "очень низкая"),
     2: ("🟢", "низкая"),
     3: ("🟡", "средняя"),
-    4: ("🔴", "высокая"),
+    4: ("🟠", "высокая"),
     5: ("🚨", "очень высокая"),
 }
 
 
 def urgency_line(urgency: int) -> str:
-    """Detail-view line like "🔴 Срочность: высокая"; tolerant of unknown values."""
+    """Detail-view line like "🟠 Срочность: высокая"; tolerant of unknown values."""
     scale = _URGENCY_SCALE.get(urgency)
     if scale is None:
         return f"Срочность: {urgency}"
