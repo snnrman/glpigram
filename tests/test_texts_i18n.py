@@ -71,13 +71,13 @@ def test_custom_welcome_verbatim_with_html_and_newlines(monkeypatch):
 
 
 def test_urgency_line_full_scale_and_unknown():
-    assert ru.urgency_line(4) == "🔴 Срочность: высокая"
+    assert ru.urgency_line(4) == "🟠 Срочность: высокая"
     assert ru.urgency_line(3) == "🟡 Срочность: средняя"
     assert ru.urgency_line(2) == "🟢 Срочность: низкая"
     assert ru.urgency_line(1) == "⚪ Срочность: очень низкая"
     assert ru.urgency_line(5) == "🚨 Срочность: очень высокая"
     assert ru.urgency_line(9) == "Срочность: 9"  # unknown -> no crash
-    assert en.urgency_line(4) == "🔴 Urgency: high"
+    assert en.urgency_line(4) == "🟠 Urgency: high"
     assert en.urgency_line(9) == "Urgency: 9"
 
 
@@ -90,6 +90,11 @@ def test_urgent_prod_level_label_and_card_mark():
     assert "URGENT (prod)" in en.urgency_card_line(5)
     # Ordinary high (4) stays the generic scale wording — no urgent banner.
     assert "высокая" in ru.urgency_card_line(4).lower()
+    # Red 🔴 is reserved for urgent (prod); high is orange 🟠 everywhere.
+    for mod in (ru, en):
+        assert "🔴" in mod.URGENCY_URGENT_LABEL
+        assert "🟠" in mod.URGENCY_HIGH_LABEL and "🔴" not in mod.URGENCY_HIGH_LABEL
+        assert "🔴" not in mod.urgency_card_line(4) and "🔴" not in mod.urgency_line(4)
 
 
 # --- clickable ticket links + escaping (no bare URLs in HTML mode) -------------
