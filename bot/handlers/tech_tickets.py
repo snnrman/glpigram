@@ -143,6 +143,7 @@ def build_tech_tickets_router(
         text = texts.ticket_detail(
             ticket_id=ticket_id,
             title=ticket.name,
+            description=ticket.content,
             status=ticket.status,
             assignee=", ".join(assignees) if assignees else None,
             followups=lines,

@@ -182,6 +182,40 @@ class SyncService:
             log.warning("sync_documents_lookup_failed id=%s error=%s", ticket_id, exc)
             return []
 
+    async def _forward_followup_documents(
+        self, chat_id: int, followup_id: int, *, url: str | None
+    ) -> None:
+        """Download a followup's attachments and forward them to the requester.
+
+        Best-effort throughout: a followup with no files, a lookup failure or a
+        single bad download never breaks the text that was already sent. Files
+        too large to upload are surfaced as a GLPI link instead.
+        """
+        try:
+            docs = await self._client.list_followup_documents(followup_id)
+        except GlpiError as exc:
+            log.warning("sync_followup_docs_lookup_failed id=%s error=%s", followup_id, exc)
+            return
+        if not docs:
+            return
+        items: list[tuple[str, str, bytes]] = []
+        oversized: list[str] = []
+        for doc in docs:
+            # Skip the download entirely when the metadata already says it is
+            # too big for a Telegram upload.
+            if doc.filesize and doc.filesize > notify.UPLOAD_MAX_BYTES:
+                oversized.append(doc.filename)
+                continue
+            try:
+                content = await self._client.download_document(doc.id)
+            except GlpiError as exc:
+                log.warning("sync_followup_doc_download_failed doc=%s error=%s", doc.id, exc)
+                continue
+            items.append((doc.filename, doc.mime, content))
+        await notify.send_attachments(
+            self._bot, chat_id, items, link_url=url, extra_oversized=oversized
+        )
+
     async def _send_card_images(self, ticket_id: int, docs: list) -> None:
         photos: list[tuple[str, bytes]] = []
         for doc in docs:
@@ -451,6 +485,12 @@ class SyncService:
         for followup in fresh:
             await notify.notify_followup(
                 self._bot, row.requester_tg_id, ticket, followup, self._ticket_url(ticket.id)
+            )
+            # Forward any files the tech attached to this followup (GLPI web).
+            # The followup cursor advances past every followup below, so each
+            # attachment is forwarded exactly once across ticks.
+            await self._forward_followup_documents(
+                row.requester_tg_id, followup.id, url=self._ticket_url(ticket.id)
             )
             author = await self._author_name(followup.users_id, author_cache)
             # These are comments by others than the requester (the filter above),

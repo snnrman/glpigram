@@ -143,6 +143,7 @@ def build_my_tickets_router(
         text = texts.ticket_detail(
             ticket_id=ticket_id,
             title=ticket.name,
+            description=ticket.content,
             status=ticket.status,
             assignee=", ".join(assignees) if assignees else None,
             followups=lines,
@@ -286,6 +287,16 @@ def build_my_tickets_router(
         await _finish_comment(
             message, state, bot, link, ticket_id, content=f"{link.display_name}:\n{caption}"
         )
+        # The file is linked to the ticket (not the followup), so the sync loop's
+        # followup-attachment forwarding won't carry it — hand it to the techs
+        # directly, right after the card's "new comment" ping.
+        if tech_group_chat_id is not None:
+            await notify.send_attachments(
+                bot,
+                tech_group_chat_id,
+                [(pending.filename, pending.mime, content)],
+                link_url=_ticket_url(ticket_id),
+            )
 
     async def _finish_comment(
         message: Message,

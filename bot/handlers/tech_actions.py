@@ -350,6 +350,16 @@ def build_tech_actions_router(
             await message.answer(texts.GLPI_ERROR)
             return
         await _post_comment(message, state, bot, link, content=f"{link.display_name}:\n{caption}")
+        # The file is linked to the ticket, so the sync loop (which only forwards
+        # followup-linked docs) won't carry it to the requester — send it here.
+        if repo is not None:
+            tracked = await repo.get_tracked_ticket(ticket_id)
+            if tracked is not None:
+                await notify.send_attachments(
+                    bot,
+                    tracked.requester_tg_id,
+                    [(pending.filename, pending.mime, content)],
+                )
 
     async def _post_comment(
         message: Message, state: FSMContext, bot: Bot, link: LinkedUser, *, content: str

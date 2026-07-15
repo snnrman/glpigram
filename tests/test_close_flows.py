@@ -200,6 +200,7 @@ async def _seed_card(repo):
         chat_id=GROUP,
         message_id=333,
         title="тест",
+        description="описание",
         urgency=3,
         requester_name="Заявитель",
         requester_tg_id=REQUESTER_ID,

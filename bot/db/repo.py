@@ -76,6 +76,7 @@ class TicketCard:
     chat_id: int
     message_id: int
     title: str
+    description: str
     urgency: int
     requester_name: str
     requester_tg_id: int | None
@@ -92,6 +93,7 @@ class TicketCard:
             chat_id=row["chat_id"],
             message_id=row["message_id"],
             title=row["title"],
+            description=row["description"],
             urgency=row["urgency"],
             requester_name=row["requester_name"],
             requester_tg_id=row["requester_tg_id"],
@@ -127,8 +129,19 @@ class Repo:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=3000")
         await self._db.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        # Idempotent column additions for DBs created before the column existed
+        # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
+        await self._ensure_column("ticket_cards", "description", "TEXT NOT NULL DEFAULT ''")
         await self._db.commit()
         log.info("db_connected path=%s", self._db_path)
+
+    async def _ensure_column(self, table: str, column: str, decl: str) -> None:
+        """Add ``column`` to ``table`` if missing (SQLite has no ADD COLUMN IF NOT EXISTS)."""
+        async with self._db.execute(f"PRAGMA table_info({table})") as cur:
+            existing = {row["name"] for row in await cur.fetchall()}
+        if column not in existing:
+            await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            log.info("db_migrated table=%s added_column=%s", table, column)
 
     async def close(self) -> None:
         if self._db is not None:
@@ -334,6 +347,7 @@ class Repo:
         chat_id: int,
         message_id: int,
         title: str,
+        description: str,
         urgency: int,
         requester_name: str,
         requester_tg_id: int | None,
@@ -346,9 +360,9 @@ class Repo:
             await db.execute(
                 """
                 INSERT INTO ticket_cards
-                    (ticket_id, chat_id, message_id, title, urgency, requester_name,
-                     requester_tg_id, attachments_count, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (ticket_id, chat_id, message_id, title, description, urgency,
+                     requester_name, requester_tg_id, attachments_count, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ticket_id) DO UPDATE SET
                     chat_id = excluded.chat_id, message_id = excluded.message_id
                 """,
@@ -357,6 +371,7 @@ class Repo:
                     chat_id,
                     message_id,
                     title,
+                    description,
                     urgency,
                     requester_name,
                     requester_tg_id,

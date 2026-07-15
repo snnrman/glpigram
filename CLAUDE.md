@@ -115,8 +115,8 @@ deploy/
      to link someone manually, `/unlink <ad_login>` to remove a mapping.
 3. **My tickets.** `/tickets` — the linked user's not-yet-closed tickets (statuses
    new/assigned/planned/waiting/solved): number, title, status, assignee.
-   Tap -> detail view with the last 5 followups. Button "add comment" -> FSM -> followup
-   created on behalf of the requester.
+   Tap -> detail view with the ticket description and the last 5 followups. Button
+   "add comment" -> FSM -> followup created on behalf of the requester.
    - **Requester self-close:** detail view shows a "✅ Закрыть заявку" button for the
      user's own not-yet-closed tickets. Tapping it prompts "напишите причину или закройте
      без комментария" with a "Закрыть без комментария" button. No confirmation step:
@@ -143,8 +143,24 @@ deploy/
      (default 3 working hours), state in SQLite (survives restarts). A taken ticket
      stops matching status=New and drops out automatically.
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
+     (the card shows the ticket **description**, see below)
    - status changes on tickets created via the bot -> notify the requester
-   - new followups by others on the user's tickets -> forward text to the requester
+   - new followups by others on the user's tickets -> forward text to the requester,
+     **with any attached files**. A followup added from the GLPI web UI links its
+     documents to the `ITILFollowup` item; the loop reads them
+     (`list_followup_documents` -> `Document_Item`), downloads via the GLPI API
+     (`download_document`) and forwards them alongside the text: images as a
+     photo / media group, other files as documents, files above Telegram's upload
+     cap (~50 MB) as a GLPI link. Best-effort throughout — a followup with no
+     files, a lookup failure or one bad download never breaks the text. The
+     followup cursor advances past every followup each tick, so attachments are
+     never re-sent on later ticks.
+   - **Attachments both ways.** Files a requester or technician attaches through
+     the bot's own comment dialog are uploaded and linked to the *ticket* (not the
+     followup), so the loop's followup-document forwarding would miss them — the
+     comment handlers therefore forward the file directly to the counterpart
+     (requester's file -> tech group; technician's file -> requester's DM) using
+     the same `notify.send_attachments` helper.
    Persist cursor state (last ids / timestamps) in SQLite; survive restarts without
    duplicate notifications.
    - **Quiet hours (off-hours).** Config: `WORK_HOURS` ("09:00-18:00"), `WORK_DAYS`
@@ -166,6 +182,14 @@ deploy/
      urgent (prod) → "заявка помечена как срочная (прод) …". In work hours nothing
      changes. GLPI dates are UTC; the bot converts to `TZ` for all hour math
      (`bot/timeutil.py`).
+   - **Ticket description in cards / detail views.** The new-ticket group card and
+     both detail views («Мои заявки», «👨‍💻 В работе») show the ticket `content`:
+     bold title, then the description as plain text below it. GLPI stores the body
+     as HTML — strip tags, decode entities, cap at ~200 chars with «…» (the full
+     text stays behind the GLPI link), then re-escape for the HTML parse mode. An
+     empty/markup-only description renders no line at all (`texts.description_block`).
+     The living card stores the description (`ticket_cards.description`) so every
+     re-render keeps it.
 5. **Tech actions.** Inline buttons on the tech-group notification: "Take" (assign to the
    pressing technician, status -> Processing), "Close" (asks for a solution text via FSM),
    "Comment". Only users with is_tech may press; others get a toast.
@@ -191,7 +215,10 @@ deploy/
      + the card header now renders the assignee («🙋 Исполнитель: …») on every edit.
 6. **Attachments both ways.** Photos/documents from TG uploaded to GLPI on ticket creation
    and in comments. TG file size limits apply (20 MB via Bot API) — reject larger with a
-   clear message.
+   clear message. The reverse direction is covered by the sync loop / comment handlers
+   (feature 4): files on a technician's followup reach the requester, and files a requester
+   attaches reach the tech group — images as photo/media group, other files as documents,
+   oversized ones as a GLPI link.
 
 7. **Role-based menu, /stats, «👨‍💻 В работе».** The persistent reply menu is built per
    role at render time (after /start and after every finished dialog): everyone gets

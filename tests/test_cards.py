@@ -166,3 +166,24 @@ async def test_edit_failure_self_heals_on_next_event(repo):
     await cards.record_event(bot, TICKET, "второе событие")
     assert "первое событие" in bot.edits[0][2]
     assert "второе событие" in bot.edits[0][2]
+
+
+async def test_card_rerender_preserves_description(repo):
+    cards, bot = _service(repo), FakeBot()
+    ticket = Ticket(
+        id=TICKET, name="Печать", content="<p>принтер не печатает</p>", status=1, urgency=3
+    )
+    await cards.register(
+        ticket,
+        chat_id=CHAT,
+        message_id=MSG_ID,
+        requester_name="Олег",
+        requester_tg_id=555,
+        attachments_count=0,
+        now=0,
+    )
+    # An event edits the card; the description must survive the re-render.
+    await cards.record_event(bot, TICKET, texts.hist_taken("Техник"), status=2)
+    text = bot.edits[0][2]
+    assert "📝 <b>Печать</b>" in text
+    assert "принтер не печатает" in text and "<p>" not in text

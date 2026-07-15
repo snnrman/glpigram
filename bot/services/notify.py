@@ -130,6 +130,7 @@ async def notify_new_ticket(
         texts.notify_new_ticket(
             ticket_id=ticket.id,
             title=ticket.name,
+            description=ticket.content or None,
             status=ticket.status,
             url=url,
             urgency=ticket.urgency or None,  # 0 = not provided by GLPI
@@ -160,6 +161,57 @@ async def send_photos(bot: Bot, chat_id: int, photos: list[tuple[str, bytes]]) -
     except Exception as exc:  # noqa: BLE001 - images are auxiliary to the card
         log.warning("notify_photos_failed chat=%s count=%s error=%s", chat_id, len(photos), exc)
         return False
+
+
+# Telegram bot-API upload caps: sendPhoto tops out ~10 MB, sendDocument ~50 MB.
+PHOTO_MAX_BYTES = 10 * 1024 * 1024
+UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+
+
+async def send_document(bot: Bot, chat_id: int, filename: str, content: bytes) -> bool:
+    """Best-effort single document (non-image / oversized image)."""
+    try:
+        await bot.send_document(chat_id, BufferedInputFile(content, filename=filename))
+        return True
+    except Exception as exc:  # noqa: BLE001 - attachments are auxiliary to the text
+        log.warning("notify_document_failed chat=%s file=%s error=%s", chat_id, filename, exc)
+        return False
+
+
+async def send_attachments(
+    bot: Bot,
+    chat_id: int,
+    items: list[tuple[str, str, bytes]],
+    *,
+    link_url: str | None = None,
+    extra_oversized: list[str] | None = None,
+) -> None:
+    """Forward already-downloaded attachments to a chat (best-effort, never raises).
+
+    Images that fit the photo cap ride as a photo / media group; other files (and
+    oversized images) go as documents; anything above the upload cap — plus any
+    ``extra_oversized`` names the caller skipped downloading — is surfaced as a
+    single link line pointing at the GLPI ticket.
+
+    ``items`` are ``(filename, mime, content)`` tuples.
+    """
+    images: list[tuple[str, bytes]] = []
+    documents: list[tuple[str, bytes]] = []
+    oversized: list[str] = list(extra_oversized or [])
+    for filename, mime, content in items:
+        size = len(content)
+        if size <= PHOTO_MAX_BYTES and (mime or "").startswith("image/"):
+            images.append((filename, content))
+        elif size <= UPLOAD_MAX_BYTES:
+            documents.append((filename, content))
+        else:
+            oversized.append(filename)
+    if images:
+        await send_photos(bot, chat_id, images)
+    for filename, content in documents:
+        await send_document(bot, chat_id, filename, content)
+    if oversized and link_url:
+        await send_text(bot, chat_id, texts.attachments_via_link(oversized, link_url))
 
 
 async def notify_status_change(bot: Bot, tg_id: int, ticket: Ticket, url: str | None) -> None:

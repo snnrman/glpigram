@@ -257,6 +257,12 @@ def attachments_note(count: int) -> str:
     return f"📎 Вложений: {count}"
 
 
+def attachments_via_link(filenames: list[str], url: str) -> str:
+    """Fallback line when a followup's files are too large to upload to Telegram."""
+    names = ", ".join(html.escape(n) for n in filenames)
+    return f'📎 Файлы слишком большие для Telegram: {names}. Откройте в <a href="{url}">GLPI</a>.'
+
+
 BTN_TECH_COMMENT = "💬 Ответить"
 BTN_TECH_CLOSE = "✅ Закрыть"
 
@@ -372,6 +378,25 @@ def clean_glpi_text(raw: str, *, limit: int = 1000) -> str:
     return text
 
 
+# Description shown under the title in cards / detail views (feature: content).
+DESCRIPTION_LIMIT = 200
+
+
+def description_block(content: str | None) -> str:
+    """HTML-ready description snippet for a card/detail, or "" when empty.
+
+    GLPI stores the body as HTML: strip tags, decode entities, cap at
+    ~200 chars with an ellipsis (full text lives behind the GLPI link), then
+    re-escape for the HTML parse mode. Blank/markup-only content yields "".
+    """
+    if not content:
+        return ""
+    cleaned = clean_glpi_text(content, limit=DESCRIPTION_LIMIT)
+    if not cleaned:
+        return ""
+    return html.escape(cleaned)
+
+
 def _ticket_ref(ticket_id: int, url: str | None) -> str:
     """The ticket number, clickable when the GLPI url is known (HTML mode)."""
     ref = f"№{ticket_id}"
@@ -396,11 +421,13 @@ def notify_new_ticket(
     attachments_count: int = 0,
     history: list[str] | None = None,
     assignee: str | None = None,
+    description: str | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
-    then bold title + author, then a named link instead of a bare URL. The
-    "New" status is implied by 🆕 and shown only when it is something else
-    (e.g. a deferred card flushed after the ticket was taken overnight)."""
+    then bold title, the description snippet, author, then a named link instead
+    of a bare URL. The "New" status is implied by 🆕 and shown only when it is
+    something else (e.g. a deferred card flushed after the ticket was taken
+    overnight)."""
     head = f"🆕 <b>Заявка №{ticket_id}</b>"
     if urgency is not None:
         head += f"\n{urgency_card_line(urgency)}"
@@ -409,7 +436,10 @@ def notify_new_ticket(
     if assignee:
         head += f"\n🙋 Исполнитель: {html.escape(assignee)}"
     # One compact body block: emoji markers for eye-scanning, no extra air.
-    body = [f"📝 {html.escape(title)}"]
+    body = [f"📝 <b>{html.escape(title)}</b>"]
+    desc = description_block(description)
+    if desc:
+        body.append(desc)
     if requester_name:
         body.append(f"👤 {user_mention(requester_name, requester_tg_id)}")
     if attachments_count:
@@ -511,12 +541,16 @@ def ticket_detail(
     followups: list[str],
     url: str | None = None,
     urgency: int | None = None,
+    description: str | None = None,
 ) -> str:
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
+    desc = description_block(description)
+    desc_row = f"{desc}\n\n" if desc else "\n"
     return (
         f"<b>Заявка {_ticket_ref(ticket_id, url)}</b>\n"
-        f"{html.escape(title)}\n\n"
+        f"<b>{html.escape(title)}</b>\n"
+        f"{desc_row}"
         f"Статус: {ticket_status_label(status)}\n"
         f"{urgency_row}"
         f"{_assignee_line(assignee)}\n\n"
