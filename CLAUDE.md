@@ -81,8 +81,16 @@ deploy/
 ## Features (build in this order)
 
 1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,
-   cached 10 min) -> urgency (3 levels) -> title -> description -> optional photos/files ->
+   cached 10 min) -> urgency -> title -> description -> optional photos/files ->
    confirm -> create ticket. Reply with ticket number and link.
+   - **Urgency levels.** Three ordinary levels — «🟢 Низкая» (GLPI urgency 2),
+     «🟡 Средняя» (3), «🔴 Высокая» (4) — plus a dedicated «🔴 Срочно (прод)»
+     level (GLPI urgency 5, `URGENCY_URGENT`) on its own row. Selecting «Срочно»
+     shows a warning («⚠️ Категория для срочных задач, связанных с продакшеном.
+     Уведомление придёт команде в любое время суток…») with «Подтвердить» /
+     «Отмена»; without confirmation the ticket is NOT created as urgent
+     (declining returns to the level choices). Only «Срочно (прод)» breaks
+     through quiet hours (see feature 4); ordinary «Высокая» does NOT.
 2. **Account linking (AD-based).** GLPI users are synced from Active Directory via LDAP;
    `User.name` equals the AD sAMAccountName and is the linking key.
    `/start` requires linking. The user may send **either an AD login or their full name**:
@@ -140,18 +148,22 @@ deploy/
    Persist cursor state (last ids / timestamps) in SQLite; survive restarts without
    duplicate notifications.
    - **Quiet hours (off-hours).** Config: `WORK_HOURS` ("09:00-18:00"), `WORK_DAYS`
-     ("1-5", ISO Mon=1..Sun=7), `QUIET_MIN_URGENCY` (default 4), timezone from `TZ`
-     (`bot/schedule.py`). Off-hours **tech-group** notifications are held: a new
-     ticket with urgency < `QUIET_MIN_URGENCY` is queued in SQLite
-     (`deferred_notifications`, survives restart) instead of sent; urgency ≥ the
-     threshold is sent immediately, any time. The first sync tick after work resumes
-     flushes the backlog with a header "🌅 За нерабочее время поступило N заявок:"
-     then the standard cards. "Напомнить о себе" off-hours is likewise deferred to
-     the morning (its cooldown counts from the tap). **Requester-facing** messages —
-     status changes, forwarded followups — are NOT affected by quiet hours. On ticket
-     creation off-hours the requester is told when support will see it: low urgency →
+     ("1-5", ISO Mon=1..Sun=7), timezone from `TZ` (`bot/schedule.py`). Off-hours
+     **tech-group** notifications are held: any ordinary ticket (low/medium/**high**)
+     is queued in SQLite (`deferred_notifications`, survives restart) instead of
+     sent. The **only** level that breaks through and pings the group immediately,
+     any time, is the dedicated «🔴 Срочно (прод)» level (`URGENCY_URGENT`, GLPI
+     urgency 5) from the /new dialog — there is intentionally no urgency-threshold
+     knob; the breakthrough is tied to that product-level choice, not a number.
+     The first sync tick after work resumes flushes the backlog with a header
+     "🌅 За нерабочее время поступило N заявок:" then the standard cards. Its
+     card carries the explicit banner "🔴 СРОЧНО (прод)". "Напомнить о себе"
+     off-hours is likewise deferred to the morning (its cooldown counts from the
+     tap). **Requester-facing** messages — status changes, forwarded followups —
+     are NOT affected by quiet hours. On ticket creation off-hours the requester
+     is told when support will see it: ordinary urgency →
      "🌙 …увидит вашу заявку <в понедельник в 09:00>" (nearest work-day start);
-     urgency ≥ threshold → "заявка помечена как срочная …". In work hours nothing
+     urgent (prod) → "заявка помечена как срочная (прод) …". In work hours nothing
      changes. GLPI dates are UTC; the bot converts to `TZ` for all hour math
      (`bot/timeutil.py`).
 5. **Tech actions.** Inline buttons on the tech-group notification: "Take" (assign to the

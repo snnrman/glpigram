@@ -11,7 +11,9 @@ plugins, no inbound ports, long polling only.
 
 - **Ticket creation** — a guided dialog: category (live from GLPI) → urgency →
   title → description → optional photo/document attachments → confirm. Free text
-  sent to the bot offers to become a ticket, too.
+  sent to the bot offers to become a ticket, too. Urgency has three ordinary
+  levels plus a dedicated, warning-gated **“🔴 Urgent (prod)”** level — the only
+  one that pings the team outside working hours.
 - **Account linking (AD-based)** — users identify themselves by AD login *or*
   full name; a technician approves the link with one button in the tech group
   (anti-spoofing). Accounts disabled in GLPI/AD are unlinked automatically.
@@ -23,9 +25,10 @@ plugins, no inbound ports, long polling only.
   Cursors are persisted in SQLite: restarts never duplicate notifications.
 - **Technician actions** — Take / Comment / Close buttons right on the group
   card; solution and comment texts are collected in the technician's DM.
-- **Quiet hours** — outside working hours, low-urgency notifications are queued
-  and delivered next morning in a batch; urgent tickets go through immediately;
-  requesters are told when the team will actually see their ticket.
+- **Quiet hours** — outside working hours, ordinary tickets (including high
+  urgency) are queued and delivered next morning in a batch; only “🔴 Urgent
+  (prod)” tickets go through immediately; requesters are told when the team will
+  actually see their ticket.
 - **Two languages** — all user-facing strings in Russian or English
   (`BOT_LANGUAGE`).
 
@@ -100,7 +103,6 @@ under systemd). See [.env.example](.env.example).
 | `TZ` | — | system | Bot timezone (GLPI dates are UTC and converted to it) |
 | `WORK_HOURS` | — | `09:00-18:00` | Working hours for quiet-hours handling |
 | `WORK_DAYS` | — | `1-5` | Working ISO weekdays, Mon=1..Sun=7 |
-| `QUIET_MIN_URGENCY` | — | `4` | Off-hours: urgency ≥ this bypasses the quiet queue (GLPI scale 1–5) |
 | `BOT_LANGUAGE` | — | `ru` | UI language: `ru` or `en` |
 | `WELCOME_MESSAGE` | — | — | Custom /start greeting for linked users (unlinked always get the sign-in prompt); verbatim in both languages, HTML allowed, `\n` for line breaks |
 | `CATEGORY_CACHE_TTL` | — | `600` | Category list cache, seconds |

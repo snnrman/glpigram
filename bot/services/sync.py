@@ -33,6 +33,7 @@ from ..glpi.client import (
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_NEW,
     TICKET_STATUS_SOLVED,
+    URGENCY_URGENT,
     GlpiClient,
     GlpiError,
 )
@@ -54,7 +55,6 @@ class SyncService:
         *,
         tech_group_chat_id: int | None,
         schedule: WorkSchedule,
-        quiet_min_urgency: int,
         interval: int = 45,
         front_base: str | None = None,
         recent_page: int = 100,
@@ -68,7 +68,6 @@ class SyncService:
         self._repo = repo
         self._tech_chat = tech_group_chat_id
         self._schedule = schedule
-        self._quiet_min_urgency = quiet_min_urgency
         self._interval = interval
         self._front_base = front_base
         self._recent_page = recent_page
@@ -128,10 +127,12 @@ class SyncService:
             log.warning("sync_new_tickets_page_full count=%s", len(fresh))
         working = self._schedule.is_working(self._now())
         for ticket in fresh:
-            if working or ticket.urgency >= self._quiet_min_urgency:
+            # Only the dedicated urgent (prod) level breaks through quiet hours;
+            # ordinary urgency — including HIGH — waits until the next work day.
+            if working or ticket.urgency >= URGENCY_URGENT:
                 await self._send_new_card(ticket)
             else:
-                # Off-hours, low urgency: hold until the next work day.
+                # Off-hours, non-urgent: hold until the next work day.
                 await self._repo.enqueue_deferred("new", ticket.id, int(time.time()))
                 log.info("sync_deferred_new id=%s urgency=%s", ticket.id, ticket.urgency)
         await self._repo.set_cursor(_CURSOR_LAST_TICKET, max(t.id for t in fresh))

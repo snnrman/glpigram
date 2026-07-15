@@ -30,10 +30,13 @@ from .models import Document, Followup, ITILCategory, Ticket, TicketSummary, Use
 log = logging.getLogger(__name__)
 
 # --- Domain constants (documented so callers don't hardcode magic numbers) ---
-# GLPI urgency is 1..5; the /new dialog exposes three levels mapped onto these.
+# GLPI urgency is 1..5. The /new dialog exposes three ordinary levels plus a
+# dedicated "urgent (prod)" level. URGENCY_URGENT is the ONLY level that breaks
+# through quiet hours — ordinary urgency (including HIGH) is deferred off-hours.
 URGENCY_LOW = 2
 URGENCY_MEDIUM = 3
 URGENCY_HIGH = 4
+URGENCY_URGENT = 5  # 🔴 Срочно (прод) — bypasses quiet hours, any time
 
 # GLPI ticket statuses.
 TICKET_STATUS_NEW = 1

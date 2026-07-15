@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-15
+
+### Added
+
+- **Dedicated “🔴 Urgent (prod)” urgency level** in the /new dialog, on its own
+  row below the ordinary levels. Selecting it shows a warning — “⚠️ This
+  category is for urgent production-related issues. The team will be notified at
+  any time of day, including nights and weekends. Use it with great care.” —
+  with **Confirm** / **Cancel**; without confirmation the ticket is not created
+  as urgent. It maps to GLPI urgency 5 (very high), and its tech-group card
+  carries an explicit **“🔴 URGENT (prod)”** banner.
+
+### Changed
+
+- **Quiet-hours breakthrough is decoupled from ordinary high urgency.** Outside
+  working hours, every ordinary level — low, medium and **high** — is now
+  deferred to the next morning. Only the new “Urgent (prod)” level pings the
+  tech group immediately, at any time.
+
+### Removed
+
+- **`QUIET_MIN_URGENCY`** setting. The off-hours breakthrough is now tied to the
+  dedicated urgent (prod) level, not to a numeric urgency threshold.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added

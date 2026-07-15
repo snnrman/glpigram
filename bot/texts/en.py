@@ -144,8 +144,13 @@ def attachments_partial_failure(uploaded: int, total: int) -> str:
 URGENCY_LOW_LABEL = "🟢 Low"
 URGENCY_MEDIUM_LABEL = "🟡 Medium"
 URGENCY_HIGH_LABEL = "🔴 High"
+# Dedicated "prod" level (GLPI urgency 5): the only one that breaks quiet hours.
+URGENCY_URGENT_LABEL = "🔴 Urgent (prod)"
+# Explicit banner on the tech-group card for an urgent (prod) ticket.
+URGENT_CARD_MARK = "🔴 <b>URGENT (prod)</b>"
 
-# Full GLPI urgency scale (1..5) for cards; the /new dialog exposes only three.
+# Full GLPI urgency scale (1..5) for cards; the /new dialog exposes only three
+# ordinary levels plus the urgent (prod) level (mapped to 5).
 _URGENCY_SCALE = {
     1: ("⚪", "very low"),
     2: ("🟢", "low"),
@@ -165,7 +170,13 @@ def urgency_line(urgency: int) -> str:
 
 
 def urgency_card_line(urgency: int) -> str:
-    """Tech-card headline like "🟡 <b>Medium urgency</b>"."""
+    """Tech-card headline like "🟡 <b>Medium urgency</b>".
+
+    The urgent (prod) level gets an explicit, unmistakable banner instead of the
+    generic scale wording — it is the loudest priority signal on the card.
+    """
+    if urgency == 5:  # URGENCY_URGENT (prod) — dedicated breakthrough level
+        return URGENT_CARD_MARK
     scale = _URGENCY_SCALE.get(urgency)
     if scale is None:
         return f"Urgency: {urgency}"
@@ -196,12 +207,13 @@ def ticket_created(ticket_id: int, url: str | None) -> str:
 
 
 def urgency_label(urgency: int) -> str:
-    from ..glpi.client import URGENCY_HIGH, URGENCY_LOW, URGENCY_MEDIUM
+    from ..glpi.client import URGENCY_HIGH, URGENCY_LOW, URGENCY_MEDIUM, URGENCY_URGENT
 
     return {
         URGENCY_LOW: URGENCY_LOW_LABEL,
         URGENCY_MEDIUM: URGENCY_MEDIUM_LABEL,
         URGENCY_HIGH: URGENCY_HIGH_LABEL,
+        URGENCY_URGENT: URGENCY_URGENT_LABEL,
     }.get(urgency, str(urgency))
 
 
@@ -275,9 +287,18 @@ def tech_card_solved(name: str) -> str:
     return f"✅ Closed by: {html.escape(name)}"
 
 
+# --- urgent (prod) level: warning gate on the urgency step ---
+URGENT_WARNING = (
+    "⚠️ This category is for urgent production-related issues.\n"
+    "The team will be notified at any time of day, including nights and weekends.\n"
+    "Use it with great care."
+)
+BTN_URGENT_CONFIRM = "✅ Confirm"
+BTN_URGENT_DECLINE = "❌ Cancel"
+
 # --- quiet hours / off-hours (feature: quiet hours) ---
 QUIET_URGENT_NOTICE = (
-    "The ticket is marked as urgent — the technicians have been notified "
+    "The ticket is marked as urgent (prod) — the technicians have been notified "
     "and will look into it as soon as possible."
 )
 

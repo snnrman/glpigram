@@ -34,6 +34,7 @@ from ..glpi.client import (
     URGENCY_HIGH,
     URGENCY_LOW,
     URGENCY_MEDIUM,
+    URGENCY_URGENT,
     GlpiClient,
     GlpiError,
 )
@@ -45,6 +46,9 @@ log = logging.getLogger(__name__)
 
 MAX_TITLE_LEN = 250
 
+# Ordinary levels shown first (descending). The dedicated urgent (prod) level is
+# rendered on its own row below them and gated behind a confirmation, so it is
+# never tapped by reflex.
 _URGENCY_CHOICES = (
     (URGENCY_HIGH, texts.URGENCY_HIGH_LABEL),
     (URGENCY_MEDIUM, texts.URGENCY_MEDIUM_LABEL),
@@ -75,8 +79,28 @@ def _urgency_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=label, callback_data=f"nt:urg:{value}")]
         for value, label in _URGENCY_CHOICES
     ]
+    # Dedicated urgent (prod) level on its own row — selecting it opens a warning.
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=texts.URGENCY_URGENT_LABEL, callback_data=f"nt:urg:{URGENCY_URGENT}"
+            )
+        ]
+    )
     rows.append([InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _urgent_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Warning gate for the urgent (prod) level: confirm or go back to the choices."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=texts.BTN_URGENT_CONFIRM, callback_data="nt:urg_confirm"),
+                InlineKeyboardButton(text=texts.BTN_URGENT_DECLINE, callback_data="nt:urg_decline"),
+            ]
+        ]
+    )
 
 
 def _confirm_keyboard() -> InlineKeyboardMarkup:
@@ -165,7 +189,6 @@ def build_new_ticket_router(
     *,
     ticket_front_base: str | None = None,
     schedule: WorkSchedule | None = None,
-    quiet_min_urgency: int = 4,
 ) -> Router:
     """Wire the /new dialog with its GLPI dependencies (closure-injected)."""
     router = Router(name="new_ticket")
@@ -174,13 +197,18 @@ def build_new_ticket_router(
     router.message.filter(F.chat.type == "private")
 
     def _quiet_notice(urgency: int) -> str | None:
-        """Off-hours note for the requester after creation (None in work hours)."""
+        """Off-hours note for the requester after creation (None in work hours).
+
+        Only the urgent (prod) level tells the requester the team was pinged
+        right away; every ordinary level is deferred, so they are told when
+        support will actually see the ticket.
+        """
         if schedule is None:
             return None
         now = schedule.now()
         if schedule.is_working(now):
             return None
-        if urgency >= quiet_min_urgency:
+        if urgency >= URGENCY_URGENT:
             return texts.QUIET_URGENT_NOTICE
         return texts.quiet_hours_notice(schedule.next_open(now), now)
 
@@ -259,12 +287,33 @@ def build_new_ticket_router(
         await cb.message.edit_text(texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard())
         await cb.answer()
 
-    @router.callback_query(NewTicket.choosing_urgency, F.data.startswith("nt:urg:"))
-    async def on_urgency(cb: CallbackQuery, state: FSMContext) -> None:
-        urgency = int(cb.data.rsplit(":", 1)[1])
+    async def _to_title_step(cb: CallbackQuery, state: FSMContext, urgency: int) -> None:
         await state.update_data(urgency=urgency)
         await state.set_state(NewTicket.entering_title)
         await cb.message.edit_text(texts.NEW_ENTER_TITLE, reply_markup=_cancel_keyboard())
+        await cb.answer()
+
+    @router.callback_query(NewTicket.choosing_urgency, F.data.startswith("nt:urg:"))
+    async def on_urgency(cb: CallbackQuery, state: FSMContext) -> None:
+        urgency = int(cb.data.rsplit(":", 1)[1])
+        if urgency == URGENCY_URGENT:
+            # Gate the urgent (prod) level behind an explicit warning; the level
+            # is NOT stored until the user confirms.
+            await cb.message.edit_text(
+                texts.URGENT_WARNING, reply_markup=_urgent_confirm_keyboard()
+            )
+            await cb.answer()
+            return
+        await _to_title_step(cb, state, urgency)
+
+    @router.callback_query(NewTicket.choosing_urgency, F.data == "nt:urg_confirm")
+    async def on_urgent_confirm(cb: CallbackQuery, state: FSMContext) -> None:
+        await _to_title_step(cb, state, URGENCY_URGENT)
+
+    @router.callback_query(NewTicket.choosing_urgency, F.data == "nt:urg_decline")
+    async def on_urgent_decline(cb: CallbackQuery, state: FSMContext) -> None:
+        # Back to the urgency choices — nothing is created as urgent.
+        await cb.message.edit_text(texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard())
         await cb.answer()
 
     @router.message(NewTicket.entering_title, F.text)
