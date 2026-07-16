@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -44,6 +45,19 @@ log = logging.getLogger(__name__)
 class TechAction(StatesGroup):
     commenting = State()
     closing = State()
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _is_reminder(message: Message) -> bool:
+    """The message is an unassigned-tickets reminder (matched on its header).
+
+    Compares the plain message text against the tag-stripped header, so it works
+    regardless of how Telegram splits the bold formatting into entities.
+    """
+    header = _TAG_RE.sub("", texts.UNASSIGNED_HEADER)
+    return (message.text or "").startswith(header)
 
 
 def _card_keyboard_after_take(ticket_id: int) -> InlineKeyboardMarkup:
@@ -77,11 +91,17 @@ def build_tech_actions_router(
     tech_group_chat_id: int | None = None,
     cards: CardService | None = None,
     repo: Repo | None = None,
+    ticket_front_base: str | None = None,
 ) -> Router:
     router = Router(name="tech_actions")
     # FSM dialogs live in private chats only; in groups the bot reacts solely
     # to its inline buttons (callbacks are not affected by this filter).
     router.message.filter(F.chat.type == "private")
+
+    def _ticket_url(ticket_id: int) -> str | None:
+        if not ticket_front_base:
+            return None
+        return f"{ticket_front_base}/front/ticket.form.php?id={ticket_id}"
 
     async def _start_dm_dialog(
         cb: CallbackQuery,
@@ -118,6 +138,9 @@ def build_tech_actions_router(
     # -- Take (immediate) --------------------------------------------------
     @router.callback_query(F.data.startswith("ta:take:"))
     async def on_take(cb: CallbackQuery, link: LinkedUser, bot: Bot) -> None:
+        # One handler for both entry points — the new-ticket card and the
+        # unassigned-tickets reminder both fire `ta:take:{id}`, so taking a
+        # ticket gives identical feedback wherever the button lives.
         if not link.is_tech:
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
@@ -128,27 +151,53 @@ def build_tech_actions_router(
             log.exception("tech_take_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
-        # History-only event: taking a ticket is visible in the card edit and
-        # needs no group ping (reply pings are reserved for requester comments
-        # and closures — events that demand the team's attention).
+        name = link.display_name
+        msg = cb.message if isinstance(cb.message, Message) else None
+        # (2) Reflect the take in the ticket's living card (status + history),
+        # addressed by its stored message id — so it updates even when the take
+        # came from the reminder. History-only: no group ping (reserved for
+        # requester comments/closures).
         handled = cards is not None and await cards.record_event(
             bot,
             ticket_id,
-            texts.hist_taken(link.display_name),
+            texts.hist_taken(name),
             status=TICKET_STATUS_PROCESSING_ASSIGNED,
-            taken_by=link.display_name,
+            taken_by=name,
         )
-        if not handled:
-            # No living card for this ticket (pre-feature) -> legacy in-place edit.
-            card = cb.message if isinstance(cb.message, Message) else None
-            if card is not None:
+        # (1) Give feedback on the message the button was actually pressed under:
+        # an unassigned reminder -> mark that ticket taken there (show the taker,
+        # drop its button); a legacy card with no living-card row -> edit it in
+        # place. A living card pressed directly is already covered above.
+        if msg is not None and _is_reminder(msg):
+            await notify.mark_unassigned_taken(msg, ticket_id, name)
+        elif not handled and msg is not None:
+            try:
+                await msg.edit_text(
+                    f"{msg.html_text}\n\n{texts.tech_card_taken(name)}",
+                    reply_markup=_card_keyboard_after_take(ticket_id),
+                )
+            except Exception as exc:  # noqa: BLE001 - editing is best-effort
+                log.warning("tech_card_edit_failed ticket=%s error=%s", ticket_id, exc)
+        # (3) Notify the requester that work has started (naming the tech), and
+        # (4) advance the tracked status so the sync loop neither re-notifies the
+        # requester with a generic status change nor lists the ticket as
+        # unassigned again (it is now assigned in GLPI too).
+        if repo is not None:
+            tracked = await repo.get_tracked_ticket(ticket_id)
+            if tracked is not None:
+                await notify.notify_taken(
+                    bot,
+                    tracked.requester_tg_id,
+                    ticket_id=ticket_id,
+                    tech_name=name,
+                    url=_ticket_url(ticket_id),
+                )
                 try:
-                    await card.edit_text(
-                        f"{card.html_text}\n\n{texts.tech_card_taken(link.display_name)}",
-                        reply_markup=_card_keyboard_after_take(ticket_id),
+                    await repo.set_ticket_status(
+                        ticket_id, status=TICKET_STATUS_PROCESSING_ASSIGNED, active=True
                     )
-                except Exception as exc:  # noqa: BLE001 - editing is best-effort
-                    log.warning("tech_card_edit_failed ticket=%s error=%s", ticket_id, exc)
+                except Exception:  # noqa: BLE001 - dedup bookkeeping must not fail the take
+                    log.exception("tech_take_status_bump_failed ticket=%s", ticket_id)
         await cb.answer(texts.TECH_TAKEN_TOAST)
 
     # -- Comment / Close (collect text in DM) ------------------------------
