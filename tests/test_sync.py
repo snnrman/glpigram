@@ -800,6 +800,15 @@ async def test_unassigned_below_threshold_is_silent(repo):
     assert _tech(bot) == []
 
 
+async def test_unassigned_reminder_excludes_taken_ticket(repo):
+    # A ticket taken (assigned, status 2) is no longer "unassigned", so even if
+    # old enough it must not appear in the reminder — the take path assigns it.
+    bot = FakeBot()
+    client = FakeClient(recent=[_ticket(44, status=2, created=_CREATED_3H_AGO)])
+    await _service(bot, client, repo)._remind_unassigned()
+    assert _tech(bot) == []
+
+
 async def test_unassigned_antispam_counts_working_hours(repo):
     client = FakeClient(recent=[_ticket(44, created=_CREATED_3H_AGO)])
 

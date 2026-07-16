@@ -447,6 +447,14 @@ def notify_status_change(*, ticket_id: int, title: str, status: int, url: str | 
     )
 
 
+def notify_taken(*, ticket_id: int, tech_name: str, url: str | None) -> str:
+    """Requester notification when a technician takes the ticket into work."""
+    return (
+        f"🙋 <b>Ticket {_ticket_ref(ticket_id, url)}</b>: work has started\n"
+        f"Assignee: {html.escape(tech_name)}"
+    )
+
+
 def notify_followup(*, ticket_id: int, title: str, body: str, url: str | None) -> str:
     snippet = html.escape(clean_glpi_text(body))
     return (
@@ -643,6 +651,16 @@ def unassigned_line(ticket_id: int, title: str, hours: int) -> str:
 
 def btn_take_ticket(ticket_id: int) -> str:
     return f"🙋 Take #{ticket_id}"
+
+
+def unassigned_line_prefix(ticket_id: int) -> str:
+    """Start of a reminder line, used to find it when marking a ticket taken."""
+    return f"#{ticket_id} "
+
+
+def unassigned_taken_suffix(name: str) -> str:
+    """Appended to a reminder line once its ticket has been taken."""
+    return f" — 🙋 taken by {html.escape(name)}"
 
 
 def stats_summary(counts: dict[int, int]) -> str:

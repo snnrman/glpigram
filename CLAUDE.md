@@ -141,10 +141,15 @@ deploy/
    - **Unassigned reminder:** during working hours, New (unassigned) tickets older than
      `UNASSIGNED_REMIND_HOURS` (default 2 WORKING hours; GLPI's UTC dates converted via
      the schedule) are collected into ONE summary to the tech group — «⚠️ Заявки без
-     исполнителя: №44 «...» (2ч)…» with a Take button per ticket (the regular take
-     handler). Per-ticket anti-spam: not more often than `REMIND_INTERVAL_HOURS`
-     (default 3 working hours), state in SQLite (survives restarts). A taken ticket
-     stops matching status=New and drops out automatically.
+     исполнителя: №44 «...» (2ч)…» with a Take button per ticket. The Take button
+     fires the SAME `ta:take:{id}` handler as the new-ticket card, so taking from
+     the reminder gives identical feedback (see feature 5): the ticket's living
+     card is updated (status + «Взял в работу: <имя>» history), the requester is
+     notified, and — because the button is under a reminder — that reminder is
+     edited to mark the ticket taken («… — 🙋 взял <имя>», its button removed).
+     Per-ticket anti-spam: not more often than `REMIND_INTERVAL_HOURS` (default 3
+     working hours), state in SQLite (survives restarts). A taken ticket stops
+     matching status=New and drops out of later reminders automatically.
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
      (the card shows the ticket **description**, see below)
    - status changes on tickets created via the bot -> notify the requester
@@ -196,6 +201,14 @@ deploy/
 5. **Tech actions.** Inline buttons on the tech-group notification: "Take" (assign to the
    pressing technician, status -> Processing), "Close" (asks for a solution text via FSM),
    "Comment". Only users with is_tech may press; others get a toast.
+   - **Take feedback (one handler for card & reminder).** On "Take" the bot: assigns
+     the ticket in GLPI; updates the living card by its stored id (status header +
+     «Взял в работу: <имя>» history, no group ping); notifies the requester «🙋 …
+     начата работа. Исполнитель: <имя>»; and advances the tracked `last_status` to
+     assigned so the sync loop does NOT also send a generic status-change (dedup) and
+     does not re-list it as unassigned. If the press came from an unassigned reminder
+     (detected by its header), that reminder message is edited to mark the ticket taken
+     and its Take button removed. All feedback is best-effort; failures are logged.
    - **ITIL solution cycle:** a tech's "Close" sets the ticket to **solved (5), not closed**;
      the solution goes into ITILSolution. The requester gets «По заявке №N предложено
      решение — <техник>: <текст>. Проблема решена?» with «✅ Подтвердить» /

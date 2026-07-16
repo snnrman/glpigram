@@ -214,6 +214,45 @@ async def send_attachments(
         await send_text(bot, chat_id, texts.attachments_via_link(oversized, link_url))
 
 
+async def notify_taken(
+    bot: Bot, tg_id: int, *, ticket_id: int, tech_name: str, url: str | None
+) -> None:
+    """Tell the requester work has started, naming the technician."""
+    await _send(bot, tg_id, texts.notify_taken(ticket_id=ticket_id, tech_name=tech_name, url=url))
+
+
+def _reminder_keyboard_without(
+    markup: InlineKeyboardMarkup | None, ticket_id: int
+) -> InlineKeyboardMarkup | None:
+    """The reminder's keyboard minus the Take button for ``ticket_id`` (None if empty)."""
+    target = f"ta:take:{ticket_id}"
+    rows = [
+        row
+        for row in (markup.inline_keyboard if markup else [])
+        if not any(b.callback_data == target for b in row)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+async def mark_unassigned_taken(message: Message, ticket_id: int, tech_name: str) -> None:
+    """Edit an unassigned-tickets reminder to show ``ticket_id`` was just taken.
+
+    Marks the ticket's line with the taker's name and drops its Take button, so
+    the group sees who took it and it can't be taken twice. Best-effort.
+    """
+    prefix = texts.unassigned_line_prefix(ticket_id)
+    lines = message.html_text.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(prefix) and texts.unassigned_taken_suffix("") not in line:
+            lines[i] = line + texts.unassigned_taken_suffix(tech_name)
+            break
+    keyboard = _reminder_keyboard_without(message.reply_markup, ticket_id)
+    try:
+        await message.edit_text("\n".join(lines), reply_markup=keyboard)
+    except Exception as exc:  # noqa: BLE001 - the reminder edit is best-effort
+        log.warning("reminder_mark_taken_failed ticket=%s error=%s", ticket_id, exc)
+
+
 async def notify_status_change(bot: Bot, tg_id: int, ticket: Ticket, url: str | None) -> None:
     await _send(
         bot,
