@@ -197,6 +197,13 @@ def build_tech_tickets_router(
             for f in recent
         ]
         assignees = await client.get_ticket_assignees(ticket_id)
+        # Who filed it — essential context for a tech; lookup failure must not
+        # cost the whole detail view.
+        try:
+            req = await client.get_ticket_requester(ticket_id)
+        except GlpiError as exc:
+            log.warning("tech_ticket_requester_failed ticket=%s error=%s", ticket_id, exc)
+            req = None
         text = texts.ticket_detail(
             ticket_id=ticket_id,
             title=ticket.name,
@@ -206,6 +213,7 @@ def build_tech_tickets_router(
             followups=lines,
             url=_ticket_url(ticket_id),
             urgency=ticket.urgency or None,
+            requester=req[1] if req else None,
         )
         return text, ticket.status
 

@@ -550,15 +550,20 @@ def ticket_detail(
     url: str | None = None,
     urgency: int | None = None,
     description: str | None = None,
+    requester: str | None = None,
 ) -> str:
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
     desc = description_block(description)
     desc_row = f"{desc}\n\n" if desc else "\n"
+    # Requester row only in the tech views; a requester viewing their own
+    # ticket doesn't need to be told who they are.
+    requester_row = f"✍️ Заявитель: {html.escape(requester)}\n" if requester else ""
     return (
         f"<b>Заявка {_ticket_ref(ticket_id, url)}</b>\n"
         f"<b>{html.escape(title)}</b>\n"
         f"{desc_row}"
+        f"{requester_row}"
         f"Статус: {ticket_status_label(status)}\n"
         f"{urgency_row}"
         f"{_assignee_line(assignee)}\n\n"

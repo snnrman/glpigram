@@ -68,6 +68,7 @@ def _client() -> AsyncMock:
     client.get_ticket.return_value = Ticket(id=5, name="Принтер", content="c", status=2, urgency=3)
     client.list_followups.return_value = []
     client.get_ticket_assignees.return_value = ["Техник"]
+    client.get_ticket_requester.return_value = (8, "Олег Заявитель")
     return client
 
 
@@ -246,3 +247,34 @@ async def test_back_from_unassigned_detail_re_renders_queue(env):
     text, kb = bot.edits[-1]
     assert "№74" in text
     assert kb.inline_keyboard[0][0].callback_data == "tt:openu:74"
+
+
+# --- detail views show the requester (who filed the ticket) --------------------
+async def test_detail_shows_requester(env):
+    dp, client = env
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:open:5"))
+    text, _kb = bot.edits[-1]
+    assert "Заявитель: Олег Заявитель" in text
+
+
+async def test_unassigned_detail_shows_requester(env):
+    dp, client = env
+    client.get_ticket.return_value = Ticket(id=74, name="VPN", content="c", status=1, urgency=3)
+    client.get_ticket_assignees.return_value = []
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:openu:74"))
+    text, _kb = bot.edits[-1]
+    assert "Заявитель: Олег Заявитель" in text
+
+
+async def test_detail_survives_requester_lookup_failure(env):
+    from bot.glpi.client import GlpiError
+
+    dp, client = env
+    client.get_ticket_requester.side_effect = GlpiError("boom")
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:open:5"))
+    text, _kb = bot.edits[-1]
+    assert "Принтер" in text  # detail still renders
+    assert "Заявитель:" not in text  # just without the requester row
