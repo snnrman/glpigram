@@ -94,8 +94,9 @@ CREATE TABLE IF NOT EXISTS unassigned_reminders (
 -- Requester's one-tap rating of a solved ticket (1=😞, 2=😐, 3=🤩).
 -- One row per ticket; re-rating overwrites (only reachable on old messages).
 CREATE TABLE IF NOT EXISTS ticket_ratings (
-    ticket_id INTEGER PRIMARY KEY,
-    tg_id     INTEGER NOT NULL,   -- who rated (the requester)
-    rating    INTEGER NOT NULL,   -- 1..3
-    rated_at  INTEGER NOT NULL    -- unix seconds
+    ticket_id   INTEGER PRIMARY KEY,
+    tg_id       INTEGER NOT NULL,  -- who rated (the requester)
+    rating      INTEGER NOT NULL,  -- 1..3
+    rated_at    INTEGER NOT NULL,  -- unix seconds
+    glpi_pushed INTEGER NOT NULL DEFAULT 0  -- 0 pending, 1 in TicketSatisfaction, -1 gave up
 );

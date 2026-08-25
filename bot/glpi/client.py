@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json as jsonlib
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -60,6 +61,9 @@ OPEN_TICKET_STATUSES = frozenset(
 # Ticket_User link types.
 TICKET_USER_REQUESTER = 1
 TICKET_USER_ASSIGN = 2  # technician / assignee
+
+# Bot's 3-mood rating (1=😞, 2=😐, 3=🤩) -> GLPI satisfaction scale (1..5).
+SATISFACTION_BY_RATE = {1: 1, 2: 3, 3: 5}
 
 # GLPI searchOption id of the primary key ("id"). It is 2 for every itemtype
 # (framework convention); verify with listSearchOptions/Ticket if a deployment
@@ -838,6 +842,38 @@ class GlpiClient:
                 )
             )
         return summaries
+
+    async def push_ticket_satisfaction(self, ticket_id: int, satisfaction: int) -> bool:
+        """Answer the GLPI satisfaction survey of a closed ticket.
+
+        GLPI's cron creates the ``TicketSatisfaction`` row some time after the
+        ticket closes (per the entity's survey config). Returns **False** when
+        the row does not exist yet — the caller retries later; raises GlpiError
+        on real API failures.
+        """
+        resp = await self._request(
+            "GET", f"/Ticket/{ticket_id}/TicketSatisfaction", idempotent=True
+        )
+        rows = resp.json()
+        if isinstance(rows, dict):
+            rows = [rows]  # some builds return the single sub-item unwrapped
+        row = next((r for r in rows or [] if isinstance(r, dict) and r.get("id")), None)
+        if row is None:
+            return False  # survey not generated yet
+        await self._request(
+            "PUT",
+            f"/Ticket/{ticket_id}/TicketSatisfaction",
+            json={
+                "input": {
+                    "id": int(row["id"]),
+                    "tickets_id": ticket_id,
+                    "satisfaction": satisfaction,
+                    "date_answered": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            },
+            idempotent=False,
+        )
+        return True
 
     async def count_open_tickets_by_status(self) -> dict[int, int]:
         """Counts of not-yet-closed tickets grouped by status (for /stats).

@@ -797,3 +797,29 @@ async def test_search_unassigned_tickets_filters_by_status_new(mock):
     assert params["criteria[0][field]"] == "12"  # status searchOption
     assert params["criteria[0][value]"] == "1"  # TICKET_STATUS_NEW
     assert params["order"] == "DESC"  # newest first
+
+
+async def test_push_ticket_satisfaction_answers_existing_survey(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/49/TicketSatisfaction").mock(
+        return_value=httpx.Response(200, json=[{"id": 11, "tickets_id": 49, "satisfaction": None}])
+    )
+    route = mock.put(f"{BASE}/Ticket/49/TicketSatisfaction").mock(
+        return_value=httpx.Response(200, json=[{"11": True}])
+    )
+    client = make_client()
+    assert await client.push_ticket_satisfaction(49, 5) is True
+    await client.close()
+    import json as _json
+
+    payload = _json.loads(route.calls.last.request.read().decode())["input"]
+    assert payload["id"] == 11 and payload["satisfaction"] == 5
+    assert payload["date_answered"]  # GLPI needs the answer timestamp
+
+
+async def test_push_ticket_satisfaction_no_survey_yet_returns_false(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/49/TicketSatisfaction").mock(return_value=httpx.Response(200, json=[]))
+    client = make_client()
+    assert await client.push_ticket_satisfaction(49, 5) is False  # cron not run yet
+    await client.close()

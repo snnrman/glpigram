@@ -132,6 +132,7 @@ class Repo:
         # Idempotent column additions for DBs created before the column existed
         # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         await self._ensure_column("ticket_cards", "description", "TEXT NOT NULL DEFAULT ''")
+        await self._ensure_column("ticket_ratings", "glpi_pushed", "INTEGER NOT NULL DEFAULT 0")
         await self._db.commit()
         log.info("db_connected path=%s", self._db_path)
 
@@ -473,11 +474,11 @@ class Repo:
         async with self._tx() as db:
             await db.execute(
                 """
-                INSERT INTO ticket_ratings (ticket_id, tg_id, rating, rated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO ticket_ratings (ticket_id, tg_id, rating, rated_at, glpi_pushed)
+                VALUES (?, ?, ?, ?, 0)
                 ON CONFLICT(ticket_id) DO UPDATE SET
                     tg_id = excluded.tg_id, rating = excluded.rating,
-                    rated_at = excluded.rated_at
+                    rated_at = excluded.rated_at, glpi_pushed = 0
                 """,
                 (ticket_id, tg_id, rating, now),
             )
@@ -489,3 +490,19 @@ class Repo:
         ) as cur:
             rows = await cur.fetchall()
         return {row["rating"]: row["n"] for row in rows}
+
+    async def pending_ratings(self) -> list[tuple[int, int, int]]:
+        """Ratings not yet mirrored into GLPI: (ticket_id, rating, rated_at)."""
+        async with self._conn.execute(
+            "SELECT ticket_id, rating, rated_at FROM ticket_ratings WHERE glpi_pushed = 0"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [(r["ticket_id"], r["rating"], r["rated_at"]) for r in rows]
+
+    async def mark_rating_pushed(self, ticket_id: int, *, status: int) -> None:
+        """1 = mirrored into GLPI TicketSatisfaction, -1 = gave up (survey never came)."""
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE ticket_ratings SET glpi_pushed = ? WHERE ticket_id = ?",
+                (status, ticket_id),
+            )

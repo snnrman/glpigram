@@ -30,6 +30,7 @@ from aiogram import Bot
 from .. import texts, timeutil
 from ..db.repo import Repo, TrackedTicket
 from ..glpi.client import (
+    SATISFACTION_BY_RATE,
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_NEW,
     TICKET_STATUS_SOLVED,
@@ -105,6 +106,10 @@ class SyncService:
         await self._repo.set_cursor(_CURSOR_LAST_TICKET, max_id)
         log.info("sync_cursor_seeded last_ticket_id=%s", max_id)
 
+    # A rating whose GLPI survey never appeared within this window is dropped
+    # from the retry queue (the cron is likely disabled or the survey expired).
+    _RATING_PUSH_MAX_AGE = 3 * 86400
+
     async def tick(self) -> None:
         # Deliver anything queued overnight first, once work has resumed.
         await self._flush_deferred_if_working()
@@ -113,6 +118,26 @@ class SyncService:
         await self._poll_new_tickets(recent)
         await self._remind_unassigned(recent)
         await self._poll_tracked_tickets()
+        await self._push_pending_ratings()
+
+    async def _push_pending_ratings(self) -> None:
+        """Mirror stored ratings into GLPI's TicketSatisfaction once its cron
+        has generated the survey row (retried every tick until then)."""
+        for ticket_id, rating, rated_at in await self._repo.pending_ratings():
+            if time.time() - rated_at > self._RATING_PUSH_MAX_AGE:
+                log.warning("rating_push_gave_up ticket=%s (no survey row)", ticket_id)
+                await self._repo.mark_rating_pushed(ticket_id, status=-1)
+                continue
+            try:
+                pushed = await self._client.push_ticket_satisfaction(
+                    ticket_id, SATISFACTION_BY_RATE[rating]
+                )
+            except GlpiError as exc:
+                log.warning("rating_push_failed ticket=%s error=%s", ticket_id, exc)
+                continue
+            if pushed:
+                log.info("rating_pushed ticket=%s rating=%s", ticket_id, rating)
+                await self._repo.mark_rating_pushed(ticket_id, status=1)
 
     # -- 1. new tickets -> tech group (with quiet-hours deferral) ----------
     async def _poll_new_tickets(self, recent: list | None = None) -> None:

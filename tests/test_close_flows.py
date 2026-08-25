@@ -432,3 +432,15 @@ async def test_re_rating_overwrites_not_duplicates(env):
     await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rate:{TICKET}:1"))
     await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:3"))
     assert await repo.rating_summary() == {3: 1}  # one row, latest value
+
+
+async def test_rate_mirrors_into_glpi_satisfaction_immediately(env):
+    dp, client, repo = env
+    client.push_ticket_satisfaction.return_value = True  # survey row already exists
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:ok:{TICKET}"))
+    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:3"))
+
+    client.push_ticket_satisfaction.assert_awaited_once_with(TICKET, 5)  # 🤩 -> GLPI 5
+    assert await repo.pending_ratings() == []  # marked as mirrored

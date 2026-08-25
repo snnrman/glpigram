@@ -30,6 +30,7 @@ from .. import texts, timeutil
 from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
     OPEN_TICKET_STATUSES,
+    SATISFACTION_BY_RATE,
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_NEW,
     TICKET_STATUS_PROCESSING_ASSIGNED,
@@ -496,6 +497,14 @@ def build_my_tickets_router(
         # Quiet trace on the living card (no group ping — per design).
         if cards is not None:
             await cards.record_event(bot, ticket_id, texts.hist_rated(rating))
+        # Mirror into GLPI's own satisfaction survey right away when its row
+        # already exists; otherwise the sync loop keeps retrying (GLPI's cron
+        # creates the survey some time after closure).
+        try:
+            if await client.push_ticket_satisfaction(ticket_id, SATISFACTION_BY_RATE[rating]):
+                await repo.mark_rating_pushed(ticket_id, status=1)
+        except GlpiError as exc:
+            log.warning("rating_glpi_push_failed ticket=%s error=%s", ticket_id, exc)
 
     @router.callback_query(F.data.startswith("rs:back:"))
     async def on_solution_return(cb: CallbackQuery, state: FSMContext) -> None:
