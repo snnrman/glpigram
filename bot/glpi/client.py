@@ -860,13 +860,16 @@ class GlpiClient:
         row = next((r for r in rows or [] if isinstance(r, dict) and r.get("id")), None)
         if row is None:
             return False  # survey not generated yet
+        # GLPI 11 quirk (verified live): the sub-item update wants ``id`` to be
+        # the TICKET id, not the satisfaction row id — any other addressing
+        # (direct /TicketSatisfaction/{id}, sub-route with the row id) returns
+        # ERROR_GLPI_UPDATE.
         await self._request(
             "PUT",
             f"/Ticket/{ticket_id}/TicketSatisfaction",
             json={
                 "input": {
-                    "id": int(row["id"]),
-                    "tickets_id": ticket_id,
+                    "id": ticket_id,
                     "satisfaction": satisfaction,
                     "date_answered": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }

@@ -813,7 +813,9 @@ async def test_push_ticket_satisfaction_answers_existing_survey(mock):
     import json as _json
 
     payload = _json.loads(route.calls.last.request.read().decode())["input"]
-    assert payload["id"] == 11 and payload["satisfaction"] == 5
+    # GLPI 11 quirk (verified live on 11.0.4): the sub-item update is addressed
+    # by the TICKET id, not the satisfaction row id (else ERROR_GLPI_UPDATE).
+    assert payload["id"] == 49 and payload["satisfaction"] == 5
     assert payload["date_answered"]  # GLPI needs the answer timestamp
 
 

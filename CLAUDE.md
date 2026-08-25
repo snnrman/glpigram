@@ -237,10 +237,16 @@ deploy/
        to `TicketSatisfaction` (😞→1, 😐→3, 🤩→5; `SATISFACTION_BY_RATE`), so GLPI's own
        satisfaction reports work. Requires the entity survey enabled (Администрирование →
        Организации → корневая → Помощь: internal survey, rate 100%, delay 0) and GLPI's
-       cron (creates the survey row after closure — runs every minute here). Push is
+       cron (creates the survey row after closure — verified live on 11.0.4: created
+       instantly/synchronously on close; the cron path is a fallback). Push is
        try-now-then-retry: the rate handler attempts immediately; `ticket_ratings.glpi_pushed`
        (0 pending / 1 done / -1 gave up) drives a sync-loop retry each tick until the row
        appears, giving up after 3 days.
+     - **API quirk (verified live):** updating the survey is
+       `PUT /Ticket/{tid}/TicketSatisfaction` with `input.id` = the TICKET id (not the
+       satisfaction row id) + `satisfaction` + `date_answered`. Direct
+       `/TicketSatisfaction/{row_id}` and the sub-route with the row id both return
+       `ERROR_GLPI_UPDATE`.
    - **Handoff («🔄 Передать»):** on taken cards and in the «👨‍💻 В работе» detail view
      (techs only, is_tech re-checked in handlers). The pick list — all linked techs from
      SQLite (is_tech cache of TECH_GROUP_ID membership) — is sent to the pressing tech's
