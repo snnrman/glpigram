@@ -697,6 +697,11 @@ def btn_take_ticket(ticket_id: int) -> str:
     return f"🙋 Взять №{ticket_id}"
 
 
+def unassigned_more(count: int) -> str:
+    """Digest tail when more overdue tickets exist than fit the message."""
+    return f"…и ещё {count} {_plural_tickets(count)}"
+
+
 def unassigned_line_prefix(ticket_id: int) -> str:
     """Start of a reminder line, used to find it when marking a ticket taken."""
     return f"№{ticket_id} "

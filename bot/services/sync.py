@@ -396,58 +396,69 @@ class SyncService:
 
     # -- 2 & 3. tracked tickets: status + followups -----------------------
     # -- unassigned-tickets reminder (working hours only) ------------------
-    async def _remind_unassigned(self, recent: list | None = None) -> None:
-        """One summary about New tickets nobody took, with Take buttons.
+    # sync_state key: unix ts of the last delivered digest (the GLOBAL gate).
+    _CURSOR_LAST_UNASSIGNED_SUMMARY = "last_unassigned_summary_ts"
 
-        Thresholds count WORKING hours (GLPI dates are UTC -> schedule tz);
-        per-ticket anti-spam state lives in SQLite and survives restarts. A
-        taken ticket (status != New) simply stops matching and drops out.
+    async def _remind_unassigned(self, recent: list | None = None) -> None:
+        """ONE digest of ALL New tickets nobody took, with Take buttons.
+
+        The anti-spam gate is GLOBAL, not per ticket: at most one summary per
+        ``remind_interval`` WORKING hours, and it always lists the whole
+        overdue queue regardless of when each ticket crossed the age
+        threshold — tickets never fire their own separate reminders, so the
+        group is never dripped one message per ticket. Thresholds count
+        WORKING hours (GLPI dates are UTC -> schedule tz); the gate timestamp
+        lives in SQLite and survives restarts. A taken ticket (status != New)
+        simply stops matching and drops out of the next digest.
         """
         if self._tech_chat is None:
             return
         now = self._now()
         if not self._schedule.is_working(now):
             return
+        # The global gate comes first: within the window nothing is sent at
+        # all, no matter how many tickets became overdue meanwhile.
+        last = await self._repo.get_cursor(self._CURSOR_LAST_UNASSIGNED_SUMMARY)
+        if last is not None:
+            since = self._schedule.working_seconds_between(
+                datetime.fromtimestamp(last, tz=UTC), now
+            )
+            if since < self._remind_interval:
+                return
         if recent is None:
             recent = await self._client.list_recent_tickets(limit=self._recent_page)
-        now_ts = int(now.timestamp())
         due: list[tuple[int, str, int]] = []
         for ticket in recent:
             if ticket.status != TICKET_STATUS_NEW:
-                continue  # taken/solved -> out of the reminder
+                continue  # taken/solved -> out of the digest
             created = timeutil.parse_glpi_utc(ticket.date_creation)
             if created is None:
                 continue
             age = self._schedule.working_seconds_between(created, now)
             if age < self._unassigned_after:
                 continue
-            last = await self._repo.get_last_unassigned_remind(ticket.id)
-            if last is not None:
-                since_last = self._schedule.working_seconds_between(
-                    datetime.fromtimestamp(last, tz=UTC), now
-                )
-                if since_last < self._remind_interval:
-                    continue  # anti-spam window still open for this ticket
             due.append((ticket.id, ticket.name, int(age // 3600)))
         if not due:
             return
         due.sort()
-        due = due[:10]  # keyboard/message size guard; the rest come next round
+        shown = due[:10]  # keyboard/message size guard
         text = (
             texts.UNASSIGNED_HEADER
             + "\n"
-            + "\n".join(texts.unassigned_line(tid, title, hours) for tid, title, hours in due)
+            + "\n".join(texts.unassigned_line(tid, title, hours) for tid, title, hours in shown)
         )
+        if len(due) > len(shown):
+            text += "\n" + texts.unassigned_more(len(due) - len(shown))
         msg = await notify.send_text(
             self._bot,
             self._tech_chat,
             text,
-            reply_markup=notify.unassigned_take_keyboard([tid for tid, _, _ in due]),
+            reply_markup=notify.unassigned_take_keyboard([tid for tid, _, _ in shown]),
         )
         if msg:
-            # Stamp the anti-spam state only for what was actually delivered.
-            for tid, _, _ in due:
-                await self._repo.set_last_unassigned_remind(tid, now_ts)
+            # Stamp the gate only on actual delivery (a Telegram failure keeps
+            # the digest due for the next tick).
+            await self._repo.set_cursor(self._CURSOR_LAST_UNASSIGNED_SUMMARY, int(now.timestamp()))
 
     async def _poll_tracked_tickets(self) -> None:
         for row in await self._repo.active_tracked_tickets():

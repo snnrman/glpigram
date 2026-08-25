@@ -797,9 +797,8 @@ async def test_unassigned_older_than_threshold_gets_one_summary(repo):
     assert "Заявки без исполнителя" in msgs[0]
     assert "№44 «Принтер сломан» (3ч)" in msgs[0]
     assert "№47 «Нет сети» (3ч)" in msgs[0]
-    # anti-spam state persisted per ticket
-    assert await repo.get_last_unassigned_remind(44) is not None
-    assert await repo.get_last_unassigned_remind(47) is not None
+    # the GLOBAL digest gate is stamped
+    assert await repo.get_cursor("last_unassigned_summary_ts") is not None
 
 
 async def test_unassigned_below_threshold_is_silent(repo):
@@ -832,6 +831,42 @@ async def test_unassigned_antispam_counts_working_hours(repo):
     bot = FakeBot()  # 16:00: 4 working hours passed -> reminded again
     await _service(bot, client, repo, now=MON_1600)._remind_unassigned()
     assert len(_tech(bot)) == 1
+
+
+async def test_unassigned_digest_groups_late_arrivals_no_drip(repo):
+    """The reported bug: tickets crossing the age threshold at different times
+    must NOT each fire their own reminder — the gate is global and the next
+    digest lists everything overdue together."""
+    client = FakeClient(recent=[_ticket(44, name="Первая", created=_CREATED_3H_AGO)])
+
+    bot = FakeBot()
+    await _service(bot, client, repo)._remind_unassigned()  # 12:00: digest with #44
+    assert len(_tech(bot)) == 1 and "№44" in _tech(bot)[0]
+
+    # 13:00: #47 has just become overdue — inside the global window -> SILENT
+    # (previously it would fire its own single-ticket reminder).
+    client.recent.append(_ticket(47, name="Вторая", created="2026-07-06 08:00:00"))
+    bot = FakeBot()
+    await _service(bot, client, repo, now=MON_1300)._remind_unassigned()
+    assert _tech(bot) == []
+
+    # 16:00: window passed -> ONE digest with BOTH tickets grouped.
+    bot = FakeBot()
+    await _service(bot, client, repo, now=MON_1600)._remind_unassigned()
+    msgs = _tech(bot)
+    assert len(msgs) == 1
+    assert "№44" in msgs[0] and "№47" in msgs[0]
+
+
+async def test_unassigned_digest_truncates_to_ten_with_tail(repo):
+    client = FakeClient(
+        recent=[_ticket(100 + i, name=f"t{i}", created=_CREATED_3H_AGO) for i in range(13)]
+    )
+    bot = FakeBot()
+    await _service(bot, client, repo)._remind_unassigned()
+    msgs = _tech(bot)
+    assert len(msgs) == 1
+    assert "…и ещё 3 заявки" in msgs[0]  # 13 overdue, 10 shown
 
 
 async def test_taken_ticket_drops_out_of_reminders(repo):

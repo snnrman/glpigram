@@ -147,9 +147,15 @@ deploy/
      card is updated (status + «Взял в работу: <имя>» history), the requester is
      notified, and — because the button is under a reminder — that reminder is
      edited to mark the ticket taken («… — 🙋 взял <имя>», its button removed).
-     Per-ticket anti-spam: not more often than `REMIND_INTERVAL_HOURS` (default 3
-     working hours), state in SQLite (survives restarts). A taken ticket stops
-     matching status=New and drops out of later reminders automatically.
+     Anti-spam is GLOBAL, not per ticket: at most ONE digest per
+     `REMIND_INTERVAL_HOURS` (default 3 working hours), and it always lists the
+     WHOLE overdue queue regardless of when each ticket crossed the age threshold —
+     tickets never fire their own separate reminders (no one-message-per-ticket
+     drip). Top 10 listed with Take buttons, the rest as «…и ещё N». The gate
+     timestamp lives in sync_state (`last_unassigned_summary_ts`, survives
+     restarts; the old per-ticket `unassigned_reminders` table is unused). A taken
+     ticket stops matching status=New and drops out of the next digest
+     automatically.
    - new tickets (id > last_seen_id) -> notify tech group with inline buttons
      (the card shows the ticket **description**, see below)
    - status changes on tickets created via the bot -> notify the requester

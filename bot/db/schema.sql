@@ -84,12 +84,10 @@ CREATE TABLE IF NOT EXISTS ticket_solvers (
     name      TEXT NOT NULL DEFAULT ''
 );
 
--- Anti-spam state for the "unassigned tickets" group reminder: when each
--- ticket was last included in a summary. Survives restarts.
-CREATE TABLE IF NOT EXISTS unassigned_reminders (
-    ticket_id      INTEGER PRIMARY KEY,
-    last_remind_at INTEGER NOT NULL  -- unix seconds
-);
+-- (The former per-ticket `unassigned_reminders` anti-spam table is gone: the
+-- digest now uses ONE global gate stored in sync_state
+-- ('last_unassigned_summary_ts'). Old databases may still carry the orphan
+-- table; it is harmless and simply unused.)
 
 -- Requester's one-tap rating of a solved ticket (1=😞, 2=😐, 3=🤩).
 -- One row per ticket; re-rating overwrites (only reachable on old messages).
