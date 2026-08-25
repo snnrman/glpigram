@@ -467,3 +467,25 @@ class Repo:
                 """,
                 (ticket_id, when),
             )
+
+    # -- solution ratings (one-tap requester feedback) ----------------------
+    async def set_rating(self, ticket_id: int, *, tg_id: int, rating: int, now: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO ticket_ratings (ticket_id, tg_id, rating, rated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(ticket_id) DO UPDATE SET
+                    tg_id = excluded.tg_id, rating = excluded.rating,
+                    rated_at = excluded.rated_at
+                """,
+                (ticket_id, tg_id, rating, now),
+            )
+
+    async def rating_summary(self) -> dict[int, int]:
+        """Counts per rating value (1..3) across all rated tickets, for /stats."""
+        async with self._conn.execute(
+            "SELECT rating, COUNT(*) AS n FROM ticket_ratings GROUP BY rating"
+        ) as cur:
+            rows = await cur.fetchall()
+        return {row["rating"]: row["n"] for row in rows}

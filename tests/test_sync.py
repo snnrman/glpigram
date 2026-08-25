@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from bot import texts
 from bot.db.repo import Repo
 from bot.glpi.models import Document, Followup, Ticket
 from bot.schedule import WorkSchedule
@@ -854,3 +855,16 @@ async def test_unassigned_summary_has_take_buttons(repo):
     kb = sent_markups[0]
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert data == ["ta:take:44", "ta:take:47"]  # existing Take handler reused
+
+
+async def test_web_closed_solution_notice_offers_rating(repo):
+    # Ticket closed outright from the GLPI web UI: the solved notice to the
+    # requester carries the one-tap rating prompt.
+    bot = FakeBot()
+    client = FakeClient(tickets={20: _ticket(20, status=6)})
+    client.solutions[20] = (99, "Иван", "перезагрузил роутер")
+    await repo.track_ticket(
+        ticket_id=20, requester_tg_id=REQUESTER_TG, requester_glpi_id=42, status=1, now=0
+    )
+    await _service(bot, client, repo)._poll_tracked_tickets()
+    assert any(c == REQUESTER_TG and "решена" in t and texts.RATE_PROMPT in t for c, t in bot.sent)

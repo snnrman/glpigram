@@ -192,3 +192,21 @@ def test_stats_summary_renders_counts_and_empty():
     assert texts.ticket_status_label(1) in out
     empty = texts.stats_summary({})
     assert "🎉" in empty
+
+
+async def test_stats_includes_ratings_block_when_present(env):
+    dp, client, repo = env
+    await repo.set_rating(5, tg_id=1, rating=3, now=0)
+    await repo.set_rating(6, tg_id=2, rating=1, now=0)
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, TECH_ID, "/stats"))
+    text = bot.sent[-1][1]
+    assert "Оценки решений: 2" in text
+    assert "🤩 1" in text and "😞 1" in text
+
+
+async def test_stats_hides_ratings_block_when_empty(env):
+    dp, client, _repo = env
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, TECH_ID, "/stats"))
+    assert "Оценки решений" not in bot.sent[-1][1]

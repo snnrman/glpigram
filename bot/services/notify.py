@@ -338,6 +338,20 @@ def unassigned_take_keyboard(ticket_ids: list[int]) -> InlineKeyboardMarkup:
     )
 
 
+def rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    """One-tap solution rating: a single row of three mood buttons."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.rate_emoji(r), callback_data=f"rate:{ticket_id}:{r}"
+                )
+                for r in (1, 2, 3)
+            ]
+        ]
+    )
+
+
 def solution_confirm_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     """Requester's prompt under a proposed solution: confirm or return to work."""
     return InlineKeyboardMarkup(

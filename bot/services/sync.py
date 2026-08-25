@@ -329,10 +329,13 @@ class SyncService:
             )
             return
         _, tech_name, content = solution
+        # The closing notice doubles as the (optional) one-tap rating prompt.
         await notify.send_text(
             self._bot,
             row.requester_tg_id,
-            texts.solved_notice(ticket_id=ticket.id, tech_name=tech_name, solution=content),
+            texts.solved_notice(ticket_id=ticket.id, tech_name=tech_name, solution=content)
+            + f"\n\n{texts.RATE_PROMPT}",
+            reply_markup=notify.rating_keyboard(ticket.id),
         )
 
     async def _author_name(self, user_id: int, cache: dict) -> str | None:

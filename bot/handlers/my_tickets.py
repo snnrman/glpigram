@@ -452,7 +452,13 @@ def build_my_tickets_router(
             await _show(cb, texts.GLPI_ERROR, None)
             return
         await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
-        await _show(cb, texts.closed_thanks(ticket_id), None)  # buttons gone
+        # Confirm/return buttons are replaced by the optional one-tap rating —
+        # same message, no extra ping, silently ignorable.
+        await _show(
+            cb,
+            f"{texts.closed_thanks(ticket_id)}\n\n{texts.RATE_PROMPT}",
+            notify.rating_keyboard(ticket_id),
+        )
         handled = cards is not None and await cards.record_event(
             bot,
             ticket_id,
@@ -462,6 +468,34 @@ def build_my_tickets_router(
         )
         if not handled and tech_group_chat_id is not None:
             await notify.send_text(bot, tech_group_chat_id, texts.reply_confirmed(ticket_id))
+
+    @router.callback_query(F.data.startswith("rate:"))
+    async def on_rate(cb: CallbackQuery, bot: Bot) -> None:
+        _, tid, val = cb.data.split(":")
+        ticket_id, rating = int(tid), int(val)
+        if rating not in (1, 2, 3):
+            await cb.answer(texts.STALE_BUTTON, show_alert=True)
+            return
+        # Only the ticket's requester may rate (the buttons live in their DM,
+        # but callback data is spoofable — verify against the tracked row).
+        tracked = await repo.get_tracked_ticket(ticket_id)
+        if tracked is None or tracked.requester_tg_id != cb.from_user.id:
+            await cb.answer(texts.RATE_STALE, show_alert=True)
+            return
+        await repo.set_rating(ticket_id, tg_id=cb.from_user.id, rating=rating, now=int(time.time()))
+        # Swap the prompt line for the thank-you in place; the buttons go away.
+        msg = cb.message if isinstance(cb.message, Message) else None
+        if msg is not None:
+            current = msg.html_text or ""
+            if texts.RATE_PROMPT in current:
+                new_text = current.replace(texts.RATE_PROMPT, texts.rate_thanks(rating))
+            else:
+                new_text = f"{current}\n\n{texts.rate_thanks(rating)}"
+            await notify.safe_edit(cb, new_text)
+        await cb.answer(texts.rate_thanks(rating))
+        # Quiet trace on the living card (no group ping — per design).
+        if cards is not None:
+            await cards.record_event(bot, ticket_id, texts.hist_rated(rating))
 
     @router.callback_query(F.data.startswith("rs:back:"))
     async def on_solution_return(cb: CallbackQuery, state: FSMContext) -> None:

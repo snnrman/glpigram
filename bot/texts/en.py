@@ -620,6 +620,33 @@ def closed_thanks(ticket_id: int) -> str:
     return f"Ticket #{ticket_id} is closed, thank you!"
 
 
+# --- one-tap solution rating (1=😞, 2=😐, 3=🤩) ---
+RATE_PROMPT = "How was the solution?"
+RATE_STALE = "Rating is not available."
+_RATE_EMOJI = {1: "😞", 2: "😐", 3: "🤩"}
+
+
+def rate_emoji(rating: int) -> str:
+    return _RATE_EMOJI.get(rating, "❓")
+
+
+def rate_thanks(rating: int) -> str:
+    return f"{rate_emoji(rating)} Thanks for the feedback!"
+
+
+def hist_rated(rating: int) -> str:
+    return f"{rate_emoji(rating)} Requester's rating"
+
+
+def ratings_block(counts: dict[int, int]) -> str:
+    """Ratings section for /stats; "" when nothing has been rated yet."""
+    total = sum(counts.values())
+    if not total:
+        return ""
+    row = " · ".join(f"{_RATE_EMOJI[r]} {counts.get(r, 0)}" for r in (3, 2, 1))
+    return f"⭐ <b>Solution ratings: {total}</b>\n{row}"
+
+
 def ask_return_reason(ticket_id: int) -> str:
     return f"Describe what is still unresolved in ticket #{ticket_id} — or press Cancel."
 

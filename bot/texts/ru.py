@@ -632,6 +632,33 @@ def closed_thanks(ticket_id: int) -> str:
     return f"Заявка №{ticket_id} закрыта, спасибо!"
 
 
+# --- one-tap solution rating (1=😞, 2=😐, 3=🤩) ---
+RATE_PROMPT = "Как вам решение?"
+RATE_STALE = "Оценка недоступна."
+_RATE_EMOJI = {1: "😞", 2: "😐", 3: "🤩"}
+
+
+def rate_emoji(rating: int) -> str:
+    return _RATE_EMOJI.get(rating, "❓")
+
+
+def rate_thanks(rating: int) -> str:
+    return f"{rate_emoji(rating)} Спасибо за отзыв!"
+
+
+def hist_rated(rating: int) -> str:
+    return f"{rate_emoji(rating)} Оценка заявителя"
+
+
+def ratings_block(counts: dict[int, int]) -> str:
+    """Ratings section for /stats; "" when nothing has been rated yet."""
+    total = sum(counts.values())
+    if not total:
+        return ""
+    row = " · ".join(f"{_RATE_EMOJI[r]} {counts.get(r, 0)}" for r in (3, 2, 1))
+    return f"⭐ <b>Оценки решений: {total}</b>\n{row}"
+
+
 def ask_return_reason(ticket_id: int) -> str:
     return f"Опишите, что осталось нерешённым по заявке №{ticket_id} — или нажмите «Отмена»."
 

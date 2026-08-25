@@ -50,8 +50,18 @@ def build_stats_router(client: GlpiClient, repo: Repo) -> Router:
         except Exception:
             log.exception("stats_users_failed")
             users_block = texts.STATS_USERS_UNAVAILABLE
+        # Solution ratings: appears once at least one rating exists; a DB
+        # hiccup must not hide the rest of the stats.
+        ratings = ""
+        try:
+            ratings = texts.ratings_block(await repo.rating_summary())
+        except Exception:
+            log.exception("stats_ratings_failed")
+        parts = [texts.stats_summary(counts), users_block]
+        if ratings:
+            parts.append(ratings)
         await message.answer(
-            f"{texts.stats_summary(counts)}\n\n{users_block}",
+            "\n\n".join(parts),
             reply_markup=main_menu_keyboard(is_tech=True),
         )
 

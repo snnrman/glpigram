@@ -221,6 +221,18 @@ deploy/
      подтверждения»; closed -> only an "Open in GLPI" URL button. If the requester never
      reacts the ticket stays solved — GLPI's own auto-close timer may close it (the bot
      does nothing).
+   - **One-tap solution rating (😞/😐/🤩).** Zero-friction by design: no separate survey
+     message, no reminders, silently ignorable. The rating row (three mood buttons,
+     values 1..3, callback `rate:{id}:{n}`) rides ON the existing final message — the
+     thank-you after the requester confirms the solution, and the solved/closed notice
+     when a ticket is closed from the GLPI web UI with a solution. A tap swaps the
+     prompt for «🤩 Спасибо за отзыв!» in place (buttons gone) and stores the rating in
+     SQLite (`ticket_ratings`, one row per ticket, re-rating overwrites). Only the
+     tracked ticket's requester may rate (callback data is spoofable — verified against
+     `bot_tickets`). Low ratings do NOT ping the group (deliberate); the only trace is a
+     quiet history line on the living card («😞 Оценка заявителя») and the /stats block
+     «⭐ Оценки решений: N» (shown once at least one rating exists). Requester
+     self-closes are not rated.
    - **Handoff («🔄 Передать»):** on taken cards and in the «👨‍💻 В работе» detail view
      (techs only, is_tech re-checked in handlers). The pick list — all linked techs from
      SQLite (is_tech cache of TECH_GROUP_ID membership) — is sent to the pressing tech's
