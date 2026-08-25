@@ -164,10 +164,13 @@ def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
     auth middleware from the GLPI group, ~5 min TTL), so a technician added to
     or removed from the group gets the right menu on their next interaction.
     """
+    # Techs get «Все заявки» (the untaken queue) instead of «Мои заявки»; their
+    # own requester tickets stay reachable via /tickets.
+    second = texts.BTN_ALL_TICKETS if is_tech else texts.BTN_MY_TICKETS
     rows = [
         [
             KeyboardButton(text=texts.BTN_NEW_TICKET),
-            KeyboardButton(text=texts.BTN_MY_TICKETS),
+            KeyboardButton(text=second),
         ]
     ]
     if is_tech:

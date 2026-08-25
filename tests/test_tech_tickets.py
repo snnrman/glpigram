@@ -185,3 +185,64 @@ async def test_detail_close_button_reaches_the_tech_close_flow(env):
     bot = FakeBot()
     await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "ta:close:5"))
     assert any(texts.tech_ask_solution(5) == text for _chat, text, _kb in bot.sent)
+
+
+# --- «📥 Все заявки»: the untaken queue in the tech menu -----------------------
+async def test_all_tickets_lists_unassigned_for_tech(env):
+    dp, client = env
+    client.search_unassigned_tickets.return_value = [
+        TicketSummary(id=74, title="Не работает VPN", status=1),
+        TicketSummary(id=73, title="Принтер <b>x</b>", status=1),
+    ]
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_msg(bot, 1, TECH_ID, texts.BTN_ALL_TICKETS))
+    client.search_unassigned_tickets.assert_awaited_once()
+    chat, text, kb = bot.sent[-1]
+    assert chat == TECH_ID
+    assert "№74" in text and "№73" in text
+    assert "<b>x</b>" not in text  # titles escaped
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert data == ["tt:openu:74", "tt:openu:73"]
+
+
+async def test_all_tickets_empty_message(env):
+    dp, client = env
+    client.search_unassigned_tickets.return_value = []
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_msg(bot, 1, TECH_ID, texts.BTN_ALL_TICKETS))
+    assert bot.sent[-1][1] == texts.ALL_TICKETS_EMPTY
+
+
+async def test_all_tickets_refused_for_regular_user(env):
+    dp, client = env
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_msg(bot, 1, USER_ID, texts.BTN_ALL_TICKETS))
+    assert bot.sent[-1][1] == texts.TECH_ONLY
+    client.search_unassigned_tickets.assert_not_called()
+
+
+async def test_unassigned_detail_has_take_and_back_to_all(env):
+    dp, client = env
+    client.get_ticket.return_value = Ticket(
+        id=74, name="Не работает VPN", content="c", status=1, urgency=3
+    )
+    client.get_ticket_assignees.return_value = []
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:openu:74"))
+    text, kb = bot.edits[-1]
+    assert "Не работает VPN" in text
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    # Full-width Take first; no handoff (nobody to hand off from); back to tt:all
+    assert data == ["ta:take:74", "ta:comment:74", "ta:close:74", "tt:all"]
+
+
+async def test_back_from_unassigned_detail_re_renders_queue(env):
+    dp, client = env
+    client.search_unassigned_tickets.return_value = [
+        TicketSummary(id=74, title="Не работает VPN", status=1),
+    ]
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:all"))
+    text, kb = bot.edits[-1]
+    assert "№74" in text
+    assert kb.inline_keyboard[0][0].callback_data == "tt:openu:74"

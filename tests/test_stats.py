@@ -46,8 +46,9 @@ def test_menu_for_regular_user_has_no_stats():
 
 
 def test_menu_for_tech_adds_short_two_button_row():
+    # Techs get «Все заявки» (the untaken queue) in place of «Мои заявки».
     assert _labels(main_menu_keyboard(is_tech=True)) == [
-        [texts.BTN_NEW_TICKET, texts.BTN_MY_TICKETS],
+        [texts.BTN_NEW_TICKET, texts.BTN_ALL_TICKETS],
         [texts.BTN_TECH_TICKETS, texts.BTN_STATS],
     ]
 

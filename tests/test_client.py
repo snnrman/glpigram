@@ -772,3 +772,28 @@ async def test_search_tech_open_tickets_filters_by_assignee_field(mock):
     params = dict(route.calls[0].request.url.params)
     assert params["criteria[0][field]"] == "5"  # assignee searchOption (Ticket_User type=2)
     assert params["criteria[0][value]"] == "9"
+
+
+async def test_search_unassigned_tickets_filters_by_status_new(mock):
+    await _init_route(mock)
+    route = mock.get(f"{BASE}/search/Ticket").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "totalcount": 2,
+                "data": [
+                    {"2": 74, "1": "VPN не работает", "12": 1},
+                    {"2": 73, "1": "Принтер", "12": 1},
+                ],
+            },
+        )
+    )
+    client = make_client()
+    result = await client.search_unassigned_tickets()
+    await client.close()
+    assert [t.id for t in result] == [74, 73]
+    assert all(t.assignee is None for t in result)  # nobody took them
+    params = dict(route.calls[0].request.url.params)
+    assert params["criteria[0][field]"] == "12"  # status searchOption
+    assert params["criteria[0][value]"] == "1"  # TICKET_STATUS_NEW
+    assert params["order"] == "DESC"  # newest first

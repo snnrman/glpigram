@@ -751,6 +751,44 @@ class GlpiClient:
         """
         return await self._search_open_tickets(SO_TICKET_ASSIGN, tech_users_id, limit)
 
+    async def search_unassigned_tickets(self, *, limit: int = 50) -> list[TicketSummary]:
+        """Tickets nobody has taken yet (status New), newest first.
+
+        The bot's take flow — and GLPI itself on assignment — moves a ticket to
+        *processing (assigned)*, so status New is the "no one took it" marker
+        (same convention as the unassigned-tickets reminder).
+        """
+        params = {
+            "criteria[0][field]": SO_TICKET_STATUS,
+            "criteria[0][searchtype]": "equals",
+            "criteria[0][value]": TICKET_STATUS_NEW,
+            "forcedisplay[0]": SEARCHOPTION_ID,
+            "forcedisplay[1]": SO_TICKET_NAME,
+            "forcedisplay[2]": SO_TICKET_STATUS,
+            "sort": SEARCHOPTION_ID,
+            "order": "DESC",
+            "range": f"0-{max(0, limit - 1)}",
+        }
+        resp = await self._request("GET", "/search/Ticket", params=params, idempotent=True)
+        payload = resp.json()
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not rows:
+            return []
+        summaries: list[TicketSummary] = []
+        for row in rows:
+            try:
+                tid = int(row.get(str(SEARCHOPTION_ID)))
+            except (TypeError, ValueError):
+                continue
+            summaries.append(
+                TicketSummary(
+                    id=tid,
+                    title=str(row.get(str(SO_TICKET_NAME)) or ""),
+                    status=int(row.get(str(SO_TICKET_STATUS)) or TICKET_STATUS_NEW),
+                )
+            )
+        return summaries
+
     async def _search_open_tickets(
         self, user_field: int, users_id: int, limit: int
     ) -> list[TicketSummary]:

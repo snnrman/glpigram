@@ -685,6 +685,17 @@ def stats_users_block(total: int, techs: int, recent: int) -> str:
     )
 
 
+# --- "All tickets" (tech menu): tickets nobody has taken yet ---
+BTN_ALL_TICKETS = "📥 All tickets"
+ALL_TICKETS_EMPTY = "No unassigned tickets. 🎉"
+
+
+def all_tickets_list(items: list[tuple[int, str]]) -> str:
+    return "📥 <b>Unassigned tickets:</b>\n" + "\n".join(
+        f"• #{tid} — {html.escape(title)}" for tid, title in items
+    )
+
+
 def tech_tickets_list(in_work: list[tuple[int, str]], waiting: list[tuple[int, str]]) -> str:
     """Tech's assigned tickets, two groups; open a ticket with the buttons below."""
     parts = ["👨\u200d💻 <b>Tickets assigned to you</b>"]

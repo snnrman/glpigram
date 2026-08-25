@@ -236,11 +236,21 @@ deploy/
    attaches reach the tech group — images as photo/media group, other files as documents,
    oversized ones as a GLPI link.
 
-7. **Role-based menu, /stats, «👨‍💻 В работе».** The persistent reply menu is built per
-   role at render time (after /start and after every finished dialog): everyone gets
-   «🆕 Новая заявка» + «📋 Мои заявки»; technicians (is_tech, refreshed from the GLPI
-   group by the auth middleware, ~5 min cache) additionally get a second SHORT
-   two-button row (labels must not wrap): «👨‍💻 В работе» + «📊 Статистика».
+7. **Role-based menu, /stats, «👨‍💻 В работе», «📥 Все заявки».** The persistent reply
+   menu is built per role at render time (after /start and after every finished dialog):
+   regular users get «🆕 Новая заявка» + «📋 Мои заявки»; technicians (is_tech, refreshed
+   from the GLPI group by the auth middleware, ~5 min cache) get «🆕 Новая заявка» +
+   «📥 Все заявки» (REPLACES «Мои заявки» — a tech's own requester tickets stay reachable
+   via /tickets) plus a second SHORT two-button row (labels must not wrap):
+   «👨‍💻 В работе» + «📊 Статистика».
+   - «📥 Все заявки» lists tickets nobody has taken yet (status New — the same
+     "unassigned" convention as the reminder), newest first
+     (`search_unassigned_tickets`); empty -> «Заявок без исполнителя нет. 🎉». Tapping
+     one opens the same detail view with a full-width «🙋 Взять в работу» button
+     (`ta:take:` — the same unified take handler as the group card/reminder, so all
+     take feedback applies) plus Reply/Close; no Handoff (nobody to hand off from);
+     back returns to the unassigned queue (`tt:all`). Techs only, re-checked in
+     handlers.
    - «👨‍💻 В работе» lists the tech's open assigned tickets (Ticket_User type=2,
      searchOption 5) in two groups — «В работе» (assigned/processing/waiting) and
      «Ждут подтверждения» (solved); empty -> «На вас нет активных заявок». Tapping a

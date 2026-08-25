@@ -20,7 +20,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .. import texts
 from ..db.repo import LinkedUser
-from ..glpi.client import TICKET_STATUS_SOLVED, GlpiClient, GlpiError
+from ..glpi.client import TICKET_STATUS_NEW, TICKET_STATUS_SOLVED, GlpiClient, GlpiError
 from ..glpi.models import TicketSummary
 
 log = logging.getLogger(__name__)
@@ -28,11 +28,13 @@ log = logging.getLogger(__name__)
 _MAX_FOLLOWUPS = 5
 
 
-def _list_keyboard(summaries: list[TicketSummary]) -> InlineKeyboardMarkup:
+def _list_keyboard(
+    summaries: list[TicketSummary], *, open_prefix: str = "tt:open"
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text=texts.btn_open_ticket(s.id, s.title), callback_data=f"tt:open:{s.id}"
+                text=texts.btn_open_ticket(s.id, s.title), callback_data=f"{open_prefix}:{s.id}"
             )
         ]
         for s in summaries
@@ -40,7 +42,16 @@ def _list_keyboard(summaries: list[TicketSummary]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _detail_keyboard(ticket_id: int, *, status: int) -> InlineKeyboardMarkup:
+def _detail_keyboard(
+    ticket_id: int, *, status: int, back_data: str = "tt:list"
+) -> InlineKeyboardMarkup:
+    rows = []
+    if status == TICKET_STATUS_NEW:
+        # Untaken ticket (the «Все заявки» view): the primary action is Take,
+        # full-width — the same ta: callback as on the group card.
+        rows.append(
+            [InlineKeyboardButton(text=texts.BTN_TECH_TAKE, callback_data=f"ta:take:{ticket_id}")]
+        )
     actions = [
         InlineKeyboardButton(text=texts.BTN_TECH_COMMENT, callback_data=f"ta:comment:{ticket_id}")
     ]
@@ -50,13 +61,14 @@ def _detail_keyboard(ticket_id: int, *, status: int) -> InlineKeyboardMarkup:
         actions.append(
             InlineKeyboardButton(text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}")
         )
-    tail = [InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data="tt:list")]
-    if status != TICKET_STATUS_SOLVED:
+    tail = [InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data=back_data)]
+    if status not in (TICKET_STATUS_SOLVED, TICKET_STATUS_NEW):
+        # Handoff needs a current assignee — pointless on an untaken ticket.
         tail.insert(
             0,
             InlineKeyboardButton(text=texts.BTN_HANDOFF, callback_data=f"ta:handoff:{ticket_id}"),
         )
-    return InlineKeyboardMarkup(inline_keyboard=[actions, tail])
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, actions, tail])
 
 
 def build_tech_tickets_router(
@@ -113,6 +125,49 @@ def build_tech_tickets_router(
 
     @router.callback_query(F.data.startswith("tt:open:"))
     async def cb_open(cb: CallbackQuery, link: LinkedUser) -> None:
+        await _open_detail(cb, link, back_data="tt:list")
+
+    # --- «📥 Все заявки»: the queue nobody has taken yet (techs only) -------
+    async def _render_unassigned() -> tuple[str, InlineKeyboardMarkup | None]:
+        summaries = await client.search_unassigned_tickets()
+        if not summaries:
+            return texts.ALL_TICKETS_EMPTY, None
+        text = texts.all_tickets_list([(s.id, s.title) for s in summaries])
+        return text, _list_keyboard(summaries, open_prefix="tt:openu")
+
+    @router.message(F.text == texts.BTN_ALL_TICKETS)
+    async def btn_all_tickets(message: Message, state: FSMContext, link: LinkedUser) -> None:
+        if not link.is_tech:
+            await message.answer(texts.TECH_ONLY)
+            return
+        await state.clear()
+        try:
+            text, kb = await _render_unassigned()
+        except GlpiError as exc:
+            log.warning("all_tickets_failed error=%s raw=%s", exc, exc.raw)
+            await message.answer(texts.GLPI_ERROR)
+            return
+        await message.answer(text, reply_markup=kb)
+
+    @router.callback_query(F.data == "tt:all")
+    async def cb_back_to_unassigned(cb: CallbackQuery, link: LinkedUser) -> None:
+        if not link.is_tech:
+            await cb.answer(texts.TECH_ONLY, show_alert=True)
+            return
+        try:
+            text, kb = await _render_unassigned()
+        except GlpiError as exc:
+            log.warning("all_tickets_failed error=%s raw=%s", exc, exc.raw)
+            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            return
+        await cb.message.edit_text(text, reply_markup=kb)
+        await cb.answer()
+
+    @router.callback_query(F.data.startswith("tt:openu:"))
+    async def cb_open_unassigned(cb: CallbackQuery, link: LinkedUser) -> None:
+        await _open_detail(cb, link, back_data="tt:all")
+
+    async def _open_detail(cb: CallbackQuery, link: LinkedUser, *, back_data: str) -> None:
         if not link.is_tech:
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
@@ -123,7 +178,9 @@ def build_tech_tickets_router(
             log.warning("tech_ticket_detail_failed ticket=%s error=%s", ticket_id, exc)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
-        await cb.message.edit_text(text, reply_markup=_detail_keyboard(ticket_id, status=status))
+        await cb.message.edit_text(
+            text, reply_markup=_detail_keyboard(ticket_id, status=status, back_data=back_data)
+        )
         await cb.answer()
 
     async def _render_detail(ticket_id: int) -> tuple[str, int]:
