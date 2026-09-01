@@ -34,6 +34,7 @@ class Ticket:
     urgency: int
     itilcategories_id: int | None = None
     date_creation: str | None = None  # GLPI "YYYY-MM-DD HH:MM:SS", UTC (see timeutil)
+    global_validation: int = 1  # 1 none, 2 waiting, 3 granted, 4 refused
 
     @classmethod
     def from_api(cls, raw: dict) -> Ticket:
@@ -46,6 +47,7 @@ class Ticket:
             urgency=int(raw.get("urgency", 0) or 0),
             itilcategories_id=int(cat) if cat else None,
             date_creation=raw.get("date_creation") or raw.get("date") or None,
+            global_validation=int(raw.get("global_validation", 1) or 1),
         )
 
 

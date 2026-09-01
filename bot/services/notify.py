@@ -138,6 +138,7 @@ async def notify_new_ticket(
             requester_tg_id=requester_tg_id,
             attachments_count=attachments_count,
             history=history,
+            awaiting_approval=ticket.global_validation == 2,  # VALIDATION_WAITING
         ),
         reply_markup=reply_markup if reply_markup is not None else tech_ticket_keyboard(ticket.id),
     )

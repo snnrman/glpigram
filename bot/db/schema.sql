@@ -89,6 +89,25 @@ CREATE TABLE IF NOT EXISTS ticket_solvers (
 -- ('last_unassigned_summary_ts'). Old databases may still carry the orphan
 -- table; it is harmless and simply unused.)
 
+-- Lead access approvals (feature: access requests). One row per access ticket;
+-- the GLPI TicketValidation is the source of truth for the approval fact, this
+-- row carries the bot-side context (who the lead is, DM message to edit,
+-- escalation timers). status: 0 pending, 1 approved, -1 rejected.
+CREATE TABLE IF NOT EXISTS access_approvals (
+    ticket_id       INTEGER PRIMARY KEY,
+    validation_id   INTEGER NOT NULL,
+    lead_glpi_id    INTEGER NOT NULL,
+    lead_tg_id      INTEGER NOT NULL,
+    lead_name       TEXT    NOT NULL DEFAULT '',
+    requester_tg_id INTEGER NOT NULL,
+    dm_message_id   INTEGER,            -- the lead's DM prompt, edited on answer
+    status          INTEGER NOT NULL DEFAULT 0,
+    requested_at    INTEGER NOT NULL,   -- unix seconds
+    reminded_at     INTEGER NOT NULL DEFAULT 0  -- last escalation ping
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_pending ON access_approvals (status);
+
 -- Requester's one-tap rating of a solved ticket (1=😞, 2=😐, 3=🤩).
 -- One row per ticket; re-rating overwrites (only reachable on old messages).
 CREATE TABLE IF NOT EXISTS ticket_ratings (

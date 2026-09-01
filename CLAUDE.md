@@ -296,6 +296,39 @@ deploy/
    hand) is refused for regular users. A role change in the GLPI group updates the menu
    on the user's next interaction.
 
+8. **Lead access approval («🔑 Доступ», feature: access requests).** Access requests
+   go through a lead's approval before technicians may take them; GLPI's native
+   **TicketValidation** is the source of truth for the approval fact.
+   - **Requester dialog** (menu button «🔑 Доступ» / `/access`, everyone): system →
+     what/why → duration (Постоянно / Временно+text) → pick a lead → confirm. Creates a
+     ticket (category `ACCESS_CATEGORY_ID`, structured plain-text body, requester =
+     linked user) + a TicketValidation → `global_validation` = *waiting* (2).
+   - **Leads** come from config: `LEAD_LOGINS` (comma-separated AD logins), resolved
+     against GLPI + bot links with a TTL cache (`build_lead_directory`). The pick list
+     shows only leads LINKED to the bot; self-approval is excluded (the requesting lead
+     doesn't see themselves). Changing the composition = .env edit + restart.
+   - **The lead answers in their DM**: «✅ Одобрить» one tap; «❌ Отклонить» demands a
+     mandatory reason (FSM). Authority is verified against the stored approval row
+     (`access_approvals.lead_tg_id`), not the button. Approve → validation answered
+     ACCEPTED, followup «🔑 Доступ одобрен: <лид>» (cursor bumped — no sync echo),
+     requester DM, card history «👍 Согласовано: <лид>». Reject → validation REFUSED,
+     ticket CLOSED, followup + requester DM with the reason, card history. The lead's
+     own DM is edited in place with the decision.
+   - **GLPI quirk (verified live on 11.0.4):** a validation can only be ANSWERED by the
+     session of its target user — answering on behalf of another user is silently
+     ignored (HTTP 200, status unchanged). Therefore validations always TARGET the
+     service account (`get_session_user_id`), and the real approver is recorded in
+     `comment_validation` («Одобрено: <лид> (лид) — через Telegram-бота») + the followup
+     + the card history. Create format: `itemtype_target: "User"` + `items_id_target`
+     (the old `users_id_validate` is gone in GLPI 11).
+   - **Hard take gate:** `ta:take` re-reads the ticket; `global_validation == 2` →
+     refusal toast, no assignment. The new-ticket group card renders
+     «⏳ Ждёт согласования лида» while waiting (initial render).
+   - **Escalation:** a pending approval older than `APPROVAL_REMIND_HOURS` (default 4
+     WORKING hours, counted from max(requested, last reminder)) re-pings the lead's DM;
+     working hours only. An approval answered elsewhere / whose ticket is gone is marked
+     moot (-2) and dropped. State in `access_approvals` (SQLite).
+
 Out of scope for now: SLA warnings, Claude-based auto-classification, multi-entity support.
 Keep the code structured so these can be added later.
 

@@ -193,7 +193,10 @@ async def test_requester_dialog_inline_cancel(env, entry, state):
     chat, text, markup = bot.sent[-1]
     assert (chat, text) == (REQUESTER_ID, texts.DIALOG_CANCELLED)
     rows = _menu_rows(markup)
-    assert rows == [[texts.BTN_NEW_TICKET, texts.BTN_MY_TICKETS]]  # non-tech menu
+    assert rows == [
+        [texts.BTN_NEW_TICKET, texts.BTN_MY_TICKETS],
+        [texts.BTN_ACCESS],
+    ]  # non-tech menu
     assert _glpi_untouched(client)
 
 

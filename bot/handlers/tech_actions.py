@@ -32,6 +32,7 @@ from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
     TICKET_STATUS_PROCESSING_ASSIGNED,
     TICKET_STATUS_SOLVED,
+    VALIDATION_WAITING,
     GlpiClient,
     GlpiError,
 )
@@ -145,6 +146,15 @@ def build_tech_actions_router(
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
         ticket_id = int(cb.data.split(":")[2])
+        # Hard gate: an access ticket awaiting the lead's approval can't be
+        # taken (checked live in GLPI — global_validation is the truth).
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError:
+            ticket = None  # gate check is best-effort; the assign below decides
+        if ticket is not None and ticket.global_validation == VALIDATION_WAITING:
+            await cb.answer(texts.TAKE_BLOCKED_AWAITING_APPROVAL, show_alert=True)
+            return
         try:
             await client.assign_ticket(ticket_id, link.glpi_users_id)
         except GlpiError as exc:

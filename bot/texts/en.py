@@ -302,6 +302,135 @@ URGENT_WARNING = (
 BTN_URGENT_CONFIRM = "✅ Confirm"
 BTN_URGENT_DECLINE = "❌ Cancel"
 
+# --- lead access approval (feature: access requests) ---
+BTN_ACCESS = "🔑 Access"
+ACC_ASK_SYSTEM = "Which system do you need access to? (name/URL)"
+ACC_ASK_DETAILS = "What access do you need and why? (permission level + justification)"
+ACC_ASK_DURATION = "For how long?"
+BTN_ACC_PERMANENT = "Permanently"
+BTN_ACC_TEMPORARY = "⏳ Temporarily"
+ACC_ASK_UNTIL = "Until when? (free text, e.g. “until Oct 1” or “for 2 weeks”)"
+ACC_CHOOSE_LEAD = "Who is your lead? They will receive the approval request:"
+ACC_NO_LEADS = "The approvers list is empty or no lead is linked to the bot. Contact the admin."
+ACC_CONFIRM_HEADER = "Review the access request:"
+BTN_ACC_SEND = "📨 Send for approval"
+ACC_DURATION_PERMANENT = "permanent"
+
+
+def acc_confirm_summary(system: str, details: str, duration: str, lead: str) -> str:
+    return (
+        f"{ACC_CONFIRM_HEADER}\n\n"
+        f"<b>System:</b> {html.escape(system)}\n"
+        f"<b>Needed:</b> {html.escape(details)}\n"
+        f"<b>Duration:</b> {html.escape(duration)}\n"
+        f"<b>Approver:</b> {html.escape(lead)}"
+    )
+
+
+def acc_ticket_title(system: str) -> str:
+    return f"Access: {system}"
+
+
+def acc_ticket_content(requester: str, system: str, details: str, duration: str, lead: str) -> str:
+    """Structured ticket body (plain text; GLPI renders it fine)."""
+    return (
+        f"Access request (via the Telegram bot)\n"
+        f"Requester: {requester}\n"
+        f"System: {system}\n"
+        f"Needed: {details}\n"
+        f"Duration: {duration}\n"
+        f"Approving lead: {lead}"
+    )
+
+
+def acc_sent(ticket_id: int, lead: str, url: str | None) -> str:
+    return (
+        f"📨 Access request {_ticket_ref(ticket_id, url)} sent for approval to "
+        f"{html.escape(lead)}. I will report the decision."
+    )
+
+
+def acc_lead_prompt(
+    *, ticket_id: int, requester: str, system: str, details: str, duration: str, url: str | None
+) -> str:
+    return (
+        f"🔑 <b>Access request {_ticket_ref(ticket_id, url)} — your decision is needed</b>\n\n"
+        f"👤 {html.escape(requester)}\n"
+        f"<b>System:</b> {html.escape(system)}\n"
+        f"<b>Needed:</b> {html.escape(details)}\n"
+        f"<b>Duration:</b> {html.escape(duration)}"
+    )
+
+
+BTN_ACC_APPROVE = "✅ Approve"
+BTN_ACC_REJECT = "❌ Reject"
+ACC_ASK_REJECT_REASON = "State the rejection reason — the requester will see it. Or press Cancel."
+ACC_ANSWERED_STALE = "This request is already handled or not addressed to you."
+
+
+def acc_lead_answered(decision_line: str, original: str) -> str:
+    """The lead's DM after answering: original request + the decision line."""
+    return f"{original}\n\n{decision_line}"
+
+
+def acc_decision_approved(lead: str) -> str:
+    return f"✅ Approved ({html.escape(lead)})"
+
+
+def acc_decision_rejected(lead: str, reason: str) -> str:
+    return f"❌ Rejected ({html.escape(lead)}): {html.escape(reason)}"
+
+
+def acc_requester_approved(ticket_id: int, lead: str, url: str | None) -> str:
+    return (
+        f"✅ Your access request {_ticket_ref(ticket_id, url)} was approved by "
+        f"{html.escape(lead)}. The ticket goes to the technicians."
+    )
+
+
+def acc_requester_rejected(ticket_id: int, lead: str, reason: str, url: str | None) -> str:
+    return (
+        f"❌ Access request {_ticket_ref(ticket_id, url)} was rejected by {html.escape(lead)}.\n"
+        f"Reason: {html.escape(reason)}\n"
+        f"You can refine the details and submit again."
+    )
+
+
+def acc_validation_comment_approved(lead: str) -> str:
+    return f"Approved by: {lead} (lead) — via the Telegram bot"
+
+
+def acc_validation_comment_rejected(lead: str, reason: str) -> str:
+    return f"Rejected by: {lead} (lead) — via the Telegram bot. Reason: {reason}"
+
+
+def acc_followup_approved(lead: str) -> str:
+    return f"🔑 Access approved: {lead} (lead)"
+
+
+def acc_followup_rejected(lead: str, reason: str) -> str:
+    return f"🔑 Access rejected: {lead} (lead). Reason: {reason}"
+
+
+def hist_approved(lead: str) -> str:
+    return f"👍 Approved: {html.escape(lead)}"
+
+
+def hist_rejected(lead: str) -> str:
+    return f"👎 Rejected by lead: {html.escape(lead)}"
+
+
+CARD_AWAITING_APPROVAL = "⏳ <b>Awaiting lead approval</b>"
+TAKE_BLOCKED_AWAITING_APPROVAL = "⏳ The ticket is not approved by the lead yet — cannot take it."
+
+
+def acc_lead_reminder(ticket_id: int, url: str | None) -> str:
+    return (
+        f"⏰ Reminder: access request {_ticket_ref(ticket_id, url)} "
+        f"is still waiting for your decision."
+    )
+
+
 # --- quiet hours / off-hours (feature: quiet hours) ---
 QUIET_URGENT_NOTICE = (
     "The ticket is marked as urgent (prod) — the technicians have been notified "
@@ -409,6 +538,7 @@ def notify_new_ticket(
     history: list[str] | None = None,
     assignee: str | None = None,
     description: str | None = None,
+    awaiting_approval: bool = False,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title, the description snippet, author, then a named link instead
@@ -416,6 +546,8 @@ def notify_new_ticket(
     something else (e.g. a deferred card flushed after the ticket was taken
     overnight)."""
     head = f"🆕 <b>Ticket #{ticket_id}</b>"
+    if awaiting_approval:
+        head += f"\n{CARD_AWAITING_APPROVAL}"
     if urgency is not None:
         head += f"\n{urgency_card_line(urgency)}"
     if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)

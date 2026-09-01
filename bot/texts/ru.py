@@ -306,6 +306,136 @@ URGENT_WARNING = (
 BTN_URGENT_CONFIRM = "✅ Подтвердить"
 BTN_URGENT_DECLINE = "❌ Отмена"
 
+# --- lead access approval (feature: access requests) ---
+BTN_ACCESS = "🔑 Доступ"
+ACC_ASK_SYSTEM = "К какой системе нужен доступ? (название/URL)"
+ACC_ASK_DETAILS = "Какой доступ нужен и зачем? (уровень прав + обоснование)"
+ACC_ASK_DURATION = "На какой срок?"
+BTN_ACC_PERMANENT = "Постоянно"
+BTN_ACC_TEMPORARY = "⏳ Временно"
+ACC_ASK_UNTIL = "До какой даты? (текстом, например «до 01.10» или «на 2 недели»)"
+ACC_CHOOSE_LEAD = "Кто ваш лид? Он получит запрос на согласование:"
+ACC_NO_LEADS = (
+    "Список согласующих пуст или никто из лидов не привязан к боту. Сообщите администратору."
+)
+ACC_CONFIRM_HEADER = "Проверьте запрос доступа:"
+BTN_ACC_SEND = "📨 Отправить на согласование"
+ACC_DURATION_PERMANENT = "постоянно"
+
+
+def acc_confirm_summary(system: str, details: str, duration: str, lead: str) -> str:
+    return (
+        f"{ACC_CONFIRM_HEADER}\n\n"
+        f"<b>Система:</b> {html.escape(system)}\n"
+        f"<b>Что нужно:</b> {html.escape(details)}\n"
+        f"<b>Срок:</b> {html.escape(duration)}\n"
+        f"<b>Согласует:</b> {html.escape(lead)}"
+    )
+
+
+def acc_ticket_title(system: str) -> str:
+    return f"Доступ: {system}"
+
+
+def acc_ticket_content(requester: str, system: str, details: str, duration: str, lead: str) -> str:
+    """Structured ticket body (plain text; GLPI renders it fine)."""
+    return (
+        f"Запрос доступа (через Telegram-бота)\n"
+        f"Заявитель: {requester}\n"
+        f"Система: {system}\n"
+        f"Что нужно: {details}\n"
+        f"Срок: {duration}\n"
+        f"Согласующий лид: {lead}"
+    )
+
+
+def acc_sent(ticket_id: int, lead: str, url: str | None) -> str:
+    return (
+        f"📨 Запрос доступа {_ticket_ref(ticket_id, url)} отправлен на согласование: "
+        f"{html.escape(lead)}. Сообщу о решении."
+    )
+
+
+def acc_lead_prompt(
+    *, ticket_id: int, requester: str, system: str, details: str, duration: str, url: str | None
+) -> str:
+    return (
+        f"🔑 <b>Запрос доступа {_ticket_ref(ticket_id, url)} — нужно ваше решение</b>\n\n"
+        f"👤 {html.escape(requester)}\n"
+        f"<b>Система:</b> {html.escape(system)}\n"
+        f"<b>Что нужно:</b> {html.escape(details)}\n"
+        f"<b>Срок:</b> {html.escape(duration)}"
+    )
+
+
+BTN_ACC_APPROVE = "✅ Одобрить"
+BTN_ACC_REJECT = "❌ Отклонить"
+ACC_ASK_REJECT_REASON = "Укажите причину отказа — заявитель её увидит. Или нажмите «Отмена»."
+ACC_ANSWERED_STALE = "Этот запрос уже обработан или адресован не вам."
+
+
+def acc_lead_answered(decision_line: str, original: str) -> str:
+    """The lead's DM after answering: original request + the decision line."""
+    return f"{original}\n\n{decision_line}"
+
+
+def acc_decision_approved(lead: str) -> str:
+    return f"✅ Одобрено ({html.escape(lead)})"
+
+
+def acc_decision_rejected(lead: str, reason: str) -> str:
+    return f"❌ Отклонено ({html.escape(lead)}): {html.escape(reason)}"
+
+
+def acc_requester_approved(ticket_id: int, lead: str, url: str | None) -> str:
+    return (
+        f"✅ Ваш запрос доступа {_ticket_ref(ticket_id, url)} одобрен ({html.escape(lead)}). "
+        f"Заявка передана техникам."
+    )
+
+
+def acc_requester_rejected(ticket_id: int, lead: str, reason: str, url: str | None) -> str:
+    return (
+        f"❌ Запрос доступа {_ticket_ref(ticket_id, url)} отклонён ({html.escape(lead)}).\n"
+        f"Причина: {html.escape(reason)}\n"
+        f"Можно уточнить детали и подать запрос заново."
+    )
+
+
+def acc_validation_comment_approved(lead: str) -> str:
+    return f"Одобрено: {lead} (лид) — через Telegram-бота"
+
+
+def acc_validation_comment_rejected(lead: str, reason: str) -> str:
+    return f"Отклонено: {lead} (лид) — через Telegram-бота. Причина: {reason}"
+
+
+def acc_followup_approved(lead: str) -> str:
+    return f"🔑 Доступ одобрен: {lead} (лид)"
+
+
+def acc_followup_rejected(lead: str, reason: str) -> str:
+    return f"🔑 Доступ отклонён: {lead} (лид). Причина: {reason}"
+
+
+def hist_approved(lead: str) -> str:
+    return f"👍 Согласовано: {html.escape(lead)}"
+
+
+def hist_rejected(lead: str) -> str:
+    return f"👎 Отклонено лидом: {html.escape(lead)}"
+
+
+CARD_AWAITING_APPROVAL = "⏳ <b>Ждёт согласования лида</b>"
+TAKE_BLOCKED_AWAITING_APPROVAL = "⏳ Заявка ещё не согласована лидом — взять нельзя."
+
+
+def acc_lead_reminder(ticket_id: int, url: str | None) -> str:
+    return (
+        f"⏰ Напоминание: запрос доступа {_ticket_ref(ticket_id, url)} всё ещё ждёт вашего решения."
+    )
+
+
 # --- quiet hours / off-hours (feature: quiet hours) ---
 QUIET_URGENT_NOTICE = (
     "Заявка помечена как срочная (прод) — специалисты получили уведомление "
@@ -422,6 +552,7 @@ def notify_new_ticket(
     history: list[str] | None = None,
     assignee: str | None = None,
     description: str | None = None,
+    awaiting_approval: bool = False,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title, the description snippet, author, then a named link instead
@@ -429,6 +560,8 @@ def notify_new_ticket(
     something else (e.g. a deferred card flushed after the ticket was taken
     overnight)."""
     head = f"🆕 <b>Заявка №{ticket_id}</b>"
+    if awaiting_approval:
+        head += f"\n{CARD_AWAITING_APPROVAL}"
     if urgency is not None:
         head += f"\n{urgency_card_line(urgency)}"
     if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)

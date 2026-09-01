@@ -63,6 +63,7 @@ class SyncService:
         cards: CardService | None = None,
         unassigned_remind_hours: float = 2,
         remind_interval_hours: float = 3,
+        approval_remind_hours: float = 4,
     ) -> None:
         self._bot = bot
         self._client = client
@@ -76,6 +77,7 @@ class SyncService:
         self._cards = cards or CardService(repo, front_base=front_base)
         self._unassigned_after = unassigned_remind_hours * 3600
         self._remind_interval = remind_interval_hours * 3600
+        self._approval_remind = approval_remind_hours * 3600
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -119,6 +121,43 @@ class SyncService:
         await self._remind_unassigned(recent)
         await self._poll_tracked_tickets()
         await self._push_pending_ratings()
+        await self._remind_pending_approvals()
+
+    async def _remind_pending_approvals(self) -> None:
+        """Re-ping a silent lead about a pending access approval.
+
+        Escalations respect working hours (a personal DM at night helps
+        nobody); a moot approval — its ticket gone or no longer waiting for
+        validation — is closed out silently.
+        """
+        now = self._now()
+        if not self._schedule.is_working(now):
+            return
+        for row in await self._repo.pending_approvals():
+            ticket_id = row["ticket_id"]
+            anchor = max(row["requested_at"], row["reminded_at"])
+            waited = self._schedule.working_seconds_between(
+                datetime.fromtimestamp(anchor, tz=UTC), now
+            )
+            if waited < self._approval_remind:
+                continue
+            try:
+                ticket = await self._client.get_ticket(ticket_id)
+            except GlpiError as exc:
+                log.warning("approval_check_failed ticket=%s error=%s", ticket_id, exc)
+                continue
+            if ticket is None or ticket.global_validation != 2:  # VALIDATION_WAITING
+                # answered/closed elsewhere -> stop nagging, mark moot
+                await self._repo.set_approval_status(ticket_id, status=-2)
+                continue
+            sent = await notify.send_text(
+                self._bot,
+                row["lead_tg_id"],
+                texts.acc_lead_reminder(ticket_id, self._ticket_url(ticket_id)),
+            )
+            if sent:
+                log.info("approval_reminder_sent ticket=%s lead=%s", ticket_id, row["lead_tg_id"])
+                await self._repo.set_approval_reminded(ticket_id, int(now.timestamp()))
 
     async def _push_pending_ratings(self) -> None:
         """Mirror stored ratings into GLPI's TicketSatisfaction once its cron

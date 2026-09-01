@@ -451,6 +451,72 @@ class Repo:
             row = await cur.fetchone()
         return int(row["total"]), int(row["techs"]), int(row["recent"])
 
+    # -- lead access approvals ----------------------------------------------
+    async def create_approval(
+        self,
+        ticket_id: int,
+        *,
+        validation_id: int,
+        lead_glpi_id: int,
+        lead_tg_id: int,
+        lead_name: str,
+        requester_tg_id: int,
+        now: int,
+    ) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO access_approvals
+                    (ticket_id, validation_id, lead_glpi_id, lead_tg_id, lead_name,
+                     requester_tg_id, status, requested_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                ON CONFLICT(ticket_id) DO NOTHING
+                """,
+                (
+                    ticket_id,
+                    validation_id,
+                    lead_glpi_id,
+                    lead_tg_id,
+                    lead_name,
+                    requester_tg_id,
+                    now,
+                ),
+            )
+
+    async def get_approval(self, ticket_id: int) -> aiosqlite.Row | None:
+        async with self._conn.execute(
+            "SELECT * FROM access_approvals WHERE ticket_id = ?", (ticket_id,)
+        ) as cur:
+            return await cur.fetchone()
+
+    async def pending_approvals(self) -> list[aiosqlite.Row]:
+        async with self._conn.execute(
+            "SELECT * FROM access_approvals WHERE status = 0 ORDER BY ticket_id"
+        ) as cur:
+            return list(await cur.fetchall())
+
+    async def set_approval_dm(self, ticket_id: int, message_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE access_approvals SET dm_message_id = ? WHERE ticket_id = ?",
+                (message_id, ticket_id),
+            )
+
+    async def set_approval_status(self, ticket_id: int, *, status: int) -> None:
+        """1 approved / -1 rejected (0 = still pending)."""
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE access_approvals SET status = ? WHERE ticket_id = ?",
+                (status, ticket_id),
+            )
+
+    async def set_approval_reminded(self, ticket_id: int, when: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE access_approvals SET reminded_at = ? WHERE ticket_id = ?",
+                (when, ticket_id),
+            )
+
     # -- solution ratings (one-tap requester feedback) ----------------------
     async def set_rating(self, ticket_id: int, *, tg_id: int, rating: int, now: int) -> None:
         async with self._tx() as db:

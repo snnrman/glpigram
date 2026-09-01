@@ -957,3 +957,57 @@ async def test_rating_gives_up_after_max_age(repo):
     await _service(bot, client, repo)._push_pending_ratings()
     assert client.satisfaction_pushed == []
     assert await repo.pending_ratings() == []  # dropped (-1), no infinite retries
+
+
+# --- lead approval escalation ---------------------------------------------------
+async def _pending_approval(repo, ticket_id, *, requested_at):
+    await repo.create_approval(
+        ticket_id,
+        validation_id=5,
+        lead_glpi_id=19,
+        lead_tg_id=3003,
+        lead_name="Ульяна",
+        requester_tg_id=REQUESTER_TG,
+        now=requested_at,
+    )
+
+
+async def test_silent_lead_gets_escalation_reminder(repo):
+    bot = FakeBot()
+    waiting = _ticket(77, status=1)
+    waiting.global_validation = 2  # still awaiting the lead
+    client = FakeClient(tickets={77: waiting})
+    # requested the previous Friday noon -> 9 WORKING hours before Mon 12:00
+    old = int(datetime(2026, 7, 3, 12, 0, tzinfo=_KGD).timestamp())
+    await _pending_approval(repo, 77, requested_at=old)
+
+    await _service(bot, client, repo)._remind_pending_approvals()
+    assert any(c == 3003 and "ждёт вашего решения" in t for c, t in bot.sent)
+    assert (await repo.get_approval(77))["reminded_at"] > 0
+
+    # within the window after the reminder -> silent
+    bot.sent.clear()
+    await _service(bot, client, repo)._remind_pending_approvals()
+    assert bot.sent == []
+
+
+async def test_escalation_skips_fresh_and_moot_approvals(repo):
+    bot = FakeBot()
+    answered = _ticket(78, status=1)
+    answered.global_validation = 3  # answered in the web meanwhile
+    client = FakeClient(tickets={78: answered})
+    old = int(datetime(2026, 7, 3, 12, 0, tzinfo=_KGD).timestamp())
+    await _pending_approval(repo, 78, requested_at=old)
+
+    await _service(bot, client, repo)._remind_pending_approvals()
+    assert bot.sent == []  # no nag
+    assert (await repo.get_approval(78))["status"] == -2  # marked moot
+
+    # a fresh pending approval is left alone
+    fresh = _ticket(79, status=1)
+    fresh.global_validation = 2
+    client.tickets[79] = fresh
+    await _pending_approval(repo, 79, requested_at=int(WORKING.timestamp()))
+    await _service(bot, client, repo)._remind_pending_approvals()
+    assert bot.sent == []
+    assert (await repo.get_approval(79))["status"] == 0

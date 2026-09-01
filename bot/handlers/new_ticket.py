@@ -181,6 +181,8 @@ def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
                 KeyboardButton(text=texts.BTN_STATS),
             ]
         )
+    # Access requests (lead-approved) — everyone, full-width last row.
+    rows.append([KeyboardButton(text=texts.BTN_ACCESS)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 

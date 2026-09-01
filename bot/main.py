@@ -23,6 +23,7 @@ from .cache import TTLValue
 from .config import Settings, load_settings
 from .db.repo import Repo
 from .glpi.client import GlpiClient
+from .handlers.access import build_access_router, build_lead_directory
 from .handlers.fallback import build_fallback_router, register_error_handler
 from .handlers.linking import build_linking_router
 from .handlers.my_tickets import build_my_tickets_router
@@ -98,6 +99,17 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
     )
     stats = build_stats_router(client, repo)
     tech_tickets = build_tech_tickets_router(client, ticket_front_base=settings.glpi_front_base)
+    lead_directory = build_lead_directory(
+        client, repo, settings.lead_login_list, settings.link_recheck_ttl
+    )
+    access = build_access_router(
+        client,
+        repo,
+        lead_directory,
+        ticket_front_base=settings.glpi_front_base,
+        access_category_id=settings.access_category_id,
+        cards=cards,
+    )
     business = build_new_ticket_router(
         client,
         category_cache,
@@ -105,7 +117,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         ticket_front_base=settings.glpi_front_base,
         schedule=schedule,
     )
-    for router in (tech, tech_tickets, my_tickets, stats, business):
+    for router in (tech, tech_tickets, my_tickets, stats, access, business):
         router.message.middleware(auth)
         router.callback_query.middleware(auth)
         dp.include_router(router)
@@ -156,6 +168,7 @@ async def _run(settings: Settings) -> None:
             front_base=settings.glpi_front_base,
             unassigned_remind_hours=settings.unassigned_remind_hours,
             remind_interval_hours=settings.remind_interval_hours,
+            approval_remind_hours=settings.approval_remind_hours,
         )
         sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
         sync_task.add_done_callback(_sync_task_died)

@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     work_hours: str = Field(default="09:00-18:00", description='Working hours, "HH:MM-HH:MM".')
     work_days: str = Field(default="1-5", description="Working ISO weekdays, Mon=1..Sun=7.")
 
+    # --- Lead access approval (feature: access requests) ---
+    lead_logins: str = Field(
+        default="",
+        description="Comma-separated AD logins of the leads who approve access requests.",
+    )
+    access_category_id: int | None = Field(
+        default=None,
+        description="ITILCategory id for access-request tickets (e.g. «Учётки и доступы»).",
+    )
+    approval_remind_hours: float = Field(
+        default=4,
+        description="Re-ping a silent lead about a pending approval every N WORKING hours.",
+    )
+
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(
         ...,
@@ -92,6 +106,10 @@ class Settings(BaseSettings):
         description="Path to the SQLite database file",
     )
     log_level: str = Field(default="INFO")
+
+    @property
+    def lead_login_list(self) -> list[str]:
+        return [x.strip() for x in self.lead_logins.split(",") if x.strip()]
 
     @property
     def glpi_front_base(self) -> str:

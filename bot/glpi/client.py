@@ -65,6 +65,12 @@ TICKET_USER_ASSIGN = 2  # technician / assignee
 # Bot's 3-mood rating (1=😞, 2=😐, 3=🤩) -> GLPI satisfaction scale (1..5).
 SATISFACTION_BY_RATE = {1: 1, 2: 3, 3: 5}
 
+# TicketValidation / Ticket.global_validation statuses (same value space).
+VALIDATION_NONE = 1
+VALIDATION_WAITING = 2
+VALIDATION_ACCEPTED = 3
+VALIDATION_REFUSED = 4
+
 # GLPI searchOption id of the primary key ("id"). It is 2 for every itemtype
 # (framework convention); verify with listSearchOptions/Ticket if a deployment
 # ever disagrees. Used by /search/Ticket (feature 3), which sorts/criteria by
@@ -176,6 +182,7 @@ class GlpiClient:
         self._app_token = app_token
         self._user_token = user_token
         self._session_token: str | None = None
+        self._session_user_id: int | None = None
         # trust_env=True lets httpx pick up HTTPS_PROXY automatically; an
         # explicit proxy argument (from config) takes precedence when given.
         self._http = httpx.AsyncClient(
@@ -842,6 +849,58 @@ class GlpiClient:
                 )
             )
         return summaries
+
+    # -- approvals (feature: lead access approval) --------------------------
+    async def get_session_user_id(self) -> int:
+        """GLPI id of the service account behind this session (cached).
+
+        Validations are always TARGETED at the service account — GLPI silently
+        refuses answering a validation on behalf of another user (verified live
+        on 11.0.4), so the bot answers its own validations and records the real
+        approver in the comment.
+        """
+        if getattr(self, "_session_user_id", None) is None:
+            resp = await self._request("GET", "/getFullSession", idempotent=True)
+            self._session_user_id = int(resp.json()["session"]["glpiID"])
+        return self._session_user_id
+
+    async def create_validation(self, ticket_id: int, *, comment: str) -> int:
+        """Attach an approval request to a ticket; returns the validation id.
+
+        Sets the ticket's ``global_validation`` to *waiting* (2) — the take
+        gate. GLPI 11 format: ``itemtype_target``/``items_id_target`` (the old
+        ``users_id_validate`` is gone).
+        """
+        target = await self.get_session_user_id()
+        resp = await self._request(
+            "POST",
+            "/TicketValidation",
+            json={
+                "input": {
+                    "tickets_id": ticket_id,
+                    "itemtype_target": "User",
+                    "items_id_target": target,
+                    "comment_submission": comment,
+                }
+            },
+            idempotent=False,
+        )
+        return _extract_id(resp)
+
+    async def answer_validation(self, validation_id: int, *, accepted: bool, comment: str) -> None:
+        """Answer a validation (the bot's own — see get_session_user_id)."""
+        await self._request(
+            "PUT",
+            f"/TicketValidation/{validation_id}",
+            json={
+                "input": {
+                    "id": validation_id,
+                    "status": VALIDATION_ACCEPTED if accepted else VALIDATION_REFUSED,
+                    "comment_validation": comment,
+                }
+            },
+            idempotent=False,
+        )
 
     async def push_ticket_satisfaction(self, ticket_id: int, satisfaction: int) -> bool:
         """Answer the GLPI satisfaction survey of a closed ticket.
