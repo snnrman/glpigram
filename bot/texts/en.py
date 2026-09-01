@@ -304,23 +304,10 @@ BTN_URGENT_DECLINE = "❌ Cancel"
 
 # --- lead access approval (feature: access requests) ---
 BTN_ACCESS = "🔑 Access"
-ACC_ASK_SYSTEM = "Which system do you need access to? (name/URL)"
-ACC_ASK_DETAILS = "What access do you need and why? (permission level + justification)"
-ACC_ASK_DURATION = "For how long?"
-BTN_ACC_PERMANENT = "Permanently"
-BTN_ACC_TEMPORARY = "⏳ Temporarily"
-ACC_ASK_UNTIL = "Until when? (free text, e.g. “until Oct 1” or “for 2 weeks”)"
+ACC_ASK_REQUEST = "What do you need access to? Describe it in one message."
 ACC_CHOOSE_LEAD = "Who is your lead? They will receive the approval request:"
 BTN_ACC_OTHER_LEAD = "Pick another"
 SETLEAD_USAGE = "Usage: <code>/setlead &lt;employee_login&gt; &lt;lead_login&gt;</code>"
-
-
-def acc_suggest_lead(lead: str) -> str:
-    return f"Your lead is <b>{html.escape(lead)}</b>. Send the request to them for approval?"
-
-
-def acc_suggest_send(lead: str) -> str:
-    return f"📨 Send to {lead}"
 
 
 def setlead_done(employee: str, lead: str) -> str:
@@ -329,33 +316,31 @@ def setlead_done(employee: str, lead: str) -> str:
 
 SETLEAD_NOT_FOUND = "No GLPI user with that login."
 ACC_NO_LEADS = "The approvers list is empty or no lead is linked to the bot. Contact the admin."
-ACC_CONFIRM_HEADER = "Review the access request:"
 BTN_ACC_SEND = "📨 Send for approval"
-ACC_DURATION_PERMANENT = "permanent"
 
 
-def acc_confirm_summary(system: str, details: str, duration: str, lead: str) -> str:
+def acc_confirm_summary(request: str, lead: str) -> str:
     return (
-        f"{ACC_CONFIRM_HEADER}\n\n"
-        f"<b>System:</b> {html.escape(system)}\n"
-        f"<b>Needed:</b> {html.escape(details)}\n"
-        f"<b>Duration:</b> {html.escape(duration)}\n"
-        f"<b>Approver:</b> {html.escape(lead)}"
+        f"🔑 <b>Access request</b>\n\n"
+        f"{html.escape(request)}\n\n"
+        f"Approver: <b>{html.escape(lead)}</b>"
     )
 
 
-def acc_ticket_title(system: str) -> str:
-    return f"Access: {system}"
+def acc_ticket_title(request: str) -> str:
+    """Ticket title from the free-text request: its first line, capped."""
+    first = request.strip().splitlines()[0].strip() if request.strip() else ""
+    if len(first) > 60:
+        first = first[:59].rstrip() + "…"
+    return f"Access: {first}"
 
 
-def acc_ticket_content(requester: str, system: str, details: str, duration: str, lead: str) -> str:
+def acc_ticket_content(requester: str, request: str, lead: str) -> str:
     """Structured ticket body (plain text; GLPI renders it fine)."""
     return (
         f"Access request (via the Telegram bot)\n"
         f"Requester: {requester}\n"
-        f"System: {system}\n"
-        f"Needed: {details}\n"
-        f"Duration: {duration}\n"
+        f"Request: {request}\n"
         f"Approving lead: {lead}"
     )
 
@@ -367,15 +352,11 @@ def acc_sent(ticket_id: int, lead: str, url: str | None) -> str:
     )
 
 
-def acc_lead_prompt(
-    *, ticket_id: int, requester: str, system: str, details: str, duration: str, url: str | None
-) -> str:
+def acc_lead_prompt(*, ticket_id: int, requester: str, request: str, url: str | None) -> str:
     return (
         f"🔑 <b>Access request {_ticket_ref(ticket_id, url)} — your decision is needed</b>\n\n"
         f"👤 {html.escape(requester)}\n"
-        f"<b>System:</b> {html.escape(system)}\n"
-        f"<b>Needed:</b> {html.escape(details)}\n"
-        f"<b>Duration:</b> {html.escape(duration)}"
+        f"{html.escape(request)}"
     )
 
 

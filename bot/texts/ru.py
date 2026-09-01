@@ -308,23 +308,10 @@ BTN_URGENT_DECLINE = "❌ Отмена"
 
 # --- lead access approval (feature: access requests) ---
 BTN_ACCESS = "🔑 Доступ"
-ACC_ASK_SYSTEM = "К какой системе нужен доступ? (название/URL)"
-ACC_ASK_DETAILS = "Какой доступ нужен и зачем? (уровень прав + обоснование)"
-ACC_ASK_DURATION = "На какой срок?"
-BTN_ACC_PERMANENT = "Постоянно"
-BTN_ACC_TEMPORARY = "⏳ Временно"
-ACC_ASK_UNTIL = "До какой даты? (текстом, например «до 01.10» или «на 2 недели»)"
+ACC_ASK_REQUEST = "К чему нужен доступ? Опишите одним сообщением."
 ACC_CHOOSE_LEAD = "Кто ваш лид? Он получит запрос на согласование:"
 BTN_ACC_OTHER_LEAD = "Выбрать другого"
 SETLEAD_USAGE = "Использование: <code>/setlead &lt;логин_сотрудника&gt; &lt;логин_лида&gt;</code>"
-
-
-def acc_suggest_lead(lead: str) -> str:
-    return f"Ваш лид — <b>{html.escape(lead)}</b>. Отправить запрос ему на согласование?"
-
-
-def acc_suggest_send(lead: str) -> str:
-    return f"📨 Отправить: {lead}"
 
 
 def setlead_done(employee: str, lead: str) -> str:
@@ -335,33 +322,31 @@ SETLEAD_NOT_FOUND = "Пользователь с таким логином не 
 ACC_NO_LEADS = (
     "Список согласующих пуст или никто из лидов не привязан к боту. Сообщите администратору."
 )
-ACC_CONFIRM_HEADER = "Проверьте запрос доступа:"
 BTN_ACC_SEND = "📨 Отправить на согласование"
-ACC_DURATION_PERMANENT = "постоянно"
 
 
-def acc_confirm_summary(system: str, details: str, duration: str, lead: str) -> str:
+def acc_confirm_summary(request: str, lead: str) -> str:
     return (
-        f"{ACC_CONFIRM_HEADER}\n\n"
-        f"<b>Система:</b> {html.escape(system)}\n"
-        f"<b>Что нужно:</b> {html.escape(details)}\n"
-        f"<b>Срок:</b> {html.escape(duration)}\n"
-        f"<b>Согласует:</b> {html.escape(lead)}"
+        f"🔑 <b>Запрос доступа</b>\n\n"
+        f"{html.escape(request)}\n\n"
+        f"Согласует: <b>{html.escape(lead)}</b>"
     )
 
 
-def acc_ticket_title(system: str) -> str:
-    return f"Доступ: {system}"
+def acc_ticket_title(request: str) -> str:
+    """Ticket title from the free-text request: its first line, capped."""
+    first = request.strip().splitlines()[0].strip() if request.strip() else ""
+    if len(first) > 60:
+        first = first[:59].rstrip() + "…"
+    return f"Доступ: {first}"
 
 
-def acc_ticket_content(requester: str, system: str, details: str, duration: str, lead: str) -> str:
+def acc_ticket_content(requester: str, request: str, lead: str) -> str:
     """Structured ticket body (plain text; GLPI renders it fine)."""
     return (
         f"Запрос доступа (через Telegram-бота)\n"
         f"Заявитель: {requester}\n"
-        f"Система: {system}\n"
-        f"Что нужно: {details}\n"
-        f"Срок: {duration}\n"
+        f"Запрос: {request}\n"
         f"Согласующий лид: {lead}"
     )
 
@@ -373,15 +358,11 @@ def acc_sent(ticket_id: int, lead: str, url: str | None) -> str:
     )
 
 
-def acc_lead_prompt(
-    *, ticket_id: int, requester: str, system: str, details: str, duration: str, url: str | None
-) -> str:
+def acc_lead_prompt(*, ticket_id: int, requester: str, request: str, url: str | None) -> str:
     return (
         f"🔑 <b>Запрос доступа {_ticket_ref(ticket_id, url)} — нужно ваше решение</b>\n\n"
         f"👤 {html.escape(requester)}\n"
-        f"<b>Система:</b> {html.escape(system)}\n"
-        f"<b>Что нужно:</b> {html.escape(details)}\n"
-        f"<b>Срок:</b> {html.escape(duration)}"
+        f"{html.escape(request)}"
     )
 
 

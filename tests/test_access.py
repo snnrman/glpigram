@@ -130,13 +130,11 @@ def _to(bot: FakeBot, chat) -> list[str]:
 
 
 async def _run_dialog_to_sent(dp, bot):
-    """Full requester dialog: system -> details -> duration -> lead -> send."""
+    """Full requester dialog (short flow): one message -> pick lead -> send."""
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
-    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ, деплой прод-сборок"))
-    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
-    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, f"ac:lead:{LEAD_GLPI}"))
-    await dp.feed_update(bot, _cb(bot, 6, REQUESTER_ID, "ac:send"))
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins\nнужны права админа"))
+    await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, f"ac:lead:{LEAD_GLPI}"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:send"))
 
 
 # --- requester dialog ---------------------------------------------------------
@@ -148,8 +146,8 @@ async def test_full_dialog_creates_ticket_validation_and_dms_lead(env):
     # ticket carries the structured body and the access category
     client.create_ticket.assert_awaited_once()
     kw = client.create_ticket.await_args.kwargs
-    assert kw["name"] == "Доступ: Jenkins"
-    assert "Jenkins" in kw["content"] and "Ульяна Метлина" in kw["content"]
+    assert kw["name"] == "Доступ: Jenkins"  # title = first line of the request
+    assert "нужны права админа" in kw["content"] and "Ульяна Метлина" in kw["content"]
     assert kw["itilcategories_id"] == 10
     assert kw["requester_users_id"] == 8
     # validation attached (the take gate)
@@ -174,8 +172,6 @@ async def test_lead_pick_excludes_self(env):
     # The LEAD starts an access request — they can't approve themselves.
     await dp.feed_update(bot, _dm(bot, 1, LEAD_ID, texts.BTN_ACCESS))
     await dp.feed_update(bot, _dm(bot, 2, LEAD_ID, "Jenkins"))
-    await dp.feed_update(bot, _dm(bot, 3, LEAD_ID, "админ"))
-    await dp.feed_update(bot, _cb(bot, 4, LEAD_ID, "ac:dur:perm"))
     # the only configured lead IS the requester -> empty pick list
     assert any(texts.ACC_NO_LEADS == t for t in _to(bot, LEAD_ID))
 
@@ -268,33 +264,30 @@ async def test_take_blocked_while_awaiting_approval(env):
 
 
 # --- lead auto-suggestion from the org map -------------------------------------
-async def test_mapped_lead_is_suggested_one_tap(env):
+async def test_mapped_lead_lands_on_confirm_in_one_message(env):
     dp, client, repo = env
     await repo.set_user_lead(8, LEAD_GLPI)  # requester glpi=8 -> Метлина
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
     await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
-    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ"))
-    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
 
-    # the suggestion, not the pick list
+    # straight to the combined confirm screen — no pick list, no extra steps
     msgs = _to(bot, REQUESTER_ID)
-    assert any("Ваш лид" in t and "Ульяна Метлина" in t for t in msgs)
+    assert any("Согласует:" in t and "Ульяна Метлина" in t for t in msgs)
     assert not any(texts.ACC_CHOOSE_LEAD == t for t in msgs)
-    # one tap accepts the suggested lead -> straight to the confirm summary
-    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, f"ac:lead:{LEAD_GLPI}"))
-    assert any("Согласует:" in t and "Ульяна Метлина" in t for t in _to(bot, REQUESTER_ID))
+    # one tap sends
+    await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "ac:send"))
+    client.create_ticket.assert_awaited_once()
+    assert any("отправлен на согласование" in t for t in _to(bot, REQUESTER_ID))
 
 
-async def test_suggestion_pick_another_shows_full_list(env):
+async def test_confirm_pick_another_shows_full_list(env):
     dp, client, repo = env
     await repo.set_user_lead(8, LEAD_GLPI)
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
     await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
-    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ"))
-    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
-    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, "ac:other"))
+    await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "ac:other"))
     assert any(texts.ACC_CHOOSE_LEAD == t for t in _to(bot, REQUESTER_ID))
 
 
@@ -303,8 +296,6 @@ async def test_unmapped_user_gets_pick_list_as_before(env):
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
     await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
-    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ"))
-    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
     assert any(texts.ACC_CHOOSE_LEAD == t for t in _to(bot, REQUESTER_ID))
 
 

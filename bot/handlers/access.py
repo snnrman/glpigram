@@ -38,10 +38,9 @@ log = logging.getLogger(__name__)
 
 
 class AccessRequest(StatesGroup):
-    entering_system = State()
-    entering_details = State()
-    choosing_duration = State()
-    entering_until = State()
+    # Deliberately short: ONE free-text question, then a combined
+    # confirm-with-lead screen (one tap when the org map knows the lead).
+    entering_request = State()
     choosing_lead = State()
     confirming = State()
 
@@ -86,18 +85,6 @@ def _cancel_kb() -> InlineKeyboardMarkup:
     )
 
 
-def _duration_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=texts.BTN_ACC_PERMANENT, callback_data="ac:dur:perm"),
-                InlineKeyboardButton(text=texts.BTN_ACC_TEMPORARY, callback_data="ac:dur:temp"),
-            ],
-            [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ac:cancel")],
-        ]
-    )
-
-
 def _leads_kb(leads: list[Lead]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=lead.name, callback_data=f"ac:lead:{lead.glpi_id}")]
@@ -108,12 +95,14 @@ def _leads_kb(leads: list[Lead]) -> InlineKeyboardMarkup:
 
 
 def _confirm_kb() -> InlineKeyboardMarkup:
+    """The combined confirm screen: send is primary, full-width."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=texts.BTN_ACC_SEND, callback_data="ac:send")],
             [
-                InlineKeyboardButton(text=texts.BTN_ACC_SEND, callback_data="ac:send"),
+                InlineKeyboardButton(text=texts.BTN_ACC_OTHER_LEAD, callback_data="ac:other"),
                 InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ac:cancel"),
-            ]
+            ],
         ]
     )
 
@@ -149,13 +138,13 @@ def build_access_router(
             return None
         return f"{ticket_front_base}/front/ticket.form.php?id={ticket_id}"
 
-    # --- requester dialog ---------------------------------------------------
+    # --- requester dialog: ONE question, then confirm-with-lead --------------
     @router.message(Command("access"))
     @router.message(F.text == texts.BTN_ACCESS)
     async def start(message: Message, state: FSMContext) -> None:
         await state.clear()
-        await state.set_state(AccessRequest.entering_system)
-        await message.answer(texts.ACC_ASK_SYSTEM, reply_markup=_cancel_kb())
+        await state.set_state(AccessRequest.entering_request)
+        await message.answer(texts.ACC_ASK_REQUEST, reply_markup=_cancel_kb())
 
     @router.message(StateFilter(AccessRequest), Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext, link: LinkedUser) -> None:
@@ -170,86 +159,51 @@ def build_access_router(
         await notify.safe_edit(cb, texts.NEW_CANCELLED)
         await cb.answer()
 
-    @router.message(AccessRequest.entering_system, F.text)
-    async def on_system(message: Message, state: FSMContext) -> None:
-        await state.update_data(system=message.text.strip())
-        await state.set_state(AccessRequest.entering_details)
-        await message.answer(texts.ACC_ASK_DETAILS, reply_markup=_cancel_kb())
-
-    @router.message(AccessRequest.entering_details, F.text)
-    async def on_details(message: Message, state: FSMContext) -> None:
-        await state.update_data(details=message.text.strip())
-        await state.set_state(AccessRequest.choosing_duration)
-        await message.answer(texts.ACC_ASK_DURATION, reply_markup=_duration_kb())
-
-    @router.callback_query(AccessRequest.choosing_duration, F.data.startswith("ac:dur:"))
-    async def on_duration(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
-        if cb.data.endswith(":perm"):
-            await state.update_data(duration=texts.ACC_DURATION_PERMANENT)
-            await _open_lead_step(cb, state, link, edit=True)
-        else:
-            await state.set_state(AccessRequest.entering_until)
-            await notify.safe_edit(cb, texts.ACC_ASK_UNTIL, reply_markup=_cancel_kb())
-        await cb.answer()
-
-    @router.message(AccessRequest.entering_until, F.text)
-    async def on_until(message: Message, state: FSMContext, link: LinkedUser) -> None:
-        await state.update_data(duration=message.text.strip())
-        await _open_lead_step(message, state, link, edit=False)
-
     async def _pickable_leads(requester_tg_id: int) -> list:
         # Only linked leads can answer in TG; self-approval is excluded.
         leads = await lead_directory.get()
         return [x for x in leads if x.tg_id is not None and x.tg_id != requester_tg_id]
 
-    def _suggest_kb(lead: Lead) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=texts.acc_suggest_send(lead.name),
-                        callback_data=f"ac:lead:{lead.glpi_id}",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(text=texts.BTN_ACC_OTHER_LEAD, callback_data="ac:other"),
-                    InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ac:cancel"),
-                ],
-            ]
+    async def _confirm_with(target, state: FSMContext, lead: Lead, *, edit: bool) -> None:
+        """The combined screen: request summary + the lead + a full-width send."""
+        await state.update_data(
+            lead_glpi_id=lead.glpi_id, lead_name=lead.name, lead_tg_id=lead.tg_id
         )
+        data = await state.get_data()
+        await state.set_state(AccessRequest.confirming)
+        text = texts.acc_confirm_summary(data["request"], lead.name)
+        if edit:
+            await notify.safe_edit(target, text, reply_markup=_confirm_kb())
+        else:
+            await target.answer(text, reply_markup=_confirm_kb())
 
-    async def _open_lead_step(target, state: FSMContext, link: LinkedUser, *, edit: bool) -> None:
-        """Lead step: auto-suggest the mapped lead, else the full pick list."""
-
-        async def _show(text: str, kb: InlineKeyboardMarkup | None) -> None:
-            if edit:
-                await notify.safe_edit(target, text, reply_markup=kb)
-            else:
-                await target.answer(text, reply_markup=kb)
-
-        tg_id = target.from_user.id
+    @router.message(AccessRequest.entering_request, F.text)
+    async def on_request(message: Message, state: FSMContext, link: LinkedUser) -> None:
+        await state.update_data(request=message.text.strip())
         try:
-            leads = await _pickable_leads(tg_id)
+            leads = await _pickable_leads(message.from_user.id)
         except GlpiError as exc:
             log.warning("access_leads_failed error=%s", exc)
             leads = []
         if not leads:
             await state.clear()
-            await _show(texts.ACC_NO_LEADS, None)
+            await message.answer(texts.ACC_NO_LEADS)
             return
-        await state.set_state(AccessRequest.choosing_lead)
-        # The org map knows this employee's lead -> one-tap suggestion; the
-        # mapped lead must still be pickable (linked, not the requester).
+        # The org map knows this employee's lead -> straight to the confirm
+        # screen (one tap left); otherwise a pick list first.
         mapped_id = await repo.get_user_lead(link.glpi_users_id)
         mapped = next((x for x in leads if x.glpi_id == mapped_id), None) if mapped_id else None
         if mapped is not None:
-            await _show(texts.acc_suggest_lead(mapped.name), _suggest_kb(mapped))
+            await _confirm_with(message, state, mapped, edit=False)
             return
-        await _show(texts.ACC_CHOOSE_LEAD, _leads_kb(leads))
+        await state.set_state(AccessRequest.choosing_lead)
+        await message.answer(texts.ACC_CHOOSE_LEAD, reply_markup=_leads_kb(leads))
 
-    @router.callback_query(AccessRequest.choosing_lead, F.data == "ac:other")
+    @router.callback_query(
+        StateFilter(AccessRequest.choosing_lead, AccessRequest.confirming), F.data == "ac:other"
+    )
     async def on_other_lead(cb: CallbackQuery, state: FSMContext) -> None:
-        # From the suggestion to the full pick list (non-standard request).
+        # From the confirm screen back to the full pick list (non-standard case).
         try:
             leads = await _pickable_leads(cb.from_user.id)
         except GlpiError as exc:
@@ -260,6 +214,7 @@ def build_access_router(
             await notify.safe_edit(cb, texts.ACC_NO_LEADS)
             await cb.answer()
             return
+        await state.set_state(AccessRequest.choosing_lead)
         await notify.safe_edit(cb, texts.ACC_CHOOSE_LEAD, reply_markup=_leads_kb(leads))
         await cb.answer()
 
@@ -271,16 +226,7 @@ def build_access_router(
         if lead is None:
             await cb.answer(texts.STALE_BUTTON, show_alert=True)
             return
-        await state.update_data(
-            lead_glpi_id=lead.glpi_id, lead_name=lead.name, lead_tg_id=lead.tg_id
-        )
-        data = await state.get_data()
-        await state.set_state(AccessRequest.confirming)
-        await notify.safe_edit(
-            cb,
-            texts.acc_confirm_summary(data["system"], data["details"], data["duration"], lead.name),
-            reply_markup=_confirm_kb(),
-        )
+        await _confirm_with(cb, state, lead, edit=True)
         await cb.answer()
 
     @router.callback_query(AccessRequest.confirming, F.data == "ac:send")
@@ -290,13 +236,9 @@ def build_access_router(
         await cb.answer()
         try:
             ticket_id = await client.create_ticket(
-                name=texts.acc_ticket_title(data["system"]),
+                name=texts.acc_ticket_title(data["request"]),
                 content=texts.acc_ticket_content(
-                    link.display_name,
-                    data["system"],
-                    data["details"],
-                    data["duration"],
-                    data["lead_name"],
+                    link.display_name, data["request"], data["lead_name"]
                 ),
                 urgency=3,
                 itilcategories_id=access_category_id,
@@ -340,9 +282,7 @@ def build_access_router(
             texts.acc_lead_prompt(
                 ticket_id=ticket_id,
                 requester=link.display_name,
-                system=data["system"],
-                details=data["details"],
-                duration=data["duration"],
+                request=data["request"],
                 url=_url(ticket_id),
             ),
             reply_markup=approval_kb(ticket_id),

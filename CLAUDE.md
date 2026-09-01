@@ -299,8 +299,12 @@ deploy/
 8. **Lead access approval («🔑 Доступ», feature: access requests).** Access requests
    go through a lead's approval before technicians may take them; GLPI's native
    **TicketValidation** is the source of truth for the approval fact.
-   - **Requester dialog** (menu button «🔑 Доступ» / `/access`, everyone): system →
-     what/why → duration (Постоянно / Временно+text) → pick a lead → confirm. Creates a
+   - **Requester dialog** (menu button «🔑 Доступ» / `/access`, everyone) is
+     deliberately SHORT: ONE free-text question («К чему нужен доступ?»), then a
+     combined confirm screen showing the request + the approving lead with a
+     full-width «📨 Отправить на согласование» (plus «Выбрать другого» / «Отмена»).
+     No separate system/justification/duration steps — everything lives in the one
+     message; the ticket title is the request's first line (capped at 60). Creates a
      ticket (category `ACCESS_CATEGORY_ID`, structured plain-text body, requester =
      linked user) + a TicketValidation → `global_validation` = *waiting* (2).
    - **Leads** come from config: `LEAD_LOGINS` (comma-separated AD logins), resolved
@@ -308,10 +312,10 @@ deploy/
      shows only leads LINKED to the bot; self-approval is excluded (the requesting lead
      doesn't see themselves). Changing the composition = .env edit + restart.
    - **Auto-suggest from the org map.** SQLite `user_leads` (glpi_users_id ->
-     lead_glpi_id, seeded from the org charts) makes the lead step one tap: a mapped
-     requester sees «Ваш лид — X. Отправить?» with «📨 Отправить: X» /
-     «Выбрать другого» (full pick list) / «Отмена». Unmapped users (and users whose
-     mapped lead is unlinked or is themselves) get the plain pick list. Leads' own
+     lead_glpi_id, seeded from the org charts) pre-fills the lead: a mapped requester
+     lands straight on the confirm screen (whole flow = one message + one tap).
+     Unmapped users (and users whose mapped lead is unlinked or is themselves) get
+     the plain pick list, and picking a lead lands on the same confirm screen. Leads' own
      requests map to their project head (Рекун / Лисник / Тарновская via the map);
      the heads themselves are unmapped -> manual pick. Maintained with the tech-only
      `/setlead <employee_login> <lead_login>` command.
