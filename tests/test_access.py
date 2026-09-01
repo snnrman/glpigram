@@ -132,9 +132,10 @@ def _to(bot: FakeBot, chat) -> list[str]:
 async def _run_dialog_to_sent(dp, bot):
     """Full requester dialog (short flow): one message -> pick lead -> send."""
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins\nнужны права админа"))
-    await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, f"ac:lead:{LEAD_GLPI}"))
-    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:send"))
+    await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "ac:go"))  # past the notice
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "Jenkins\nнужны права админа"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, f"ac:lead:{LEAD_GLPI}"))
+    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, "ac:send"))
 
 
 # --- requester dialog ---------------------------------------------------------
@@ -171,7 +172,8 @@ async def test_lead_pick_excludes_self(env):
     bot = FakeBot()
     # The LEAD starts an access request — they can't approve themselves.
     await dp.feed_update(bot, _dm(bot, 1, LEAD_ID, texts.BTN_ACCESS))
-    await dp.feed_update(bot, _dm(bot, 2, LEAD_ID, "Jenkins"))
+    await dp.feed_update(bot, _cb(bot, 2, LEAD_ID, "ac:go"))
+    await dp.feed_update(bot, _dm(bot, 3, LEAD_ID, "Jenkins"))
     # the only configured lead IS the requester -> empty pick list
     assert any(texts.ACC_NO_LEADS == t for t in _to(bot, LEAD_ID))
 
@@ -269,14 +271,15 @@ async def test_mapped_lead_lands_on_confirm_in_one_message(env):
     await repo.set_user_lead(8, LEAD_GLPI)  # requester glpi=8 -> Метлина
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
+    await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "ac:go"))
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "Jenkins"))
 
     # straight to the combined confirm screen — no pick list, no extra steps
     msgs = _to(bot, REQUESTER_ID)
     assert any("Согласует:" in t and "Ульяна Метлина" in t for t in msgs)
     assert not any(texts.ACC_CHOOSE_LEAD == t for t in msgs)
     # one tap sends
-    await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "ac:send"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:send"))
     client.create_ticket.assert_awaited_once()
     assert any("отправлен на согласование" in t for t in _to(bot, REQUESTER_ID))
 
@@ -286,8 +289,9 @@ async def test_confirm_pick_another_shows_full_list(env):
     await repo.set_user_lead(8, LEAD_GLPI)
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
-    await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "ac:other"))
+    await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "ac:go"))
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "Jenkins"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:other"))
     assert any(texts.ACC_CHOOSE_LEAD == t for t in _to(bot, REQUESTER_ID))
 
 
@@ -295,7 +299,8 @@ async def test_unmapped_user_gets_pick_list_as_before(env):
     dp, client, repo = env  # no user_leads row
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
+    await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "ac:go"))
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "Jenkins"))
     assert any(texts.ACC_CHOOSE_LEAD == t for t in _to(bot, REQUESTER_ID))
 
 
@@ -321,3 +326,16 @@ async def test_setlead_admin_command(env):
     # non-tech refused
     await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "/setlead a b"))
     assert texts.TECH_ONLY in _to(bot, REQUESTER_ID)
+
+
+async def test_access_button_shows_new_access_notice_first(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
+    # the notice, not the question — the question comes only after «Продолжить»
+    msgs = _to(bot, REQUESTER_ID)
+    assert any(texts.ACCESS_WARNING == t for t in msgs)
+    assert not any(texts.ACC_ASK_REQUEST == t for t in msgs)
+
+    await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "ac:go"))
+    assert any(texts.ACC_ASK_REQUEST == t for t in _to(bot, REQUESTER_ID))

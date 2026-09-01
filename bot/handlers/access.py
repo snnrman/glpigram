@@ -38,8 +38,10 @@ log = logging.getLogger(__name__)
 
 
 class AccessRequest(StatesGroup):
-    # Deliberately short: ONE free-text question, then a combined
-    # confirm-with-lead screen (one tap when the org map knows the lead).
+    # Deliberately short: a new-access-only notice (like the urgent-prod
+    # warning), ONE free-text question, then a combined confirm-with-lead
+    # screen (one tap when the org map knows the lead).
+    intro = State()
     entering_request = State()
     choosing_lead = State()
     confirming = State()
@@ -82,6 +84,18 @@ def build_lead_directory(client: GlpiClient, repo: Repo, logins: list[str], ttl:
 def _cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ac:cancel")]]
+    )
+
+
+def _intro_kb() -> InlineKeyboardMarkup:
+    """The new-access-only notice: continue or leave."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=texts.BTN_ACC_CONTINUE, callback_data="ac:go"),
+                InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ac:cancel"),
+            ]
+        ]
     )
 
 
@@ -138,13 +152,21 @@ def build_access_router(
             return None
         return f"{ticket_front_base}/front/ticket.form.php?id={ticket_id}"
 
-    # --- requester dialog: ONE question, then confirm-with-lead --------------
+    # --- requester dialog: notice -> ONE question -> confirm-with-lead -------
     @router.message(Command("access"))
     @router.message(F.text == texts.BTN_ACCESS)
     async def start(message: Message, state: FSMContext) -> None:
+        # New-access-only notice first (the urgent-prod warning pattern): broken
+        # or lost access belongs in a regular ticket, not behind a lead approval.
         await state.clear()
+        await state.set_state(AccessRequest.intro)
+        await message.answer(texts.ACCESS_WARNING, reply_markup=_intro_kb())
+
+    @router.callback_query(AccessRequest.intro, F.data == "ac:go")
+    async def on_intro_continue(cb: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(AccessRequest.entering_request)
-        await message.answer(texts.ACC_ASK_REQUEST, reply_markup=_cancel_kb())
+        await notify.safe_edit(cb, texts.ACC_ASK_REQUEST, reply_markup=_cancel_kb())
+        await cb.answer()
 
     @router.message(StateFilter(AccessRequest), Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext, link: LinkedUser) -> None:

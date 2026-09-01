@@ -305,6 +305,14 @@ BTN_URGENT_DECLINE = "❌ Cancel"
 # --- lead access approval (feature: access requests) ---
 BTN_ACCESS = "🔑 Access"
 ACC_ASK_REQUEST = "What do you need access to? Describe it in one message."
+# Shown BEFORE the dialog (like the urgent-prod warning): new access only.
+ACCESS_WARNING = (
+    "🔑 This is for requesting <b>new</b> access — the request goes "
+    "to your lead for approval.\n\n"
+    "If your access existed but broke or disappeared — file a regular ticket "
+    "via “🆕 New ticket”."
+)
+BTN_ACC_CONTINUE = "✅ Continue"
 ACC_CHOOSE_LEAD = "Who is your lead? They will receive the approval request:"
 BTN_ACC_OTHER_LEAD = "Pick another"
 SETLEAD_USAGE = "Usage: <code>/setlead &lt;employee_login&gt; &lt;lead_login&gt;</code>"

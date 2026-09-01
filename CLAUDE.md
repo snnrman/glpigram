@@ -300,7 +300,11 @@ deploy/
    go through a lead's approval before technicians may take them; GLPI's native
    **TicketValidation** is the source of truth for the approval fact.
    - **Requester dialog** (menu button «🔑 Доступ» / `/access`, everyone) is
-     deliberately SHORT: ONE free-text question («К чему нужен доступ?»), then a
+     deliberately SHORT: first a new-access-only notice (the urgent-prod warning
+     pattern: «Здесь запрашивают новые доступы… если доступ сломался/пропал —
+     обычная заявка», «✅ Продолжить»/«❌ Отмена») — broken-access reports must not
+     land behind a lead approval; then ONE free-text question («К чему нужен доступ?»),
+     then a
      combined confirm screen showing the request + the approving lead with a
      full-width «📨 Отправить на согласование» (plus «Выбрать другого» / «Отмена»).
      No separate system/justification/duration steps — everything lives in the one

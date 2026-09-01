@@ -309,6 +309,14 @@ BTN_URGENT_DECLINE = "❌ Отмена"
 # --- lead access approval (feature: access requests) ---
 BTN_ACCESS = "🔑 Доступ"
 ACC_ASK_REQUEST = "К чему нужен доступ? Опишите одним сообщением."
+# Shown BEFORE the dialog (like the urgent-prod warning): new access only.
+ACCESS_WARNING = (
+    "🔑 Здесь запрашивают <b>новые</b> доступы — запрос уходит "
+    "на согласование вашему лиду.\n\n"
+    "Если доступ был, но сломался или пропал — создайте обычную заявку "
+    "через «🆕 Новая заявка»."
+)
+BTN_ACC_CONTINUE = "✅ Продолжить"
 ACC_CHOOSE_LEAD = "Кто ваш лид? Он получит запрос на согласование:"
 BTN_ACC_OTHER_LEAD = "Выбрать другого"
 SETLEAD_USAGE = "Использование: <code>/setlead &lt;логин_сотрудника&gt; &lt;логин_лида&gt;</code>"
