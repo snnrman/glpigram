@@ -265,3 +265,68 @@ async def test_take_blocked_while_awaiting_approval(env):
     )
     await dp.feed_update(bot, _cb(bot, 2, 5005, f"ta:take:{TICKET}"))
     client.assign_ticket.assert_awaited_once()
+
+
+# --- lead auto-suggestion from the org map -------------------------------------
+async def test_mapped_lead_is_suggested_one_tap(env):
+    dp, client, repo = env
+    await repo.set_user_lead(8, LEAD_GLPI)  # requester glpi=8 -> Метлина
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
+
+    # the suggestion, not the pick list
+    msgs = _to(bot, REQUESTER_ID)
+    assert any("Ваш лид" in t and "Ульяна Метлина" in t for t in msgs)
+    assert not any(texts.ACC_CHOOSE_LEAD == t for t in msgs)
+    # one tap accepts the suggested lead -> straight to the confirm summary
+    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, f"ac:lead:{LEAD_GLPI}"))
+    assert any("Согласует:" in t and "Ульяна Метлина" in t for t in _to(bot, REQUESTER_ID))
+
+
+async def test_suggestion_pick_another_shows_full_list(env):
+    dp, client, repo = env
+    await repo.set_user_lead(8, LEAD_GLPI)
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
+    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, "ac:other"))
+    assert any(texts.ACC_CHOOSE_LEAD == t for t in _to(bot, REQUESTER_ID))
+
+
+async def test_unmapped_user_gets_pick_list_as_before(env):
+    dp, client, repo = env  # no user_leads row
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, texts.BTN_ACCESS))
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Jenkins"))
+    await dp.feed_update(bot, _dm(bot, 3, REQUESTER_ID, "админ"))
+    await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "ac:dur:perm"))
+    assert any(texts.ACC_CHOOSE_LEAD == t for t in _to(bot, REQUESTER_ID))
+
+
+async def test_setlead_admin_command(env):
+    dp, client, repo = env
+    now = int(time.time())
+    await repo.upsert_link(
+        tg_id=5005, glpi_users_id=9, display_name="Техник", is_tech=True, now=now
+    )
+
+    async def _find(login, **kwargs):
+        return {
+            "petr.zayavitel": GlpiUser(id=8, name="petr.zayavitel", realname="Заявитель"),
+            "uliana.metlina": GlpiUser(id=LEAD_GLPI, name="uliana.metlina", realname="Метлина"),
+        }.get(login)
+
+    client.find_user_by_login.side_effect = _find
+    bot = FakeBot()
+    await dp.feed_update(bot, _dm(bot, 1, 5005, "/setlead petr.zayavitel uliana.metlina"))
+    assert await repo.get_user_lead(8) == LEAD_GLPI
+    assert any("✅" in t for t in _to(bot, 5005))
+
+    # non-tech refused
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "/setlead a b"))
+    assert texts.TECH_ONLY in _to(bot, REQUESTER_ID)

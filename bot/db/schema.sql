@@ -117,3 +117,11 @@ CREATE TABLE IF NOT EXISTS ticket_ratings (
     rated_at    INTEGER NOT NULL,  -- unix seconds
     glpi_pushed INTEGER NOT NULL DEFAULT 0  -- 0 pending, 1 in TicketSatisfaction, -1 gave up
 );
+
+-- Employee -> their approving lead (feature: access requests, auto-suggest).
+-- Both sides are GLPI user ids. Seeded from the org charts; maintained with
+-- the tech-only /setlead command. A missing row = manual lead pick in /access.
+CREATE TABLE IF NOT EXISTS user_leads (
+    glpi_users_id INTEGER PRIMARY KEY,
+    lead_glpi_id  INTEGER NOT NULL
+);

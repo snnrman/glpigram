@@ -183,36 +183,73 @@ def build_access_router(
         await message.answer(texts.ACC_ASK_DURATION, reply_markup=_duration_kb())
 
     @router.callback_query(AccessRequest.choosing_duration, F.data.startswith("ac:dur:"))
-    async def on_duration(cb: CallbackQuery, state: FSMContext) -> None:
+    async def on_duration(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
         if cb.data.endswith(":perm"):
             await state.update_data(duration=texts.ACC_DURATION_PERMANENT)
-            await _open_lead_step(cb, state)
+            await _open_lead_step(cb, state, link, edit=True)
         else:
             await state.set_state(AccessRequest.entering_until)
             await notify.safe_edit(cb, texts.ACC_ASK_UNTIL, reply_markup=_cancel_kb())
         await cb.answer()
 
     @router.message(AccessRequest.entering_until, F.text)
-    async def on_until(message: Message, state: FSMContext) -> None:
+    async def on_until(message: Message, state: FSMContext, link: LinkedUser) -> None:
         await state.update_data(duration=message.text.strip())
-        try:
-            leads = await _pickable_leads(message.from_user.id)
-        except GlpiError as exc:
-            log.warning("access_leads_failed error=%s", exc)
-            leads = []
-        if not leads:
-            await state.clear()
-            await message.answer(texts.ACC_NO_LEADS)
-            return
-        await state.set_state(AccessRequest.choosing_lead)
-        await message.answer(texts.ACC_CHOOSE_LEAD, reply_markup=_leads_kb(leads))
+        await _open_lead_step(message, state, link, edit=False)
 
     async def _pickable_leads(requester_tg_id: int) -> list:
         # Only linked leads can answer in TG; self-approval is excluded.
         leads = await lead_directory.get()
         return [x for x in leads if x.tg_id is not None and x.tg_id != requester_tg_id]
 
-    async def _open_lead_step(cb: CallbackQuery, state: FSMContext) -> None:
+    def _suggest_kb(lead: Lead) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=texts.acc_suggest_send(lead.name),
+                        callback_data=f"ac:lead:{lead.glpi_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(text=texts.BTN_ACC_OTHER_LEAD, callback_data="ac:other"),
+                    InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="ac:cancel"),
+                ],
+            ]
+        )
+
+    async def _open_lead_step(target, state: FSMContext, link: LinkedUser, *, edit: bool) -> None:
+        """Lead step: auto-suggest the mapped lead, else the full pick list."""
+
+        async def _show(text: str, kb: InlineKeyboardMarkup | None) -> None:
+            if edit:
+                await notify.safe_edit(target, text, reply_markup=kb)
+            else:
+                await target.answer(text, reply_markup=kb)
+
+        tg_id = target.from_user.id
+        try:
+            leads = await _pickable_leads(tg_id)
+        except GlpiError as exc:
+            log.warning("access_leads_failed error=%s", exc)
+            leads = []
+        if not leads:
+            await state.clear()
+            await _show(texts.ACC_NO_LEADS, None)
+            return
+        await state.set_state(AccessRequest.choosing_lead)
+        # The org map knows this employee's lead -> one-tap suggestion; the
+        # mapped lead must still be pickable (linked, not the requester).
+        mapped_id = await repo.get_user_lead(link.glpi_users_id)
+        mapped = next((x for x in leads if x.glpi_id == mapped_id), None) if mapped_id else None
+        if mapped is not None:
+            await _show(texts.acc_suggest_lead(mapped.name), _suggest_kb(mapped))
+            return
+        await _show(texts.ACC_CHOOSE_LEAD, _leads_kb(leads))
+
+    @router.callback_query(AccessRequest.choosing_lead, F.data == "ac:other")
+    async def on_other_lead(cb: CallbackQuery, state: FSMContext) -> None:
+        # From the suggestion to the full pick list (non-standard request).
         try:
             leads = await _pickable_leads(cb.from_user.id)
         except GlpiError as exc:
@@ -221,9 +258,10 @@ def build_access_router(
         if not leads:
             await state.clear()
             await notify.safe_edit(cb, texts.ACC_NO_LEADS)
+            await cb.answer()
             return
-        await state.set_state(AccessRequest.choosing_lead)
         await notify.safe_edit(cb, texts.ACC_CHOOSE_LEAD, reply_markup=_leads_kb(leads))
+        await cb.answer()
 
     @router.callback_query(AccessRequest.choosing_lead, F.data.startswith("ac:lead:"))
     async def on_lead(cb: CallbackQuery, state: FSMContext) -> None:
@@ -415,5 +453,29 @@ def build_access_router(
             await repo.set_ticket_followup_cursor(ticket_id, followup_id)
         except Exception:  # noqa: BLE001 - the followup is auxiliary to the decision
             log.warning("access_followup_failed ticket=%s", ticket_id)
+
+    # --- admin: maintain the employee -> lead map -----------------------------
+    @router.message(Command("setlead"))
+    async def cmd_setlead(message: Message, link: LinkedUser) -> None:
+        if not link.is_tech:
+            await message.answer(texts.TECH_ONLY)
+            return
+        parts = (message.text or "").split()
+        if len(parts) != 3:
+            await message.answer(texts.SETLEAD_USAGE)
+            return
+        _, employee_login, lead_login = parts
+        try:
+            employee = await client.find_user_by_login(employee_login)
+            lead = await client.find_user_by_login(lead_login)
+        except GlpiError as exc:
+            log.warning("setlead_lookup_failed error=%s", exc)
+            await message.answer(texts.GLPI_ERROR)
+            return
+        if employee is None or lead is None:
+            await message.answer(texts.SETLEAD_NOT_FOUND)
+            return
+        await repo.set_user_lead(employee.id, lead.id)
+        await message.answer(texts.setlead_done(employee.display_name, lead.display_name))
 
     return router

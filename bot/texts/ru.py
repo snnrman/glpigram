@@ -315,6 +315,23 @@ BTN_ACC_PERMANENT = "Постоянно"
 BTN_ACC_TEMPORARY = "⏳ Временно"
 ACC_ASK_UNTIL = "До какой даты? (текстом, например «до 01.10» или «на 2 недели»)"
 ACC_CHOOSE_LEAD = "Кто ваш лид? Он получит запрос на согласование:"
+BTN_ACC_OTHER_LEAD = "Выбрать другого"
+SETLEAD_USAGE = "Использование: <code>/setlead &lt;логин_сотрудника&gt; &lt;логин_лида&gt;</code>"
+
+
+def acc_suggest_lead(lead: str) -> str:
+    return f"Ваш лид — <b>{html.escape(lead)}</b>. Отправить запрос ему на согласование?"
+
+
+def acc_suggest_send(lead: str) -> str:
+    return f"📨 Отправить: {lead}"
+
+
+def setlead_done(employee: str, lead: str) -> str:
+    return f"✅ Лид для {html.escape(employee)} теперь {html.escape(lead)}."
+
+
+SETLEAD_NOT_FOUND = "Пользователь с таким логином не найден в GLPI."
 ACC_NO_LEADS = (
     "Список согласующих пуст или никто из лидов не привязан к боту. Сообщите администратору."
 )

@@ -307,6 +307,14 @@ deploy/
      against GLPI + bot links with a TTL cache (`build_lead_directory`). The pick list
      shows only leads LINKED to the bot; self-approval is excluded (the requesting lead
      doesn't see themselves). Changing the composition = .env edit + restart.
+   - **Auto-suggest from the org map.** SQLite `user_leads` (glpi_users_id ->
+     lead_glpi_id, seeded from the org charts) makes the lead step one tap: a mapped
+     requester sees «Ваш лид — X. Отправить?» with «📨 Отправить: X» /
+     «Выбрать другого» (full pick list) / «Отмена». Unmapped users (and users whose
+     mapped lead is unlinked or is themselves) get the plain pick list. Leads' own
+     requests map to their project head (Рекун / Лисник / Тарновская via the map);
+     the heads themselves are unmapped -> manual pick. Maintained with the tech-only
+     `/setlead <employee_login> <lead_login>` command.
    - **The lead answers in their DM**: «✅ Одобрить» one tap; «❌ Отклонить» demands a
      mandatory reason (FSM). Authority is verified against the stored approval row
      (`access_approvals.lead_tg_id`), not the button. Approve → validation answered

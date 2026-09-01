@@ -311,6 +311,23 @@ BTN_ACC_PERMANENT = "Permanently"
 BTN_ACC_TEMPORARY = "⏳ Temporarily"
 ACC_ASK_UNTIL = "Until when? (free text, e.g. “until Oct 1” or “for 2 weeks”)"
 ACC_CHOOSE_LEAD = "Who is your lead? They will receive the approval request:"
+BTN_ACC_OTHER_LEAD = "Pick another"
+SETLEAD_USAGE = "Usage: <code>/setlead &lt;employee_login&gt; &lt;lead_login&gt;</code>"
+
+
+def acc_suggest_lead(lead: str) -> str:
+    return f"Your lead is <b>{html.escape(lead)}</b>. Send the request to them for approval?"
+
+
+def acc_suggest_send(lead: str) -> str:
+    return f"📨 Send to {lead}"
+
+
+def setlead_done(employee: str, lead: str) -> str:
+    return f"✅ The lead for {html.escape(employee)} is now {html.escape(lead)}."
+
+
+SETLEAD_NOT_FOUND = "No GLPI user with that login."
 ACC_NO_LEADS = "The approvers list is empty or no lead is linked to the bot. Contact the admin."
 ACC_CONFIRM_HEADER = "Review the access request:"
 BTN_ACC_SEND = "📨 Send for approval"

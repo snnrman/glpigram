@@ -451,6 +451,24 @@ class Repo:
             row = await cur.fetchone()
         return int(row["total"]), int(row["techs"]), int(row["recent"])
 
+    # -- employee -> approving lead map (auto-suggest in /access) ------------
+    async def get_user_lead(self, glpi_users_id: int) -> int | None:
+        async with self._conn.execute(
+            "SELECT lead_glpi_id FROM user_leads WHERE glpi_users_id = ?", (glpi_users_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["lead_glpi_id"] if row else None
+
+    async def set_user_lead(self, glpi_users_id: int, lead_glpi_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO user_leads (glpi_users_id, lead_glpi_id) VALUES (?, ?)
+                ON CONFLICT(glpi_users_id) DO UPDATE SET lead_glpi_id = excluded.lead_glpi_id
+                """,
+                (glpi_users_id, lead_glpi_id),
+            )
+
     # -- lead access approvals ----------------------------------------------
     async def create_approval(
         self,
