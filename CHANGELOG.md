@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Lead approval for access requests («🔑 Доступ»).** A new main-menu button
+  for everyone. It first shows a notice that this is for *new* access only
+  (broken access → a regular ticket), then asks a single question — “What do
+  you need access to?” — and shows a combined confirm screen with the
+  auto-suggested approving lead (from the employee → lead map, `/setlead
+  <employee> <lead>` to adjust; “Choose another” lists every configured
+  lead). Sending creates the ticket in the access category plus a native GLPI
+  **TicketValidation**, and DMs the lead with **Approve / Reject** buttons.
+  The verdict is written back to GLPI (validation answer + a followup naming
+  the real approver), the requester is notified, and «Взять» is blocked while
+  the ticket awaits approval. Pending approvals are re-pinged every
+  `APPROVAL_REMIND_HOURS`. New settings: `LEAD_LOGINS`, `ACCESS_CATEGORY_ID`,
+  `APPROVAL_REMIND_HOURS`.
+- **One-tap solution rating (😞 / 😐 / 🤩).** When a ticket is solved the
+  requester’s notice carries a single row of three mood buttons; a tap is
+  acknowledged silently — no follow-up questions, no group ping. Ratings are
+  stored locally and mirrored into GLPI’s native **TicketSatisfaction**
+  survey, so they show up in GLPI’s own reports.
+- **«📥 Все заявки» for technicians** — the untaken queue (every New ticket
+  with no assignee) replaces «Мои заявки» in the tech menu; a ticket opens
+  with a **Take** button. A technician’s own requester tickets stay reachable
+  via /tickets.
+- **Ticket description on the tech-group card and in detail views**, so a
+  ticket can be judged without opening GLPI.
+- **Attachments on followups are forwarded both ways.** Files added to a
+  followup in the GLPI web UI reach the requester in Telegram, and files a
+  requester or technician attaches through the bot reach the other side.
+
+### Changed
+
+- **The /new dialog no longer has a review screen.** The attachments step is
+  the last one and its primary button is **«📨 Отправить заявку»** (full
+  width, «Отмена» on its own row below); pressing it creates the ticket at
+  once. Text fallback: “готово” / “отправить”. People used to stop at «Готово»
+  and walk away thinking the ticket was sent.
+- **Urgency step:** «🔴 Срочно (прод)» is listed first, alone on its row;
+  «Высокая» turned orange (🟠) so red is reserved for the prod level.
+- **Unassigned-ticket reminders are one grouped digest.** The tech group gets
+  a single «⚠️ Заявки без исполнителя» message listing every untaken ticket
+  (with per-ticket Take buttons), refreshed on a global cadence — no more
+  per-ticket drip regardless of ticket age.
+- **«Взять» from the reminder gives the same feedback as from the card:** the
+  reminder line is updated, the group card records the assignee, the
+  requester is notified, and the ticket is not re-reminded.
+- **Requester is shown in the tech detail views** («Все заявки» / «В
+  работе») — it used to be lost when a ticket was opened from the list.
+
+### Fixed
+
+- **Silently lost attachments.** GLPI 11 answers *201 Created* to an upload
+  whose extension is not a registered Document type, creates an empty stub
+  and hides the refusal in `upload_result`. The bot took that as success,
+  and a `*.pub` SSH key vanished from a ticket. The client now detects the
+  refusal, purges the stub and the user gets an explicit message (“rename to
+  .txt or paste as text”) — in /new and in requester/tech comments; no
+  followup is posted for a rejected file. (Fifteen common text-like
+  extensions — pub, md, key, pem, yaml, yml, json, log, conf, ini, toml, sh,
+  ps1, crt, cer — were also registered in GLPI.)
+- **Rating mirror addressing:** `TicketSatisfaction` is updated with the
+  *ticket* id, not the survey row id (GLPI returned ERROR_GLPI_UPDATE).
+
 ## [0.4.0] - 2026-07-15
 
 ### Added
