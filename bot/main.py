@@ -98,7 +98,9 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         cards=cards,
     )
     stats = build_stats_router(client, repo)
-    tech_tickets = build_tech_tickets_router(client, ticket_front_base=settings.glpi_front_base)
+    tech_tickets = build_tech_tickets_router(
+        client, repo=repo, ticket_front_base=settings.glpi_front_base
+    )
     lead_directory = build_lead_directory(
         client, repo, settings.lead_login_list, settings.link_recheck_ttl
     )

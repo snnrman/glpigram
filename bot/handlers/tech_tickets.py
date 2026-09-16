@@ -19,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .. import texts
-from ..db.repo import LinkedUser
+from ..db.repo import LinkedUser, Repo
 from ..glpi.client import TICKET_STATUS_NEW, TICKET_STATUS_SOLVED, GlpiClient, GlpiError
 from ..glpi.models import TicketSummary
 
@@ -72,7 +72,7 @@ def _detail_keyboard(
 
 
 def build_tech_tickets_router(
-    client: GlpiClient, *, ticket_front_base: str | None = None
+    client: GlpiClient, *, repo: Repo | None = None, ticket_front_base: str | None = None
 ) -> Router:
     router = Router(name="tech_tickets")
     # Dialogs and menu buttons are private-chat only: in groups the bot
@@ -204,6 +204,12 @@ def build_tech_tickets_router(
         except GlpiError as exc:
             log.warning("tech_ticket_requester_failed ticket=%s error=%s", ticket_id, exc)
             req = None
+        # Telegram id of the requester (if they linked the bot) -> clickable
+        # profile link, so the tech can write to them directly.
+        req_tg = None
+        if req and repo is not None:
+            link = await repo.get_by_glpi(req[0])
+            req_tg = link.tg_id if link else None
         text = texts.ticket_detail(
             ticket_id=ticket_id,
             title=ticket.name,
@@ -214,6 +220,7 @@ def build_tech_tickets_router(
             url=_ticket_url(ticket_id),
             urgency=ticket.urgency or None,
             requester=req[1] if req else None,
+            requester_tg_id=req_tg,
         )
         return text, ticket.status
 

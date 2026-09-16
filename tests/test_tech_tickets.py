@@ -255,7 +255,8 @@ async def test_detail_shows_requester(env):
     bot = FakeBot()
     await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:open:5"))
     text, _kb = bot.edits[-1]
-    assert "Заявитель: Олег Заявитель" in text
+    # linked requester (glpi 8 = USER_ID) -> clickable Telegram profile link
+    assert f'Заявитель: <a href="tg://user?id={USER_ID}">Олег Заявитель</a>' in text
 
 
 async def test_unassigned_detail_shows_requester(env):
@@ -265,7 +266,7 @@ async def test_unassigned_detail_shows_requester(env):
     bot = FakeBot()
     await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:openu:74"))
     text, _kb = bot.edits[-1]
-    assert "Заявитель: Олег Заявитель" in text
+    assert f'Заявитель: <a href="tg://user?id={USER_ID}">Олег Заявитель</a>' in text
 
 
 async def test_detail_survives_requester_lookup_failure(env):

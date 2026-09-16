@@ -370,10 +370,17 @@ def acc_sent(ticket_id: int, lead: str, url: str | None) -> str:
     )
 
 
-def acc_lead_prompt(*, ticket_id: int, requester: str, request: str, url: str | None) -> str:
+def acc_lead_prompt(
+    *,
+    ticket_id: int,
+    requester: str,
+    request: str,
+    url: str | None,
+    requester_tg_id: int | None = None,
+) -> str:
     return (
         f"🔑 <b>Запрос доступа {_ticket_ref(ticket_id, url)} — нужно ваше решение</b>\n\n"
-        f"👤 {html.escape(requester)}\n"
+        f"👤 {user_mention(requester, requester_tg_id)}\n"
         f"{html.escape(request)}"
     )
 
@@ -694,6 +701,7 @@ def ticket_detail(
     urgency: int | None = None,
     description: str | None = None,
     requester: str | None = None,
+    requester_tg_id: int | None = None,
 ) -> str:
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
@@ -701,7 +709,10 @@ def ticket_detail(
     desc_row = f"{desc}\n\n" if desc else "\n"
     # Requester row only in the tech views; a requester viewing their own
     # ticket doesn't need to be told who they are.
-    requester_row = f"✍️ Заявитель: {html.escape(requester)}\n" if requester else ""
+    # Linked to their Telegram profile when known, so a tech can DM them directly.
+    requester_row = ""
+    if requester:
+        requester_row = f"✍️ Заявитель: {user_mention(requester, requester_tg_id)}\n"
     return (
         f"<b>Заявка {_ticket_ref(ticket_id, url)}</b>\n"
         f"<b>{html.escape(title)}</b>\n"

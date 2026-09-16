@@ -306,6 +306,7 @@ def build_access_router(
                 requester=link.display_name,
                 request=data["request"],
                 url=_url(ticket_id),
+                requester_tg_id=link.tg_id,
             ),
             reply_markup=approval_kb(ticket_id),
         )
