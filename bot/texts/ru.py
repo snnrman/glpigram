@@ -116,30 +116,34 @@ NEW_CHOOSE_URGENCY = "Выберите срочность:"
 NEW_ENTER_TITLE = "Введите короткий заголовок заявки:"
 NEW_TITLE_TOO_LONG = "Заголовок слишком длинный (максимум 250 символов). Введите короче:"
 NEW_ENTER_DESCRIPTION = "Опишите проблему подробнее:"
-NEW_CONFIRM_HEADER = "Проверьте заявку перед отправкой:"
 NEW_CREATING = "Создаю заявку…"
 NEW_CANCELLED = "Создание заявки отменено."
 NEW_EXPECT_TEXT = "Пожалуйста, отправьте текст."
 
 # --- attachments (feature 6) ---
+# Last step: attachments are optional, the button IS the send (no review screen).
 NEW_ATTACH_PROMPT = (
-    "Можете прикрепить фото или документы (по одному сообщению), затем нажмите «Готово»."
+    "Можете прикрепить фото или документы (по одному сообщению).\n"
+    "Когда всё готово — нажмите «📨 Отправить заявку»."
 )
-BTN_ATTACH_DONE = "✅ Готово"
+BTN_SEND_TICKET = "📨 Отправить заявку"
 # Confirmation shown when the user taps Отмена during the attachments step.
 ATTACH_CANCEL_CONFIRM = "Отменить создание заявки?"
 BTN_ATTACH_CANCEL_YES = "Да, отменить"
 BTN_ATTACH_CANCEL_NO = "Нет"
-# Case-insensitive text that also finishes the attachments step (keyboard fallback).
-ATTACH_DONE_WORD = "готово"
+# Case-insensitive words that also send the ticket from the attachments step
+# (keyboard fallback).
+ATTACH_SEND_WORDS = ("готово", "отправить")
 ATTACH_TOO_LARGE = "Файл слишком большой (максимум 20 МБ). Отправьте файл поменьше."
-ATTACH_TOO_MANY = "Достигнут предел вложений. Нажмите «Готово»."
-ATTACH_UNSUPPORTED = "Отправьте фото/документ или нажмите «Готово»."
+ATTACH_TOO_MANY = "Достигнут предел вложений. Нажмите «📨 Отправить заявку»."
+ATTACH_UNSUPPORTED = "Отправьте фото/документ или нажмите «📨 Отправить заявку»."
 COMMENT_ATTACHMENT_PLACEHOLDER = "(вложение)"
 
 
 def attach_added(count: int) -> str:
-    return f"📎 Вложение добавлено (всего {count}). Отправьте ещё или нажмите «Готово»."
+    return (
+        f"📎 Вложение добавлено (всего {count}). Отправьте ещё или нажмите «📨 Отправить заявку»."
+    )
 
 
 def attach_rejected(filename: str) -> str:
@@ -207,7 +211,6 @@ def urgency_card_line(urgency: int) -> str:
 
 
 # --- buttons ---
-BTN_CONFIRM = "✅ Отправить"
 BTN_CANCEL = "❌ Отмена"
 
 # --- errors / fallbacks ---
@@ -235,21 +238,6 @@ def urgency_label(urgency: int) -> str:
         URGENCY_HIGH: URGENCY_HIGH_LABEL,
         URGENCY_URGENT: URGENCY_URGENT_LABEL,
     }.get(urgency, str(urgency))
-
-
-def confirm_summary(
-    category_name: str, urgency: int, title: str, description: str, attachments: int = 0
-) -> str:
-    lines = (
-        f"{NEW_CONFIRM_HEADER}\n\n"
-        f"<b>Категория:</b> {html.escape(category_name)}\n"
-        f"<b>Срочность:</b> {urgency_label(urgency)}\n"
-        f"<b>Заголовок:</b> {html.escape(title)}\n"
-        f"<b>Описание:</b>\n{html.escape(description)}"
-    )
-    if attachments:
-        lines += f"\n<b>Вложений:</b> {attachments}"
-    return lines
 
 
 # --- sync loop notifications (feature 4) ---

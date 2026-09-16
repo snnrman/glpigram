@@ -124,7 +124,7 @@ def test_ticket_links_degrade_without_url():
 def test_user_supplied_text_is_escaped_in_html_messages():
     hostile = "<b>Иван & Ко</b>"
     for mod in (ru, en):
-        summary = mod.confirm_summary(hostile, 3, hostile, hostile)
+        summary = mod.acc_confirm_summary(hostile, hostile)
         request = mod.link_request(
             tg_id=1, tg_name=hostile, glpi_id=2, glpi_name=hostile, login=hostile
         )

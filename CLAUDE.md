@@ -90,7 +90,11 @@ deploy/
 
 1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,
    cached 10 min) -> urgency -> title -> description -> optional photos/files ->
-   confirm -> create ticket. Reply with ticket number and link.
+   «📨 Отправить заявку» -> create ticket. Reply with ticket number and link.
+   - **No separate review/confirm screen.** The attachments step is the last one
+     and its primary button IS the send (`nt:send`; text fallback «готово» /
+     «отправить»). A review step existed before and people kept stopping at
+     «Готово» thinking the ticket was sent — don't reintroduce it.
    - **Urgency levels.** The keyboard lists the dedicated «🔴 Срочно (прод)»
      level (GLPI urgency 5, `URGENCY_URGENT`) FIRST, alone on its own row, then
      the three ordinary levels — «🟠 Высокая» (GLPI urgency 4), «🟡 Средняя» (3),

@@ -7,7 +7,7 @@ verifies the "готово" text fallback finishes the step.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram import Dispatcher
@@ -130,12 +130,13 @@ async def _attaching_dispatcher(storage: MemoryStorage, ctx: FSMContext) -> Disp
     return dp
 
 
-async def test_two_attachments_then_done_word_completes():
+async def test_two_attachments_then_done_word_sends_ticket():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     dp["link"] = _fake_link()
-    # client/category_cache/repo aren't touched during the attaching step.
-    dp.include_router(build_new_ticket_router(MagicMock(), MagicMock(), MagicMock()))
+    client = AsyncMock()
+    client.create_ticket.return_value = 77
+    dp.include_router(build_new_ticket_router(client, MagicMock(), AsyncMock()))
     bot = FakeBot()
 
     ctx = FSMContext(storage=storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
@@ -161,12 +162,54 @@ async def test_two_attachments_then_done_word_completes():
     assert bot.sent, "no messages were sent"
     assert all(reply_markup is not None for _, reply_markup in bot.sent)
 
-    # "готово" (any case) finishes the step even without pressing the button.
+    # "готово" (any case) SENDS the ticket right away — there is no review
+    # screen to forget about (people used to stop at «Готово»).
     await dp.feed_update(bot, _text_update(bot, 3, "Готово"))
-    assert await ctx.get_state() == NewTicket.confirming
-    last_text, last_kb = bot.sent[-1]
-    assert "Вложений:</b> 2" in last_text  # confirm summary counts both files
-    assert last_kb is not None  # confirm keyboard present
+    client.create_ticket.assert_awaited_once()
+    assert client.create_ticket.await_args.kwargs["name"] == "T"
+    assert await ctx.get_state() is None
+    assert texts.ticket_created(77, None) in [t for t, _ in bot.sent]
+
+
+async def test_send_button_creates_ticket_from_attach_step():
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+    dp["link"] = _fake_link()
+    client = AsyncMock()
+    client.create_ticket.return_value = 78
+    repo = AsyncMock()
+    dp.include_router(build_new_ticket_router(client, MagicMock(), repo))
+    bot = FakeBot()
+    ctx = FSMContext(storage=storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
+    await ctx.set_state(NewTicket.attaching)
+    await ctx.set_data(
+        {
+            "category_id": 1,
+            "category_name": "C",
+            "urgency": 3,
+            "title": "T",
+            "description": "D",
+            "attachments": [],
+        }
+    )
+
+    await dp.feed_update(bot, _cb_update(bot, 1, "nt:send"))
+
+    client.create_ticket.assert_awaited_once()
+    repo.track_ticket.assert_awaited_once()
+    assert repo.track_ticket.await_args.kwargs["requester_tg_id"] == CHAT
+    assert await ctx.get_state() is None
+    assert texts.ticket_created(78, None) in [t for t, _ in bot.sent]
+
+
+async def test_attach_keyboard_has_send_button_and_no_confirm_state():
+    dp, ctx = await _dispatcher_at(NewTicket.attaching)
+    bot = FakeBot()
+    await dp.feed_update(bot, _photo_update(bot, 1))
+    kb = bot.sent[-1][1]
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert labels[0] == texts.BTN_SEND_TICKET
+    assert not hasattr(NewTicket, "confirming")
 
 
 async def test_attach_cancel_asks_confirmation_and_back_keeps_state():
@@ -230,7 +273,6 @@ async def _dispatcher_at(state, data=None):
         NewTicket.choosing_urgency,
         NewTicket.entering_title,
         NewTicket.entering_description,
-        NewTicket.confirming,
     ],
 )
 async def test_cancel_button_works_at_every_step(step):
@@ -248,7 +290,6 @@ async def test_cancel_button_works_at_every_step(step):
         NewTicket.entering_title,
         NewTicket.entering_description,
         NewTicket.attaching,
-        NewTicket.confirming,
     ],
 )
 async def test_cancel_command_works_at_every_step(step):
@@ -295,7 +336,7 @@ async def test_random_text_while_attaching_prompts_with_keyboard():
 
 @pytest.mark.parametrize(
     "step",
-    [NewTicket.choosing_category, NewTicket.choosing_urgency, NewTicket.confirming],
+    [NewTicket.choosing_category, NewTicket.choosing_urgency],
 )
 async def test_text_on_button_steps_prompts_use_buttons(step):
     dp, ctx = await _dispatcher_at(step)

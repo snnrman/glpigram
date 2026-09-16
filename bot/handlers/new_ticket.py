@@ -1,11 +1,13 @@
 """/new — FSM dialog that creates a GLPI ticket.
 
 Flow (CLAUDE.md features 1 & 6):
-    category -> urgency -> title -> description -> attachments -> confirm ->
-    create ticket -> upload attachments.
+    category -> urgency -> title -> description -> attachments ->
+    «📨 Отправить заявку» -> create ticket -> upload attachments.
 
 Optional photos/documents are collected in the ``attaching`` step and uploaded
-to the ticket (as GLPI Documents) after it is created.
+to the ticket (as GLPI Documents) after it is created. There is deliberately
+NO separate review/confirm screen: people finished the attachments step and
+walked away thinking the ticket was sent, so the last step IS the send.
 """
 
 from __future__ import annotations
@@ -61,7 +63,6 @@ class NewTicket(StatesGroup):
     entering_title = State()
     entering_description = State()
     attaching = State()
-    confirming = State()
 
 
 def _categories_keyboard(categories: list[ITILCategory]) -> InlineKeyboardMarkup:
@@ -103,24 +104,12 @@ def _urgent_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _confirm_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=texts.BTN_CONFIRM, callback_data="nt:confirm"),
-                InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:cancel"),
-            ]
-        ]
-    )
-
-
 def _attach_keyboard() -> InlineKeyboardMarkup:
+    """Last step of /new: the send button is the only primary action, full width."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text=texts.BTN_ATTACH_DONE, callback_data="nt:attach_done"),
-                InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:attach_cancel"),
-            ]
+            [InlineKeyboardButton(text=texts.BTN_SEND_TICKET, callback_data="nt:send")],
+            [InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:attach_cancel")],
         ]
     )
 
@@ -269,9 +258,7 @@ def build_new_ticket_router(
         )
 
     # Steps that wait for a button press: don't ignore typed text silently.
-    @router.message(
-        StateFilter(NewTicket.choosing_category, NewTicket.choosing_urgency, NewTicket.confirming)
-    )
+    @router.message(StateFilter(NewTicket.choosing_category, NewTicket.choosing_urgency))
     async def on_button_step_message(message: Message) -> None:
         await message.answer(texts.USE_BUTTONS)
 
@@ -354,18 +341,6 @@ def build_new_ticket_router(
         await state.set_state(NewTicket.attaching)
         await message.answer(texts.NEW_ATTACH_PROMPT, reply_markup=_attach_keyboard())
 
-    async def _confirm_text(state: FSMContext) -> str:
-        """Move to the confirming state and render the summary."""
-        data = await state.get_data()
-        await state.set_state(NewTicket.confirming)
-        return texts.confirm_summary(
-            data["category_name"],
-            data["urgency"],
-            data["title"],
-            data["description"],
-            attachments=len(data.get("attachments", [])),
-        )
-
     @router.message(NewTicket.attaching, F.photo | F.document)
     async def on_attachment(message: Message, state: FSMContext) -> None:
         pending = attachments.extract(message)
@@ -394,10 +369,13 @@ def build_new_ticket_router(
             await message.answer(texts.attach_added(len(files)), reply_markup=_attach_keyboard())
 
     @router.message(NewTicket.attaching, F.text)
-    async def on_attaching_text(message: Message, state: FSMContext) -> None:
+    async def on_attaching_text(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
         # Text fallback for when the inline keyboard is unavailable.
-        if message.text.strip().casefold() == texts.ATTACH_DONE_WORD:
-            await message.answer(await _confirm_text(state), reply_markup=_confirm_keyboard())
+        if message.text.strip().casefold() in texts.ATTACH_SEND_WORDS:
+            await message.answer(texts.NEW_CREATING)
+            await _create_ticket(message, state, link, bot)
             return
         await message.answer(texts.ATTACH_UNSUPPORTED, reply_markup=_attach_keyboard())
 
@@ -405,10 +383,13 @@ def build_new_ticket_router(
     async def on_attaching_other(message: Message) -> None:
         await message.answer(texts.ATTACH_UNSUPPORTED, reply_markup=_attach_keyboard())
 
-    @router.callback_query(NewTicket.attaching, F.data == "nt:attach_done")
-    async def on_attach_done(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.message.edit_text(await _confirm_text(state), reply_markup=_confirm_keyboard())
+    @router.callback_query(NewTicket.attaching, F.data == "nt:send")
+    async def on_send(cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot) -> None:
+        # The user's intent is explicit — create the ticket even if the prompt
+        # message can't be edited anymore (deleted / >48h old).
+        await notify.safe_edit(cb, texts.NEW_CREATING)
         await cb.answer()
+        await _create_ticket(cb.message, state, link, bot)
 
     @router.callback_query(NewTicket.attaching, F.data == "nt:attach_cancel")
     async def on_attach_cancel(cb: CallbackQuery) -> None:
@@ -424,13 +405,11 @@ def build_new_ticket_router(
         await cb.message.edit_text(texts.NEW_ATTACH_PROMPT, reply_markup=_attach_keyboard())
         await cb.answer()
 
-    @router.callback_query(NewTicket.confirming, F.data == "nt:confirm")
-    async def on_confirm(cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot) -> None:
+    async def _create_ticket(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
+        """Create the ticket from the FSM data and report to ``message.chat``."""
         data = await state.get_data()
-        # The user's intent is explicit — create the ticket even if the summary
-        # message can't be edited anymore (deleted / >48h old).
-        await notify.safe_edit(cb, texts.NEW_CREATING)
-        await cb.answer()
         try:
             ticket_id = await client.create_ticket(
                 name=data["title"],
@@ -442,14 +421,14 @@ def build_new_ticket_router(
             )
         except GlpiError as exc:
             log.exception("new_ticket_create_failed error=%s raw=%s", exc, exc.raw)
-            await cb.message.answer(texts.GLPI_ERROR)
+            await message.answer(texts.GLPI_ERROR)
             await state.clear()
             return
         # Track it so the sync loop can notify this requester of updates.
         try:
             await repo.track_ticket(
                 ticket_id=ticket_id,
-                requester_tg_id=cb.from_user.id,
+                requester_tg_id=message.chat.id,
                 requester_glpi_id=link.glpi_users_id,
                 status=TICKET_STATUS_NEW,
                 now=int(time.time()),
@@ -460,19 +439,19 @@ def build_new_ticket_router(
         files = data.get("attachments", [])
         uploaded, rejected = await _upload_attachments(bot, ticket_id, files)
         await state.clear()
-        await cb.message.answer(
+        await message.answer(
             texts.ticket_created(ticket_id, _ticket_url(ticket_id)),
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
         )
         if rejected:
             # Forbidden type: the user can act on this (rename / paste as text).
-            await cb.message.answer(texts.attachments_rejected(rejected))
+            await message.answer(texts.attachments_rejected(rejected))
         if files and uploaded + len(rejected) < len(files):
-            await cb.message.answer(texts.attachments_partial_failure(uploaded, len(files)))
+            await message.answer(texts.attachments_partial_failure(uploaded, len(files)))
         # Off-hours: tell the requester when support will actually see it.
         notice = _quiet_notice(data["urgency"])
         if notice:
-            await cb.message.answer(notice)
+            await message.answer(notice)
 
     async def _upload_attachments(
         bot: Bot, ticket_id: int, files: list[dict]

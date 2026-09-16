@@ -112,28 +112,31 @@ NEW_CHOOSE_URGENCY = "Choose the urgency:"
 NEW_ENTER_TITLE = "Enter a short ticket title:"
 NEW_TITLE_TOO_LONG = "The title is too long (250 characters max). Enter a shorter one:"
 NEW_ENTER_DESCRIPTION = "Describe the problem in more detail:"
-NEW_CONFIRM_HEADER = "Review the ticket before submitting:"
 NEW_CREATING = "Creating the ticket…"
 NEW_CANCELLED = "Ticket creation cancelled."
 NEW_EXPECT_TEXT = "Please send text."
 
 # --- attachments (feature 6) ---
-NEW_ATTACH_PROMPT = "You can attach photos or documents (one per message), then press “Done”."
-BTN_ATTACH_DONE = "✅ Done"
+# Last step: attachments are optional, the button IS the send (no review screen).
+NEW_ATTACH_PROMPT = (
+    "You can attach photos or documents (one per message).\n"
+    "When you're done, press “📨 Send ticket”."
+)
+BTN_SEND_TICKET = "📨 Send ticket"
 # Confirmation shown when the user taps Cancel during the attachments step.
 ATTACH_CANCEL_CONFIRM = "Cancel ticket creation?"
 BTN_ATTACH_CANCEL_YES = "Yes, cancel"
 BTN_ATTACH_CANCEL_NO = "No"
 # Case-insensitive text that also finishes the attachments step (keyboard fallback).
-ATTACH_DONE_WORD = "done"
+ATTACH_SEND_WORDS = ("done", "send")
 ATTACH_TOO_LARGE = "The file is too large (20 MB max). Send a smaller one."
-ATTACH_TOO_MANY = "Attachment limit reached. Press “Done”."
-ATTACH_UNSUPPORTED = "Send a photo/document or press “Done”."
+ATTACH_TOO_MANY = "Attachment limit reached. Press “📨 Send ticket”."
+ATTACH_UNSUPPORTED = "Send a photo/document or press “📨 Send ticket”."
 COMMENT_ATTACHMENT_PLACEHOLDER = "(attachment)"
 
 
 def attach_added(count: int) -> str:
-    return f"📎 Attachment added ({count} total). Send more or press “Done”."
+    return f"📎 Attachment added ({count} total). Send more or press “📨 Send ticket”."
 
 
 def attach_rejected(filename: str) -> str:
@@ -201,7 +204,6 @@ def urgency_card_line(urgency: int) -> str:
 
 
 # --- buttons ---
-BTN_CONFIRM = "✅ Submit"
 BTN_CANCEL = "❌ Cancel"
 
 # --- errors / fallbacks ---
@@ -231,21 +233,6 @@ def urgency_label(urgency: int) -> str:
         URGENCY_HIGH: URGENCY_HIGH_LABEL,
         URGENCY_URGENT: URGENCY_URGENT_LABEL,
     }.get(urgency, str(urgency))
-
-
-def confirm_summary(
-    category_name: str, urgency: int, title: str, description: str, attachments: int = 0
-) -> str:
-    lines = (
-        f"{NEW_CONFIRM_HEADER}\n\n"
-        f"<b>Category:</b> {html.escape(category_name)}\n"
-        f"<b>Urgency:</b> {urgency_label(urgency)}\n"
-        f"<b>Title:</b> {html.escape(title)}\n"
-        f"<b>Description:</b>\n{html.escape(description)}"
-    )
-    if attachments:
-        lines += f"\n<b>Attachments:</b> {attachments}"
-    return lines
 
 
 # --- sync loop notifications (feature 4) ---
