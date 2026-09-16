@@ -118,6 +118,21 @@ class GlpiNetworkError(GlpiError):
     """Transport-level failure (connection, timeout) after retries were exhausted."""
 
 
+class GlpiDocumentRejected(GlpiError):
+    """GLPI answered 201 to a Document upload but stored NO file.
+
+    Happens when the extension is not a registered DocumentType (Setup >
+    Dropdowns > Document types): GLPI still creates an empty Document row and
+    reports success, only ``upload_result[..][..].error`` tells the truth
+    (verified live on 11.0.4). Callers must treat this as a failed upload.
+    """
+
+    def __init__(self, filename: str, reason: str, *, response: httpx.Response | None = None):
+        super().__init__(f"GLPI rejected file {filename!r}: {reason}", response=response)
+        self.filename = filename
+        self.reason = reason
+
+
 def _session_rejected(resp: httpx.Response) -> bool:
     """True when GLPI refused the request because of the session token.
 
@@ -143,6 +158,22 @@ def _extract_id(resp: httpx.Response) -> int:
         return int(data["id"])
     except (KeyError, TypeError, ValueError) as exc:
         raise GlpiHTTPError("GLPI create returned no id", response=resp) from exc
+
+
+def _upload_error(resp: httpx.Response) -> str | None:
+    """The per-file error GLPI buries in a 201 Document response, if any."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    if isinstance(body, list):
+        body = body[0] if body else {}
+    result = body.get("upload_result") if isinstance(body, dict) else None
+    for entries in (result or {}).values():
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get("error"):
+                return str(entry["error"])
+    return None
 
 
 def _parse_user_refs(raw: Any) -> tuple[list[int], str | None]:
@@ -989,7 +1020,22 @@ class GlpiClient:
             files={"filename[0]": (filename, content, mime)},
             idempotent=False,
         )
-        return _extract_id(resp)
+        doc_id = _extract_id(resp)
+        # A 201 is NOT proof the file landed: for a forbidden extension GLPI
+        # creates an empty stub and hides the refusal in upload_result.
+        reason = _upload_error(resp)
+        if reason:
+            try:  # don't leave a phantom attachment on the ticket
+                await self._request(
+                    "DELETE",
+                    f"/Document/{doc_id}",
+                    params={"force_purge": "true"},
+                    idempotent=False,
+                )
+            except GlpiError as exc:
+                log.warning("document_stub_purge_failed id=%s error=%s", doc_id, exc)
+            raise GlpiDocumentRejected(filename, reason, response=resp)
+        return doc_id
 
     async def link_document(self, document_id: int, itemtype: str, items_id: int) -> None:
         """Link an uploaded Document to an item (Document_Item)."""

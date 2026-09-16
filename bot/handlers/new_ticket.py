@@ -36,6 +36,7 @@ from ..glpi.client import (
     URGENCY_MEDIUM,
     URGENCY_URGENT,
     GlpiClient,
+    GlpiDocumentRejected,
     GlpiError,
 )
 from ..glpi.models import ITILCategory
@@ -457,22 +458,27 @@ def build_new_ticket_router(
             log.exception("track_ticket_failed ticket_id=%s", ticket_id)
 
         files = data.get("attachments", [])
-        uploaded = await _upload_attachments(bot, ticket_id, files)
+        uploaded, rejected = await _upload_attachments(bot, ticket_id, files)
         await state.clear()
         await cb.message.answer(
             texts.ticket_created(ticket_id, _ticket_url(ticket_id)),
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
         )
-        if files and uploaded < len(files):
+        if rejected:
+            # Forbidden type: the user can act on this (rename / paste as text).
+            await cb.message.answer(texts.attachments_rejected(rejected))
+        if files and uploaded + len(rejected) < len(files):
             await cb.message.answer(texts.attachments_partial_failure(uploaded, len(files)))
         # Off-hours: tell the requester when support will actually see it.
         notice = _quiet_notice(data["urgency"])
         if notice:
             await cb.message.answer(notice)
 
-    async def _upload_attachments(bot: Bot, ticket_id: int, files: list[dict]) -> int:
-        """Upload each collected file to the ticket; return how many succeeded."""
-        uploaded = 0
+    async def _upload_attachments(
+        bot: Bot, ticket_id: int, files: list[dict]
+    ) -> tuple[int, list[str]]:
+        """Upload each collected file; return (succeeded, names GLPI rejected by type)."""
+        uploaded, rejected = 0, []
         for att in files:
             try:
                 content = await attachments.download(bot, att["file_id"])
@@ -480,11 +486,19 @@ def build_new_ticket_router(
                     ticket_id, att["filename"], content, mime=att.get("mime")
                 )
                 uploaded += 1
+            except GlpiDocumentRejected as exc:
+                log.warning(
+                    "attach_rejected ticket=%s file=%s reason=%s",
+                    ticket_id,
+                    exc.filename,
+                    exc.reason,
+                )
+                rejected.append(exc.filename)
             except Exception:  # noqa: BLE001 - one bad file shouldn't sink the rest
                 log.warning(
                     "attach_upload_failed ticket=%s file=%s", ticket_id, att.get("filename")
                 )
-        return uploaded
+        return uploaded, rejected
 
     # Cancel from any state (inline button).
     @router.callback_query(F.data == "nt:cancel")

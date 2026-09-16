@@ -16,7 +16,12 @@ from aiogram.types import User as TgUser
 
 from bot import texts
 from bot.db.repo import LinkedUser, Repo
-from bot.glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, _parse_user_refs
+from bot.glpi.client import (
+    TICKET_STATUS_CLOSED,
+    TICKET_STATUS_NEW,
+    GlpiDocumentRejected,
+    _parse_user_refs,
+)
 from bot.glpi.models import Ticket, TicketSummary
 from bot.handlers.my_tickets import (
     MyTickets,
@@ -435,3 +440,29 @@ async def test_requester_comment_photo_reaches_tech_group(repo):
     client.attach_document_to_ticket.assert_awaited_once()
     # ...and forwarded to the tech group as a photo
     assert bot.photos and bot.photos[-1][0] == TECH_CHAT
+
+
+async def test_requester_comment_rejected_file_tells_user_and_keeps_dialog(repo):
+    """GLPI refused the type: no followup, no forward, a specific hint, state kept."""
+    bot = MediaFakeBot()
+    client = AsyncMock()
+    client.attach_document_to_ticket.side_effect = GlpiDocumentRejected(
+        "id_ed25519.pub", "Тип файла не разрешен"
+    )
+    router = build_my_tickets_router(
+        client, repo, tech_group_chat_id=TECH_CHAT, ticket_front_base="https://glpi.local"
+    )
+    router.message.middleware(_inject_link)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    ctx = FSMContext(storage=dp.storage, key=StorageKey(bot_id=BOT_ID, chat_id=CHAT, user_id=CHAT))
+    await ctx.set_state(MyTickets.commenting)
+    await ctx.set_data({"ticket_id": TICKET})
+
+    await dp.feed_update(bot, _photo_update(bot, 1))
+
+    client.add_followup.assert_not_awaited()
+    assert not bot.photos
+    assert bot.sent[-1] == (CHAT, texts.attach_rejected("id_ed25519.pub"))
+    assert texts.GLPI_ERROR not in [t for _, t in bot.sent]
+    assert await ctx.get_state() == MyTickets.commenting  # user can resend

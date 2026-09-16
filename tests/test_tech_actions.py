@@ -21,7 +21,11 @@ from aiogram.types import User as TgUser
 
 from bot import texts
 from bot.db.repo import LinkedUser, Repo
-from bot.glpi.client import TICKET_STATUS_NEW, TICKET_STATUS_PROCESSING_ASSIGNED
+from bot.glpi.client import (
+    TICKET_STATUS_NEW,
+    TICKET_STATUS_PROCESSING_ASSIGNED,
+    GlpiDocumentRejected,
+)
 from bot.handlers.tech_actions import (
     TechAction,
     _card_keyboard_after_take,
@@ -247,3 +251,30 @@ async def test_take_from_reminder_matches_card_take(repo):
     # (4) tracked status advanced so the sync loop won't re-notify / re-remind
     tracked = await repo.get_tracked_ticket(TICKET)
     assert tracked.last_status == TICKET_STATUS_PROCESSING_ASSIGNED
+
+
+async def test_tech_comment_rejected_file_tells_tech_and_keeps_dialog(repo):
+    await repo.track_ticket(
+        ticket_id=TICKET, requester_tg_id=REQUESTER_TG, requester_glpi_id=8, status=2, now=0
+    )
+    client = AsyncMock()
+    client.attach_document_to_ticket.side_effect = GlpiDocumentRejected(
+        "notes.md", "Тип файла не разрешен"
+    )
+    router = build_tech_actions_router(client, tech_group_chat_id=TECH_CHAT, repo=repo)
+    router.message.middleware(_inject_tech)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    ctx = FSMContext(
+        storage=dp.storage, key=StorageKey(bot_id=BOT_ID, chat_id=TECH_TG, user_id=TECH_TG)
+    )
+    await ctx.set_state(TechAction.commenting)
+    await ctx.set_data({"ticket_id": TICKET})
+    bot = MediaBot()
+
+    await dp.feed_update(bot, _photo_update(bot, 1))
+
+    client.add_followup.assert_not_awaited()
+    assert not bot.photos  # nothing forwarded to the requester
+    assert bot.sent[-1] == (TECH_TG, texts.attach_rejected("notes.md"))
+    assert await ctx.get_state() == TechAction.commenting

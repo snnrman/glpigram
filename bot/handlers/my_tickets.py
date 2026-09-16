@@ -35,6 +35,7 @@ from ..glpi.client import (
     TICKET_STATUS_NEW,
     TICKET_STATUS_PROCESSING_ASSIGNED,
     GlpiClient,
+    GlpiDocumentRejected,
     GlpiError,
 )
 from ..glpi.models import TicketSummary
@@ -281,6 +282,13 @@ def build_my_tickets_router(
             await client.attach_document_to_ticket(
                 ticket_id, pending.filename, content, mime=pending.mime
             )
+        except GlpiDocumentRejected as exc:
+            # Forbidden file type: say so and stay in the dialog so they can resend.
+            log.warning("my_tickets_attach_rejected id=%s file=%s", ticket_id, exc.filename)
+            await message.answer(
+                texts.attach_rejected(exc.filename), reply_markup=notify.dialog_cancel_keyboard()
+            )
+            return
         except Exception as exc:  # noqa: BLE001 - download or upload failure
             log.exception("my_tickets_attach_failed id=%s error=%s", ticket_id, exc)
             await message.answer(texts.GLPI_ERROR)

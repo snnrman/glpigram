@@ -142,6 +142,22 @@ def attach_added(count: int) -> str:
     return f"📎 Вложение добавлено (всего {count}). Отправьте ещё или нажмите «Готово»."
 
 
+def attach_rejected(filename: str) -> str:
+    """GLPI refused the file type (DocumentType whitelist) — actionable advice."""
+    return (
+        f"⚠️ GLPI не принял файл «{html.escape(filename)}»: такой тип файлов запрещён "
+        "настройками. Переименуйте его в .txt или пришлите содержимое текстом."
+    )
+
+
+def attachments_rejected(filenames: list[str]) -> str:
+    names = ", ".join(f"«{html.escape(n)}»" for n in filenames)
+    return (
+        f"⚠️ GLPI не принял вложения: {names} — такой тип файлов запрещён настройками. "
+        "Переименуйте их в .txt или пришлите содержимое текстом комментарием к заявке."
+    )
+
+
 def attachments_partial_failure(uploaded: int, total: int) -> str:
     return f"⚠️ Загружено вложений: {uploaded} из {total}. Остальные не удалось прикрепить."
 

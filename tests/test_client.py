@@ -14,6 +14,7 @@ import respx
 from bot.glpi.client import (
     GlpiAuthError,
     GlpiClient,
+    GlpiDocumentRejected,
     GlpiHTTPError,
     GlpiNetworkError,
 )
@@ -604,6 +605,46 @@ async def test_upload_document_sends_multipart_and_returns_id(mock):
     assert b'"_filename"' in body
     assert b'name="filename[0]"' in body
     assert b"\xff\xd8\xff data" in body
+    await client.close()
+
+
+async def test_upload_document_rejected_type_raises_and_purges_stub(mock):
+    """GLPI 11 answers 201 for a forbidden extension but stores no file
+    (``upload_result[..].error``) — verified live; the stub must be purged."""
+    await _init_route(mock)
+    mock.post(f"{BASE}/Document").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 109,
+                "message": "Элемент успешно добавлен",
+                "upload_result": {
+                    "filename": [{"name": "probe.pub", "error": "Тип файла не разрешен"}]
+                },
+            },
+        )
+    )
+    purge = mock.delete(f"{BASE}/Document/109").mock(return_value=httpx.Response(200, json=True))
+    client = make_client()
+    with pytest.raises(GlpiDocumentRejected) as exc_info:
+        await client.upload_document("probe.pub", b"ssh-ed25519 AAAA")
+    assert exc_info.value.filename == "probe.pub"
+    assert "не разрешен" in exc_info.value.reason
+    assert purge.called
+    assert purge.calls.last.request.url.params["force_purge"] == "true"
+    await client.close()
+
+
+async def test_upload_document_ok_with_empty_upload_result(mock):
+    """A clean upload_result (no error keys) must not be mistaken for a rejection."""
+    await _init_route(mock)
+    mock.post(f"{BASE}/Document").mock(
+        return_value=httpx.Response(
+            201, json={"id": 7, "upload_result": {"filename": [{"name": "a.txt", "size": 3}]}}
+        )
+    )
+    client = make_client()
+    assert await client.upload_document("a.txt", b"abc") == 7
     await client.close()
 
 

@@ -136,6 +136,22 @@ def attach_added(count: int) -> str:
     return f"📎 Attachment added ({count} total). Send more or press “Done”."
 
 
+def attach_rejected(filename: str) -> str:
+    """GLPI refused the file type (DocumentType whitelist) — actionable advice."""
+    return (
+        f"⚠️ GLPI rejected the file “{html.escape(filename)}”: this file type is not "
+        "allowed by its settings. Rename it to .txt or paste the contents as text."
+    )
+
+
+def attachments_rejected(filenames: list[str]) -> str:
+    names = ", ".join(f"“{html.escape(n)}”" for n in filenames)
+    return (
+        f"⚠️ GLPI rejected these attachments: {names} — the file type is not allowed by "
+        "its settings. Rename them to .txt or paste the contents as a comment on the ticket."
+    )
+
+
 def attachments_partial_failure(uploaded: int, total: int) -> str:
     return f"⚠️ Uploaded {uploaded} of {total} attachments. The rest could not be attached."
 

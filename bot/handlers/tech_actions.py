@@ -34,6 +34,7 @@ from ..glpi.client import (
     TICKET_STATUS_SOLVED,
     VALIDATION_WAITING,
     GlpiClient,
+    GlpiDocumentRejected,
     GlpiError,
 )
 from ..services import attachments, notify
@@ -404,6 +405,13 @@ def build_tech_actions_router(
             await client.attach_document_to_ticket(
                 ticket_id, pending.filename, content, mime=pending.mime
             )
+        except GlpiDocumentRejected as exc:
+            # Forbidden file type: say so and stay in the dialog so they can resend.
+            log.warning("tech_attach_rejected ticket=%s file=%s", ticket_id, exc.filename)
+            await message.answer(
+                texts.attach_rejected(exc.filename), reply_markup=notify.dialog_cancel_keyboard()
+            )
+            return
         except Exception as exc:  # noqa: BLE001 - download or upload failure
             log.exception("tech_attach_failed ticket=%s error=%s", ticket_id, exc)
             await message.answer(texts.GLPI_ERROR)

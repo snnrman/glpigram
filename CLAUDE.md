@@ -73,6 +73,14 @@ deploy/
 - Followups: ITILFollowup with `itemtype: "Ticket"`, `items_id: <ticket_id>`.
 - Attachments: `POST /Document` as multipart (`uploadManifest` + file), then link via
   `Document_Item` to the ticket.
+- **A 201 from `POST /Document` is not proof the file was stored.** If the extension is
+  not a registered DocumentType (Setup > Dropdowns > Document types), GLPI 11 still
+  creates an empty Document row (NULL filename/sha1sum) and only reports the refusal in
+  `upload_result.filename[0].error` («Тип файла не разрешен»). `upload_document` parses
+  that, purges the stub (`DELETE /Document/{id}?force_purge=true`) and raises
+  `GlpiDocumentRejected(filename, reason)`; handlers tell the user to rename to `.txt`
+  or paste as text (`texts.attach_rejected` / `attachments_rejected`) and never post a
+  followup for a rejected file. Bit us on ticket #349 (`*.pub` SSH key silently lost).
 - Listing/search: `GET /search/Ticket` with `criteria[]` (searchOptions IDs).
   Common ones: 12 = status, 4 = requester, 5 = technician. Verify IDs via
   `listSearchOptions/Ticket` before hardcoding, put them in constants with comments.
