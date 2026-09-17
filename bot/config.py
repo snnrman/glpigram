@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     )
     access_category_id: int | None = Field(
         default=None,
-        description="ITILCategory id for access-request tickets (e.g. «Учётки и доступы»).",
+        description="ITILCategory id for access-request tickets (e.g. «Учетные записи»).",
     )
     approval_remind_hours: float = Field(
         default=4,
