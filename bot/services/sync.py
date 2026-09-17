@@ -230,6 +230,7 @@ class SyncService:
                 requester_tg_id=tg_id,
                 attachments_count=len(docs),
                 now=int(time.time()),
+                bot=self._bot,
             )
         if sent and docs:
             # Images ride along under the card; everything else (pdf, oversized)

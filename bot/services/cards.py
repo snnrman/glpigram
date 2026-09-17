@@ -56,8 +56,15 @@ class CardService:
         requester_tg_id: int | None,
         attachments_count: int,
         now: int,
+        bot: Bot | None = None,
     ) -> None:
-        """Remember the card right after the real send (deferred-safe)."""
+        """Remember the card right after the real send (deferred-safe).
+
+        Events that happened before the card existed (a lead approving an
+        access request seconds after creation, a Take during quiet hours…)
+        were buffered by :meth:`record_event`; they are folded into the fresh
+        card here and, when ``bot`` is given, the card is re-rendered at once.
+        """
         await self._repo.save_card(
             ticket_id=ticket.id,
             chat_id=chat_id,
@@ -71,6 +78,25 @@ class CardService:
             status=ticket.status,
             now=now,
         )
+        pending = await self._repo.pop_pending_card_events(ticket.id)
+        if not pending:
+            return
+        history = [e.line for e in pending if e.line][-_MAX_HISTORY:]
+        status = next((e.status for e in reversed(pending) if e.status is not None), None)
+        taken = next((e.taken_by for e in reversed(pending) if e.taken_by is not None), None)
+        card = await self._repo.get_card(ticket.id)
+        new_status = status if status is not None else card.status
+        new_taken = taken if taken is not None else card.taken_by
+        await self._repo.update_card(
+            ticket.id,
+            status=new_status,
+            taken_by=new_taken,
+            history=json.dumps(history, ensure_ascii=False),
+            last_followup_id=card.last_followup_id,
+        )
+        log.info("card_pending_applied ticket=%s events=%s", ticket.id, len(pending))
+        if bot is not None:
+            await self._edit(bot, card, new_status, new_taken, history)
 
     async def record_event(
         self,
@@ -94,6 +120,17 @@ class CardService:
         """
         card = await self._repo.get_card(ticket_id)
         if card is None:
+            # No card yet (not sent / deferred) — keep the event for register().
+            if line or status is not None or taken_by is not None:
+                stamped = f"{line} · {self._now().strftime('%H:%M')}" if line else None
+                await self._repo.add_pending_card_event(
+                    ticket_id,
+                    line=stamped,
+                    status=status,
+                    taken_by=taken_by,
+                    now=int(self._now().timestamp()),
+                )
+                log.info("card_event_buffered ticket=%s line=%s", ticket_id, line)
             return False
         if skip_if_status_unchanged and status is not None and card.status == status:
             return True  # the card already reflects this state - nothing new
@@ -115,33 +152,37 @@ class CardService:
             last_followup_id=new_followup,
         )
 
+        await self._edit(bot, card, new_status, new_taken, history)
+
+        if reply:
+            # Edits don't notify anyone — ping the group with a short reply.
+            await self._reply(bot, card.chat_id, card.message_id, reply)
+        return True
+
+    async def _edit(self, bot: Bot, card, status: int, taken_by: str, history: list[str]) -> None:
+        """Re-render the whole card from stored ingredients + the new state."""
         text = texts.notify_new_ticket(
-            ticket_id=ticket_id,
+            ticket_id=card.ticket_id,
             title=card.title,
             description=card.description,
-            status=new_status,
-            url=self._url(ticket_id),
+            status=status,
+            url=self._url(card.ticket_id),
             urgency=card.urgency or None,
             requester_name=card.requester_name or None,
             requester_tg_id=card.requester_tg_id,
             attachments_count=card.attachments_count,
             history=history,
-            assignee=new_taken or None,
+            assignee=taken_by or None,
         )
         try:
             await bot.edit_message_text(
                 text,
                 chat_id=card.chat_id,
                 message_id=card.message_id,
-                reply_markup=self._keyboard(ticket_id, new_status),
+                reply_markup=self._keyboard(card.ticket_id, status),
             )
         except Exception as exc:  # noqa: BLE001 - flood/48h/deleted: next event self-heals
-            log.warning("card_edit_failed ticket=%s error=%s", ticket_id, exc)
-
-        if reply:
-            # Edits don't notify anyone — ping the group with a short reply.
-            await self._reply(bot, card.chat_id, card.message_id, reply)
-        return True
+            log.warning("card_edit_failed ticket=%s error=%s", card.ticket_id, exc)
 
     def _keyboard(self, ticket_id: int, status: int):
         """Buttons follow the state (ITIL cycle):

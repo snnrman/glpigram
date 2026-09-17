@@ -187,3 +187,45 @@ async def test_card_rerender_preserves_description(repo):
     text = bot.edits[0][2]
     assert "📝 <b>Печать</b>" in text
     assert "принтер не печатает" in text and "<p>" not in text
+
+
+# --- events that arrive before the card is sent are not lost ------------------
+async def test_event_before_card_is_buffered_and_applied_on_register(repo):
+    """Real case (#359): the lead approved 13 s after creation, the sync loop
+    posted the card later — the «Согласовано» line silently vanished."""
+    cards, bot = _service(repo), FakeBot()
+
+    ok = await cards.record_event(bot, TICKET, texts.hist_approved("Полина Мороз"))
+    assert ok is False  # still the legacy signal for callers
+    assert not bot.edits  # nothing to edit yet
+
+    ticket = Ticket(id=TICKET, name="тест", content="c", status=1, urgency=3)
+    await cards.register(
+        ticket,
+        chat_id=CHAT,
+        message_id=MSG_ID,
+        requester_name="Олег",
+        requester_tg_id=555,
+        attachments_count=0,
+        now=0,
+        bot=bot,
+    )
+    # the fresh card is re-rendered immediately with the buffered line...
+    chat, msg_id, text, _kb = bot.edits[-1]
+    assert (chat, msg_id) == (CHAT, MSG_ID)
+    assert "👍 Согласовано: Полина Мороз · 09:15" in text
+    # ...and it persists for later events
+    await cards.record_event(bot, TICKET, texts.hist_taken("Техник"), status=2)
+    assert "Согласовано: Полина Мороз" in bot.edits[-1][2]
+    assert "Взял в работу: Техник" in bot.edits[-1][2]
+    # buffer is drained
+    assert await repo.pop_pending_card_events(TICKET) == []
+
+
+async def test_buffered_status_and_assignee_apply_to_the_fresh_card(repo):
+    cards, bot = _service(repo), FakeBot()
+    await cards.record_event(bot, TICKET, texts.hist_taken("Техник"), status=2, taken_by="Техник")
+    await _register(repo, cards)  # no bot: state still folded in, no edit
+    card = await repo.get_card(TICKET)
+    assert card.status == 2 and card.taken_by == "Техник"
+    assert "Взял в работу: Техник" in card.history

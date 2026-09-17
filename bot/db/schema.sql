@@ -75,6 +75,20 @@ CREATE TABLE IF NOT EXISTS ticket_cards (
     created_at        INTEGER NOT NULL DEFAULT 0
 );
 
+-- Card events that arrived BEFORE the group card was sent (e.g. a lead approves
+-- an access request seconds after creation, while the sync loop hasn't posted
+-- the card yet; or overnight, while the card is deferred to the morning).
+-- Folded into the card's history at register() time, then deleted.
+CREATE TABLE IF NOT EXISTS card_pending_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id  INTEGER NOT NULL,
+    line       TEXT,               -- already time-stamped history line, or NULL
+    status     INTEGER,            -- header status to apply, or NULL
+    taken_by   TEXT,               -- assignee to apply, or NULL
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_card_pending_ticket ON card_pending_events(ticket_id);
+
 -- Who proposed the solution (ITIL cycle): lets the bot DM the right technician
 -- when the requester returns a solved ticket to work. tg_id is NULL when the
 -- solver has no Telegram link (solved from the GLPI web UI by an unlinked user).

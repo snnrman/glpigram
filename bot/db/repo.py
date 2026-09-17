@@ -69,6 +69,15 @@ class TrackedTicket:
 
 
 @dataclass(slots=True)
+class PendingCardEvent:
+    """A card event buffered before the card existed (see card_pending_events)."""
+
+    line: str | None
+    status: int | None
+    taken_by: str | None
+
+
+@dataclass(slots=True)
 class TicketCard:
     """The living tech-group card of one ticket (one ``ticket_cards`` row)."""
 
@@ -407,6 +416,39 @@ class Repo:
                 """,
                 (status, taken_by, history, last_followup_id, ticket_id),
             )
+
+    async def add_pending_card_event(
+        self,
+        ticket_id: int,
+        *,
+        line: str | None,
+        status: int | None,
+        taken_by: str | None,
+        now: int,
+    ) -> None:
+        """Buffer a card event for a ticket whose card hasn't been sent yet."""
+        async with self._tx() as db:
+            await db.execute(
+                """
+                INSERT INTO card_pending_events (ticket_id, line, status, taken_by, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (ticket_id, line, status, taken_by, now),
+            )
+
+    async def pop_pending_card_events(self, ticket_id: int) -> list[PendingCardEvent]:
+        """Buffered events for the ticket in arrival order; removed once returned."""
+        async with self._tx() as db:
+            async with db.execute(
+                "SELECT * FROM card_pending_events WHERE ticket_id = ? ORDER BY id",
+                (ticket_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+            await db.execute("DELETE FROM card_pending_events WHERE ticket_id = ?", (ticket_id,))
+        return [
+            PendingCardEvent(line=r["line"], status=r["status"], taken_by=r["taken_by"])
+            for r in rows
+        ]
 
     # -- solution cycle (ITIL): who solved, for return-to-work pings --------
     async def set_solver(self, ticket_id: int, *, tg_id: int | None, name: str) -> None:
