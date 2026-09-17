@@ -308,10 +308,10 @@ deploy/
    hand) is refused for regular users. A role change in the GLPI group updates the menu
    on the user's next interaction.
 
-8. **Lead access approval («🔑 Доступ», feature: access requests).** Access requests
+8. **Lead access approval («💳 Платные сервисы», feature: access requests).** Access requests
    go through a lead's approval before technicians may take them; GLPI's native
    **TicketValidation** is the source of truth for the approval fact.
-   - **Requester dialog** (menu button «🔑 Доступ» / `/access`, everyone) is
+   - **Requester dialog** (menu button «💳 Платные сервисы» (label deliberately avoids the word «доступ»; the old «🔑 Доступ» text is still accepted for stale keyboards) / `/access`, everyone) is
      deliberately SHORT: first a new-access-only notice (the urgent-prod warning
      pattern: «Здесь запрашивают новые доступы… если доступ сломался/пропал —
      обычная заявка», «✅ Продолжить»/«❌ Отмена») — broken-access reports must not

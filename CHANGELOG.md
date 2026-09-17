@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Lead approval for access requests («🔑 Доступ»).** A new main-menu button
+- **Lead approval for access requests («💳 Платные сервисы», formerly «🔑 Доступ»).** A new main-menu button
   for everyone. It first shows a notice that this is for *new* access only
   (broken access → a regular ticket), then asks a single question — “What do
   you need access to?” — and shows a combined confirm screen with the

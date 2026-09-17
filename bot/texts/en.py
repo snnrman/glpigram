@@ -306,12 +306,17 @@ BTN_URGENT_CONFIRM = "✅ Confirm"
 BTN_URGENT_DECLINE = "❌ Cancel"
 
 # --- lead access approval (feature: access requests) ---
-BTN_ACCESS = "🔑 Access"
-ACC_ASK_REQUEST = "What do you need access to? Describe it in one message."
-# Shown BEFORE the dialog (like the urgent-prod warning): new access only.
+# Deliberately no word “access” in the label: people read it as “my login is
+# broken”. This is about seats/subscriptions in external paid services.
+BTN_ACCESS = "💳 Paid services"
+# Previous label — still accepted so stale reply keyboards keep working.
+BTN_ACCESS_LEGACY = "🔑 Access"
+ACC_ASK_REQUEST = "Which service do you need and what for? Describe it in one message."
+# Shown BEFORE the dialog (like the urgent-prod warning): new seats only.
 ACCESS_WARNING = (
-    "🔑 This is for requesting <b>new</b> access — the request goes "
-    "to your lead for approval.\n\n"
+    "💳 This is for requesting <b>new</b> access to paid external services — "
+    "Figma, ChatGPT, Jira, Miro etc. The request goes to your lead for "
+    "approval.\n\n"
     "If your access existed but broke or disappeared — file a regular ticket "
     "via “🆕 New ticket”."
 )

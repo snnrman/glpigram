@@ -1,4 +1,4 @@
-"""«🔑 Доступ» — access requests approved by a lead (feature: lead approval).
+"""«💳 Платные сервисы» — access requests approved by a lead (feature: lead approval).
 
 Flow:
     requester: system -> what/why -> duration -> pick a lead -> confirm
@@ -154,7 +154,7 @@ def build_access_router(
 
     # --- requester dialog: notice -> ONE question -> confirm-with-lead -------
     @router.message(Command("access"))
-    @router.message(F.text == texts.BTN_ACCESS)
+    @router.message(F.text.in_({texts.BTN_ACCESS, texts.BTN_ACCESS_LEGACY}))
     async def start(message: Message, state: FSMContext) -> None:
         # New-access-only notice first (the urgent-prod warning pattern): broken
         # or lost access belongs in a regular ticket, not behind a lead approval.
