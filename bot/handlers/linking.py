@@ -80,8 +80,20 @@ def _candidate_keyboard(users: list) -> InlineKeyboardMarkup:
         )
         rows.append([InlineKeyboardButton(text=texts.BTN_LINK_NOT_ME, callback_data="lk:name_no")])
     else:
+        # Two AD accounts with the same full name (happened: «Константин
+        # Бобырь» vs `bkv`) would render as identical buttons — add the login.
+        names = [u.display_name for u in users]
         rows.extend(
-            [InlineKeyboardButton(text=u.display_name[:60], callback_data=f"lk:pick:{u.id}")]
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{u.display_name} ({u.name})"
+                        if names.count(u.display_name) > 1
+                        else u.display_name
+                    )[:60],
+                    callback_data=f"lk:pick:{u.id}",
+                )
+            ]
             for u in users
         )
         rows.append(
@@ -269,6 +281,15 @@ def build_linking_router(
     async def on_login_not_text(message: Message) -> None:
         await message.answer(texts.LINK_ASK_LOGIN)
 
+    async def _admin_display(user) -> str:
+        """Who handled it: the GLPI name (as everywhere else in the bot) when the
+        admin is linked; the raw Telegram identity only as a fallback."""
+        if user is not None:
+            link = await repo.get_by_tg(user.id)
+            if link is not None:
+                return link.display_name
+        return _tg_display(user)
+
     # -- tech-group confirmation ------------------------------------------
     @router.callback_query(F.data.startswith("lk:ok:"))
     async def on_confirm(cb: CallbackQuery, bot: Bot) -> None:
@@ -306,7 +327,7 @@ def build_linking_router(
                 glpi_name=user.display_name,
                 login=user.name,
                 approved=True,
-                by=_tg_display(cb.from_user),
+                by=await _admin_display(cb.from_user),
             ),
         )
         await cb.answer()
@@ -328,7 +349,7 @@ def build_linking_router(
         await notify.safe_edit(
             cb,
             texts.link_request_resolved(
-                glpi_name="", login=login, approved=False, by=_tg_display(cb.from_user)
+                glpi_name="", login=login, approved=False, by=await _admin_display(cb.from_user)
             ),
         )
         await cb.answer()

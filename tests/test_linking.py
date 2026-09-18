@@ -45,9 +45,10 @@ def test_looks_like_name(raw, expected):
 
 
 class _FakeUser:
-    def __init__(self, uid, name):
+    def __init__(self, uid, name, login="login"):
         self.id = uid
         self.display_name = name
+        self.name = login
 
 
 def test_candidate_keyboard_single_is_me():
@@ -97,3 +98,15 @@ def test_from_tech_group_is_the_trust_boundary():
     assert _from_tech_group(_cb(555), -100) is False  # private chat
     assert _from_tech_group(_cb(None), -100) is False  # no message attached
     assert _from_tech_group(_cb(-100), None) is False  # group not configured
+
+
+def test_candidate_keyboard_disambiguates_identical_names_with_login():
+    # Two AD accounts, one person (real case: «Константин Бобырь» vs `bkv`).
+    same = "Константин Бобырь"
+    kb = _candidate_keyboard([_FakeUser(8, same, same), _FakeUser(92, same, "bkv")])
+    labels = [b.text for row in kb.inline_keyboard for b in row][:2]
+    assert labels == [f"{same} ({same})", f"{same} (bkv)"]
+    # distinct names stay clean
+    kb = _candidate_keyboard([_FakeUser(1, "Олег Максимов", "a"), _FakeUser(2, "Олег Иванов", "b")])
+    labels = [b.text for row in kb.inline_keyboard for b in row][:2]
+    assert labels == ["Олег Максимов", "Олег Иванов"]

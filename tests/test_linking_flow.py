@@ -180,6 +180,21 @@ async def test_admin_confirm_links_and_notifies_user(repo):
     assert any("Привязка подтверждена" in t for t in _chat_msgs(bot, TECH_CHAT))
 
 
+async def test_admin_confirm_names_the_admin_by_glpi_name(repo):
+    """«Обработал» shows the admin's GLPI name (not their Telegram one) when linked."""
+    await repo.upsert_link(
+        tg_id=ADMIN_ID, glpi_users_id=134, display_name="Артём Ильин", is_tech=True, now=0
+    )
+    dp, _ = _harness(repo, _client())
+    bot = FakeBot()
+    await dp.feed_update(
+        bot,
+        _cb(bot, 1, f"lk:ok:{USER_CHAT}:{GLPI_USER.id}", chat_id=TECH_CHAT, from_id=ADMIN_ID),
+    )
+    card = next(t for t in _chat_msgs(bot, TECH_CHAT) if "Привязка подтверждена" in t)
+    assert "Обработал: Артём Ильин" in card
+
+
 async def test_admin_reject_notifies_user_without_linking(repo):
     dp, _ = _harness(repo, _client())
     bot = FakeBot()
