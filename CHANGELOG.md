@@ -41,6 +41,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The access button is now «💳 Платные сервисы».** The word «доступ» read
+  as “my login is broken” and clashed with the GLPI category (renamed to
+  «Учетные записи»). The button is about seats in paid external services
+  (Figma, ChatGPT, Jira, Miro…), the notice screen names them, and the
+  question became “Which service do you need and what for?”. The old label
+  is still accepted so persistent keyboards that haven’t re-rendered keep
+  working.
+- **The requester is a clickable Telegram profile link** in the tech detail
+  views («Все заявки» / «В работе») and in the lead’s approval DM — the same
+  `tg://user` mention the group card already used — so a technician or lead
+  can write to the person directly. Plain text when the requester hasn’t
+  linked the bot.
+- **The confirming admin is named by GLPI name** on the «Привязка
+  подтверждена» card («Обработал: Артём Ильин», not the Telegram “Artem I.”).
 - **The /new dialog no longer has a review screen.** The attachments step is
   the last one and its primary button is **«📨 Отправить заявку»** (full
   width, «Отмена» on its own row below); pressing it creates the ticket at
@@ -60,6 +74,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Card events that arrived before the card existed were dropped.** A lead
+  approved an access request 13 seconds after creation — before the sync
+  loop had posted the tech-group card — and the «👍 Согласовано» line
+  vanished; the same race hit any early event and deferred (quiet-hours)
+  cards. Such events are now buffered and folded into the card the moment
+  it is sent.
+- **Two GLPI accounts with the same full name rendered as identical buttons**
+  in the name-based linking pick-list, so a person could link the wrong one
+  (it happened). When display names collide the buttons now carry the login.
 - **Silently lost attachments.** GLPI 11 answers *201 Created* to an upload
   whose extension is not a registered Document type, creates an empty stub
   and hides the refusal in `upload_result`. The bot took that as success,
