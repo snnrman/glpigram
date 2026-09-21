@@ -357,7 +357,7 @@ deploy/
      working hours only. An approval answered elsewhere / whose ticket is gone is marked
      moot (-2) and dropped. State in `access_approvals` (SQLite).
 
-Out of scope for now: SLA warnings, Claude-based auto-classification, multi-entity support.
+Out of scope for now: SLA warnings, LLM-based auto-classification, multi-entity support.
 Keep the code structured so these can be added later.
 
 ## Dialog cancellation

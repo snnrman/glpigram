@@ -19,7 +19,7 @@ glpigram = "bot.main:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-# Project code only; the host's ~/.claude tree is not ours to lint.
+# Project code only; agent config trees on the host are not ours to lint.
 include = ["bot/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
