@@ -127,7 +127,7 @@ CREATE INDEX IF NOT EXISTS idx_access_pending ON access_approvals (status);
 CREATE TABLE IF NOT EXISTS ticket_ratings (
     ticket_id   INTEGER PRIMARY KEY,
     tg_id       INTEGER NOT NULL,  -- who rated (the requester)
-    rating      INTEGER NOT NULL,  -- 1..3
+    rating      INTEGER NOT NULL,  -- 1..4 (was 1..3 before the 4-point scale)
     rated_at    INTEGER NOT NULL,  -- unix seconds
     glpi_pushed INTEGER NOT NULL DEFAULT 0  -- 0 pending, 1 in TicketSatisfaction, -1 gave up
 );

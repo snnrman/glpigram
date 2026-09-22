@@ -239,8 +239,8 @@ deploy/
      подтверждения»; closed -> only an "Open in GLPI" URL button. If the requester never
      reacts the ticket stays solved — GLPI's own auto-close timer may close it (the bot
      does nothing).
-   - **One-tap solution rating (😞/😐/🤩).** Zero-friction by design: no separate survey
-     message, no reminders, silently ignorable. The rating row (three mood buttons,
+   - **One-tap solution rating (😞/😕/🙂/🤩, 4-point, no neutral).** Zero-friction by design: no separate survey
+     message, no reminders, silently ignorable. The rating row (four mood buttons,
      values 1..3, callback `rate:{id}:{n}`) rides ON the existing final message — the
      thank-you after the requester confirms the solution, and the solved/closed notice
      when a ticket is closed from the GLPI web UI with a solution. A tap swaps the
@@ -252,7 +252,7 @@ deploy/
      «⭐ Оценки решений: N» (shown once at least one rating exists). Requester
      self-closes are not rated.
      - **Mirrored into GLPI's native satisfaction survey.** The rating is also written
-       to `TicketSatisfaction` (😞→1, 😐→3, 🤩→5; `SATISFACTION_BY_RATE`), so GLPI's own
+       to `TicketSatisfaction` (😞→1, 😕→2, 🙂→4, 🤩→5; `SATISFACTION_BY_RATE`), so GLPI's own
        satisfaction reports work. Requires the entity survey enabled (Администрирование →
        Организации → корневая → Помощь: internal survey, rate 100%, delay 0) and GLPI's
        cron (creates the survey row after closure — verified live on 11.0.4: created

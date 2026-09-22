@@ -919,7 +919,7 @@ async def test_pending_rating_pushed_once_survey_exists(repo):
 
     bot, client = FakeBot(), FakeClient()
     client.satisfaction_rows.add(20)  # GLPI cron already created the survey
-    await repo.set_rating(20, tg_id=REQUESTER_TG, rating=3, now=int(_time.time()))
+    await repo.set_rating(20, tg_id=REQUESTER_TG, rating=4, now=int(_time.time()))
 
     await _service(bot, client, repo)._push_pending_ratings()
     assert client.satisfaction_pushed == [(20, 5)]  # 🤩 -> GLPI 5
@@ -1011,3 +1011,28 @@ async def test_escalation_skips_fresh_and_moot_approvals(repo):
     await _service(bot, client, repo)._remind_pending_approvals()
     assert bot.sent == []
     assert (await repo.get_approval(79))["status"] == 0
+
+
+async def test_ratings_migrate_from_3_to_4_point_scale_once(tmp_path):
+    """Pre-existing 😞/😐/🤩 rows are remapped on connect, exactly once."""
+    import aiosqlite
+
+    path = str(tmp_path / "old.sqlite3")
+    r = Repo(path)
+    await r.connect()
+    await r.set_rating(1, tg_id=1, rating=1, now=0)
+    await r.set_rating(2, tg_id=1, rating=2, now=0)
+    await r.set_rating(3, tg_id=1, rating=3, now=0)
+    await r.close()
+    async with aiosqlite.connect(path) as db:  # pretend the flag never existed
+        await db.execute("DELETE FROM sync_state WHERE key = 'ratings_scale'")
+        await db.commit()
+
+    r = Repo(path)
+    await r.connect()
+    assert await r.rating_summary() == {1: 1, 3: 1, 4: 1}  # 1->1, 😐2->🙂3, 🤩3->4
+    await r.close()
+    r = Repo(path)
+    await r.connect()  # second connect: flag set, nothing moves again
+    assert await r.rating_summary() == {1: 1, 3: 1, 4: 1}
+    await r.close()

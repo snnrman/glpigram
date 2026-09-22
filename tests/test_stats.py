@@ -200,7 +200,7 @@ def test_stats_summary_renders_counts_and_empty():
 
 async def test_stats_includes_ratings_block_when_present(env):
     dp, client, repo = env
-    await repo.set_rating(5, tg_id=1, rating=3, now=0)
+    await repo.set_rating(5, tg_id=1, rating=4, now=0)
     await repo.set_rating(6, tg_id=2, rating=1, now=0)
     bot = FakeBot()
     await dp.feed_update(bot, _dm(bot, 1, TECH_ID, "/stats"))

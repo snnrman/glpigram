@@ -340,14 +340,14 @@ def unassigned_take_keyboard(ticket_ids: list[int]) -> InlineKeyboardMarkup:
 
 
 def rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
-    """One-tap solution rating: a single row of three mood buttons."""
+    """One-tap solution rating: a single row of four mood buttons (no neutral)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=texts.rate_emoji(r), callback_data=f"rate:{ticket_id}:{r}"
                 )
-                for r in (1, 2, 3)
+                for r in (1, 2, 3, 4)
             ]
         ]
     )

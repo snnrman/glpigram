@@ -780,7 +780,7 @@ def closed_thanks(ticket_id: int) -> str:
 # --- one-tap solution rating (1=😞, 2=😐, 3=🤩) ---
 RATE_PROMPT = "How was the solution?"
 RATE_STALE = "Rating is not available."
-_RATE_EMOJI = {1: "😞", 2: "😐", 3: "🤩"}
+_RATE_EMOJI = {1: "😞", 2: "😕", 3: "🙂", 4: "🤩"}
 
 
 def rate_emoji(rating: int) -> str:
@@ -800,7 +800,7 @@ def ratings_block(counts: dict[int, int]) -> str:
     total = sum(counts.values())
     if not total:
         return ""
-    row = " · ".join(f"{_RATE_EMOJI[r]} {counts.get(r, 0)}" for r in (3, 2, 1))
+    row = " · ".join(f"{_RATE_EMOJI[r]} {counts.get(r, 0)}" for r in (4, 3, 2, 1))
     return f"⭐ <b>Solution ratings: {total}</b>\n{row}"
 
 

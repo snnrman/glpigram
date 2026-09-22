@@ -142,6 +142,7 @@ class Repo:
         # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         await self._ensure_column("ticket_cards", "description", "TEXT NOT NULL DEFAULT ''")
         await self._ensure_column("ticket_ratings", "glpi_pushed", "INTEGER NOT NULL DEFAULT 0")
+        await self._migrate_ratings_to_4_point()
         await self._db.commit()
         log.info("db_connected path=%s", self._db_path)
 
@@ -152,6 +153,23 @@ class Repo:
         if column not in existing:
             await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
             log.info("db_migrated table=%s added_column=%s", table, column)
+
+    async def _migrate_ratings_to_4_point(self) -> None:
+        """One-shot: 3-point ratings (😞/😐/🤩 = 1/2/3) -> 4-point (😞/😕/🙂/🤩 = 1..4).
+
+        Old 🤩 (3) becomes 4, old neutral 😐 (2) becomes 🙂 (3) — "fine" is the
+        closest reading of a neutral face. Guarded by a sync_state flag so it
+        runs exactly once; the highest step first so nothing is mapped twice.
+        """
+        async with self._db.execute(
+            "SELECT value FROM sync_state WHERE key = 'ratings_scale'"
+        ) as cur:
+            if await cur.fetchone():
+                return
+        await self._db.execute("UPDATE ticket_ratings SET rating = 4 WHERE rating = 3")
+        await self._db.execute("UPDATE ticket_ratings SET rating = 3 WHERE rating = 2")
+        await self._db.execute("INSERT INTO sync_state (key, value) VALUES ('ratings_scale', 4)")
+        log.info("db_migrated ratings scale 3->4")
 
     async def close(self) -> None:
         if self._db is not None:

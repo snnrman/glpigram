@@ -386,7 +386,7 @@ async def test_confirm_by_someone_else_is_refused(env):
     assert texts.STALE_BUTTON in bot.toasts
 
 
-# --- one-tap solution rating (😞/😐/🤩) ----------------------------------------
+# --- one-tap solution rating (😞/😕/🙂/🤩) ---------------------------------------
 async def test_confirm_offers_rating_and_tap_stores_it(env):
     dp, client, repo = env
     bot = FakeBot()
@@ -399,9 +399,9 @@ async def test_confirm_offers_rating_and_tap_stores_it(env):
         for c, t in bot.sent
     )
 
-    # Requester taps 🤩 (rating 3): stored + prompt swapped for the thanks.
-    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:3"))
-    assert await repo.rating_summary() == {3: 1}
+    # Requester taps 🤩 (rating 4): stored + prompt swapped for the thanks.
+    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:4"))
+    assert await repo.rating_summary() == {4: 1}
     assert any(texts.rate_thanks(3) in t for _c, t in bot.sent)
     # quiet trace on the living card, no group ping
     assert any(texts.hist_rated(3) in text for _, _, text in bot.edits)
@@ -413,7 +413,7 @@ async def test_rating_by_someone_else_is_refused(env):
     dp, client, repo = env
     bot = FakeBot()
     await _solve_via_bot(dp, repo, bot)
-    await dp.feed_update(bot, _dm_cb(bot, 3, TECH_ID, f"rate:{TICKET}:3"))  # not the requester
+    await dp.feed_update(bot, _dm_cb(bot, 3, TECH_ID, f"rate:{TICKET}:4"))  # not the requester
     assert await repo.rating_summary() == {}
 
 
@@ -430,8 +430,8 @@ async def test_re_rating_overwrites_not_duplicates(env):
     bot = FakeBot()
     await _solve_via_bot(dp, repo, bot)
     await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rate:{TICKET}:1"))
-    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:3"))
-    assert await repo.rating_summary() == {3: 1}  # one row, latest value
+    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:4"))
+    assert await repo.rating_summary() == {4: 1}  # one row, latest value
 
 
 async def test_rate_mirrors_into_glpi_satisfaction_immediately(env):
@@ -440,7 +440,7 @@ async def test_rate_mirrors_into_glpi_satisfaction_immediately(env):
     bot = FakeBot()
     await _solve_via_bot(dp, repo, bot)
     await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:ok:{TICKET}"))
-    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:3"))
+    await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:4"))
 
     client.push_ticket_satisfaction.assert_awaited_once_with(TICKET, 5)  # 🤩 -> GLPI 5
     assert await repo.pending_ratings() == []  # marked as mirrored

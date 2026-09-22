@@ -482,7 +482,7 @@ def build_my_tickets_router(
     async def on_rate(cb: CallbackQuery, bot: Bot) -> None:
         _, tid, val = cb.data.split(":")
         ticket_id, rating = int(tid), int(val)
-        if rating not in (1, 2, 3):
+        if rating not in SATISFACTION_BY_RATE:
             await cb.answer(texts.STALE_BUTTON, show_alert=True)
             return
         # Only the ticket's requester may rate (the buttons live in their DM,

@@ -63,7 +63,9 @@ TICKET_USER_REQUESTER = 1
 TICKET_USER_ASSIGN = 2  # technician / assignee
 
 # Bot's 3-mood rating (1=😞, 2=😐, 3=🤩) -> GLPI satisfaction scale (1..5).
-SATISFACTION_BY_RATE = {1: 1, 2: 3, 3: 5}
+# 4-point bot scale (no neutral middle — the rater has to lean one way) onto
+# GLPI's 1..5 satisfaction: 😞 1, 😕 2, 🙂 4, 🤩 5.
+SATISFACTION_BY_RATE = {1: 1, 2: 2, 3: 4, 4: 5}
 
 # TicketValidation / Ticket.global_validation statuses (same value space).
 VALIDATION_NONE = 1
