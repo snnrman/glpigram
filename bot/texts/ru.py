@@ -640,6 +640,13 @@ MYT_COMMENT_DONE = "💬 Комментарий добавлен."
 MYT_UNASSIGNED = "не назначен"
 
 BTN_MYT_COMMENT = "💬 Добавить комментарий"
+# Under a followup / status notification in the requester's DM.
+BTN_MYT_REPLY = "💬 Ответить"
+# Regex that finds the ticket number in a bot message («Заявка №49», «заявке №49»).
+TICKET_REF_RE = r"№(\d+)"
+REPLY_NOT_YOUR_TICKET = (
+    "Ответом на уведомление можно комментировать только свои заявки. Откройте «📋 Мои заявки»."
+)
 BTN_MYT_CLOSE = "✅ Закрыть заявку"
 BTN_MYT_REMIND = "🔔 Напомнить о себе"
 BTN_MYT_BACK = "⬅️ К списку"

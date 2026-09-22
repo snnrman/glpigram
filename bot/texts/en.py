@@ -625,6 +625,13 @@ MYT_COMMENT_DONE = "💬 Comment added."
 MYT_UNASSIGNED = "unassigned"
 
 BTN_MYT_COMMENT = "💬 Add comment"
+# Under a followup / status notification in the requester's DM.
+BTN_MYT_REPLY = "💬 Reply"
+# Regex that finds the ticket number in a bot message (“Ticket #49”).
+TICKET_REF_RE = r"#(\d+)"
+REPLY_NOT_YOUR_TICKET = (
+    "Replying to a notification only comments on your own tickets. Open “📋 My tickets”."
+)
 BTN_MYT_CLOSE = "✅ Close ticket"
 BTN_MYT_REMIND = "🔔 Send a reminder"
 BTN_MYT_BACK = "⬅️ Back to list"

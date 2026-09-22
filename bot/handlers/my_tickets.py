@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 
 from aiogram import Bot, F, Router
@@ -254,6 +255,33 @@ def build_my_tickets_router(
             texts.myt_ask_comment(ticket_id), reply_markup=notify.dialog_cancel_keyboard()
         )
         await cb.answer()
+
+    def _replied_ticket_id(message: Message) -> int | None:
+        """Ticket number from the bot message this one replies to, if any."""
+        parent = message.reply_to_message
+        if parent is None or parent.from_user is None or not parent.from_user.is_bot:
+            return None
+        m = re.search(texts.TICKET_REF_RE, parent.text or parent.caption or "")
+        return int(m.group(1)) if m else None
+
+    # A plain-text *reply* to one of the bot's ticket notifications is a
+    # comment on that ticket — the natural thing people do when a technician's
+    # followup lands in their DM. Registered before new_ticket's free-text
+    # offer (router order in main.py), so the text is not mistaken for a new
+    # ticket description.
+    @router.message(
+        StateFilter(None), F.reply_to_message, F.text, ~F.text.startswith("/"), _replied_ticket_id
+    )
+    async def on_reply_to_notification(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
+        ticket_id = _replied_ticket_id(message)
+        tracked = await repo.get_tracked_ticket(ticket_id)
+        if tracked is None or tracked.requester_tg_id != message.from_user.id:
+            await message.answer(texts.REPLY_NOT_YOUR_TICKET)
+            return
+        content = f"{link.display_name}:\n{message.text.strip()}"
+        await _finish_comment(message, state, bot, link, ticket_id, content=content)
 
     @router.message(MyTickets.commenting, F.text)
     async def on_comment_text(

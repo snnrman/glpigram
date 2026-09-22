@@ -466,3 +466,81 @@ async def test_requester_comment_rejected_file_tells_user_and_keeps_dialog(repo)
     assert bot.sent[-1] == (CHAT, texts.attach_rejected("id_ed25519.pub"))
     assert texts.GLPI_ERROR not in [t for _, t in bot.sent]
     assert await ctx.get_state() == MyTickets.commenting  # user can resend
+
+
+# --- replying to a notification comments on the ticket -------------------------
+def _reply_update(bot: FakeBot, uid: int, text: str, parent_text: str) -> Update:
+    parent = Message(
+        message_id=uid * 10,
+        date=_DATE,
+        chat=Chat(id=CHAT, type="private"),
+        from_user=TgUser(id=BOT_ID, is_bot=True, first_name="bot"),
+        text=parent_text,
+    )
+    msg = Message(
+        message_id=uid,
+        date=_DATE,
+        chat=Chat(id=CHAT, type="private"),
+        from_user=TgUser(id=CHAT, is_bot=False, first_name="U"),
+        text=text,
+        reply_to_message=parent,
+    ).as_(bot)
+    return Update(update_id=uid, message=msg)
+
+
+async def test_reply_to_followup_notification_posts_comment(repo):
+    """Real complaint: people replied to «Новый комментарий по заявке №N» and
+    got the «create a ticket?» offer — the reply must become a comment."""
+    await repo.track_ticket(
+        ticket_id=TICKET,
+        requester_tg_id=CHAT,
+        requester_glpi_id=_LINK.glpi_users_id,
+        status=2,
+        now=0,
+    )
+    bot = FakeBot()
+    client = AsyncMock()
+    client.add_followup.return_value = 900
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="Печать", content="c", status=2, urgency=3
+    )
+    client.get_ticket_assignees.return_value = []
+    client.list_followups.return_value = []
+    router = build_my_tickets_router(client, repo, tech_group_chat_id=TECH_CHAT)
+    router.message.middleware(_inject_link)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    parent = texts.notify_followup(ticket_id=TICKET, title="Печать", body="Проверьте", url=None)
+
+    await dp.feed_update(bot, _reply_update(bot, 1, "Проверил, не помогло", parent))
+
+    client.add_followup.assert_awaited_once()
+    assert client.add_followup.await_args.args[0] == TICKET
+    assert "Проверил, не помогло" in client.add_followup.await_args.args[1]
+    assert (CHAT, texts.MYT_COMMENT_DONE) in bot.sent
+
+
+async def test_reply_to_someone_elses_ticket_is_refused(repo):
+    await repo.track_ticket(
+        ticket_id=TICKET, requester_tg_id=4242, requester_glpi_id=99, status=2, now=0
+    )
+    bot = FakeBot()
+    client = AsyncMock()
+    router = build_my_tickets_router(client, repo, tech_group_chat_id=TECH_CHAT)
+    router.message.middleware(_inject_link)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    parent = texts.notify_followup(ticket_id=TICKET, title="t", body="x", url=None)
+
+    await dp.feed_update(bot, _reply_update(bot, 1, "текст", parent))
+
+    client.add_followup.assert_not_awaited()
+    assert (CHAT, texts.REPLY_NOT_YOUR_TICKET) in bot.sent
+
+
+def test_requester_notifications_carry_a_reply_button():
+    from bot.services.notify import requester_reply_keyboard
+
+    kb = requester_reply_keyboard(49)
+    assert kb.inline_keyboard[0][0].callback_data == "mt:comment:49"
+    assert kb.inline_keyboard[0][0].text == texts.BTN_MYT_REPLY

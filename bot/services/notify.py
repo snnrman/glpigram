@@ -254,6 +254,23 @@ async def mark_unassigned_taken(message: Message, ticket_id: int, tech_name: str
         log.warning("reminder_mark_taken_failed ticket=%s error=%s", ticket_id, exc)
 
 
+def requester_reply_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+    """«💬 Ответить» under a requester notification — opens the comment dialog.
+
+    Without it people typed their reply as plain text and got the «create a
+    ticket with this text?» offer instead (real complaint).
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_MYT_REPLY, callback_data=f"mt:comment:{ticket_id}"
+                )
+            ]
+        ]
+    )
+
+
 async def notify_status_change(bot: Bot, tg_id: int, ticket: Ticket, url: str | None) -> None:
     await _send(
         bot,
@@ -261,6 +278,7 @@ async def notify_status_change(bot: Bot, tg_id: int, ticket: Ticket, url: str | 
         texts.notify_status_change(
             ticket_id=ticket.id, title=ticket.name, status=ticket.status, url=url
         ),
+        reply_markup=requester_reply_keyboard(ticket.id),
     )
 
 
@@ -273,6 +291,7 @@ async def notify_followup(
         texts.notify_followup(
             ticket_id=ticket.id, title=ticket.name, body=followup.content, url=url
         ),
+        reply_markup=requester_reply_keyboard(ticket.id),
     )
 
 
