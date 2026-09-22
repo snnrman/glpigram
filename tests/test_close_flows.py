@@ -402,7 +402,7 @@ async def test_confirm_offers_rating_and_tap_stores_it(env):
     # Requester taps 🤩 (rating 4): stored + prompt swapped for the thanks.
     await dp.feed_update(bot, _dm_cb(bot, 4, REQUESTER_ID, f"rate:{TICKET}:4"))
     assert await repo.rating_summary() == {4: 1}
-    assert any(texts.rate_thanks(3) in t for _c, t in bot.sent)
+    assert any(texts.rate_thanks(4) in t for _c, t in bot.sent)
     # quiet trace on the living card, no group ping
     assert any(texts.hist_rated(3) in text for _, _, text in bot.edits)
     group_after_rate = [t for c, t in bot.sent if c == GROUP and "Оценка" in t]
