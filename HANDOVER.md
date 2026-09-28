@@ -5,9 +5,9 @@
 особенности GLPI, грабли и открытые хвосты. Устройство самого бота — в
 `CLAUDE.md`, что менялось — в `CHANGELOG.md` / `CHANGELOG.ru.md`.
 
-Состояние на 28.09.2026: версия в `pyproject.toml` — 0.4.0 (накопленные
-изменения лежат в разделе `[Unreleased]` changelog'а), 373 теста зелёные,
-`main` синхронизирован с обоими remote.
+Состояние на 28.09.2026: GLPI 11.0.8, версия бота в `pyproject.toml` — 0.4.0
+(накопленные изменения лежат в разделе `[Unreleased]` changelog'а), 373 теста
+зелёные, `main` синхронизирован с обоими remote.
 
 ---
 
@@ -68,6 +68,11 @@ cd /opt/glpi-tgbot && ./venv/bin/python -m pytest -q
 
 После правки `.env` — обязательный `systemctl restart glpi-tgbot`.
 
+Команды бота: `/start` (привязка), `/new`, `/tickets`, `/access`, `/cancel` —
+всем; `/stats`, `/link <tg_id> <login>` (или ответом на сообщение
+пользователя), `/unlink <login>`, `/setlead <логин_сотрудника> <логин_лида>` —
+только техникам.
+
 ## 4. Особенности GLPI REST API (проверено вживую, не по документации)
 
 Это главное, ради чего написан документ: API GLPI 11 ведёт себя не так, как
@@ -94,6 +99,22 @@ cd /opt/glpi-tgbot && ./venv/bin/python -m pytest -q
 5. **`users_id_supervisor` в GLPI не заполнен** (1 из 47) — иерархию «кто
    чей лид» строить по нему нельзя, она живёт в таблице `user_leads` бота.
 6. Заявитель — это связь `Ticket_User` типа 1, а не колонка заявки.
+7. **Даты GLPI — в UTC** (проверено: `12:38` в API = `14:38` на карточке по
+   Калининграду). Бот конвертирует сам; в разовых скриптах не забывать.
+8. **Всё, что бот пишет в GLPI, авторством сервисной учётки** (`tgbot`,
+   id 123): followup и решения идут с префиксом `Имя Фамилия:\n…`, ответы на
+   согласования — с настоящим согласующим в `comment_validation`. Статистику
+   «кто что сделал» считать по этому префиксу, а не по `users_id`.
+9. **Сессия API тоже под файловой блокировкой PHP.** Бот ходит в GLPI с одним
+   session token строго последовательно — параллельные запросы с одним
+   токеном просто встанут в очередь друг за другом. Не «ускорять» asyncio-
+   gather'ом.
+
+Шпаргалка `GET /search/Ticket` (id полей в `criteria`/`forcedisplay`): 2 id ·
+1 заголовок · 21 описание · 12 статус · 10 срочность · 7 категория · 4
+заявитель · 5 исполнитель · 15 дата создания · 17 дата решения · 19 дата
+изменения. Журнал заявки — `GET /Ticket/{id}/Log`: назначение исполнителя =
+`itemtype_link=User`, `linked_action=15`, `id_search_option=5`.
 
 ## 5. Логика, которую легко сломать, не зная о ней
 
@@ -130,18 +151,67 @@ cd /opt/glpi-tgbot && ./venv/bin/python -m pytest -q
   смотреть `systemctl status php8.2-fpm` (строка Status: active/idle
   процессов) и `ps -o wchan -C php-fpm8.2` (`locks_lock_inode_wait` = блокировка
   сессии). Бот простой переживает корректно, данные не теряет.
+  Оборотная сторона `request_terminate_timeout=180`: любая веб-операция GLPI
+  дольше 3 минут (огромный экспорт, массовое действие) будет убита. Тяжёлое —
+  через `bin/console`, на CLI лимит не действует.
 - **Пользователь-дубль в AD.** У одного сотрудника было две учётки с
   одинаковым ФИО (кириллический `sAMAccountName` и нормальный), человек
   привязался не к той. В пик-листе теперь показывается логин при совпадении
   имён, но сам дубль в AD никто не убрал.
-- **LDAP-синк в GLPI по расписанию не настроен.** Новые сотрудники не
-  появляются в GLPI, пока не выполнить вручную:
+- **LDAP-синк идёт раз в час** (`/etc/cron.d/glpi-ldap-sync`, полный
+  `synchronize_users`, лог `/var/log/glpi-ldap-sync.log`, ротация есть).
+  Новый сотрудник из AD появляется в GLPI в течение часа; если нужен сразу:
   `sudo -u www-data php /var/www/glpi/bin/console glpi:ldap:synchronize_users --only-create-new -n`
-  Стоит повесить в cron раз в час.
+  Стратегия для удалённых из AD — «ничего не делать» (`user_deleted_ldap_* = 0`):
+  уволенных нужно деактивировать в GLPI **руками**, и заодно `/unlink` в боте
+  и убрать из группы техников, если был техником.
+- **Крон-задачи GLPI** крутятся из crontab `www-data` каждую минуту
+  (`front/cron.php`), режим CLI — веб-кроном не пользуемся.
+- **Три мёртвых вебхука в GLPI** (Setup → Webhooks, id 1–3 «TG Bot Alert …»)
+  бьют на `http://help.aigrind.com/glpi-tg.php` при каждом создании/правке/
+  удалении заявки — наследие старого плагина TelegramBot. Скрипта нет,
+  поэтому в `/var/log/nginx/error.log` каждую минуту «Primary script unknown».
+  Плагины `telegrambot` и `webhook` в `/var/www/glpi/plugins/` не установлены
+  (state 2). Безвредно, но стоит вебхуки выключить и папки убрать — тогда
+  error.log снова станет полезным.
 - Бот переживает перезапуски GLPI и Telegram-флуд (`TelegramRetryAfter`)
   без вмешательства — в логах это ожидаемый шум, не инцидент.
 
-## 7. Git и публикация
+## 7. Разовые операции скриптом
+
+Всё, что делалось руками (чистка документов, перепривязка, рассылка нового
+меню, статистика), делалось короткими скриптами поверх клиента бота — так
+переиспользуются ретраи, ре-логин и типы. Каркас:
+
+```python
+import asyncio, sys
+sys.path.insert(0, "/opt/glpi-tgbot")
+from bot.config import Settings
+from bot.db.repo import Repo
+from bot.glpi.client import GlpiClient
+
+async def main():
+    st = Settings(_env_file="/var/lib/glpi-tgbot/.env")
+    c = GlpiClient(st.glpi_api_url, st.glpi_app_token, st.glpi_user_token)
+    repo = Repo(st.db_path); await repo.connect()   # тот же файл, что у бота — WAL, писать можно
+    try:
+        r = await c._request("GET", "/search/Ticket", params={"range": "0-0"}, idempotent=True)
+        print(r.json()["totalcount"])
+    finally:
+        await c.close(); await repo.close()
+
+asyncio.run(main())
+```
+
+Нюансы: `_request` **требует** `idempotent=` (True — с ретраями, False —
+для POST/PUT/DELETE, которые нельзя повторять); поле настроек называется
+`glpi_api_url`, не `glpi_url`; для чтения SQLite параллельно с работающим
+ботом открывать `sqlite3.connect("file:...?mode=ro", uri=True)`. Рассылка
+всем привязанным: `send_message(tg_id, text, reply_markup=main_menu_keyboard(is_tech=...))`
+с паузой 0.1 с и обработкой `TelegramRetryAfter` — 93 адресата прошли без
+единого отказа.
+
+## 8. Git и публикация
 
 - Remote: `origin` → `snnrman/glpi-tgbot` (приватный), `public` →
   `snnrman/glpigram` (публичный). Пушить нужно **в оба**.
@@ -155,7 +225,7 @@ cd /opt/glpi-tgbot && ./venv/bin/python -m pytest -q
   фразы** (ключ с забытой фразой месяц не давал пушить — проверяйте
   `ssh -T git@github.com`, должно быть `Hi snnrman!`).
 
-## 8. Definition of done для любой правки
+## 9. Definition of done для любой правки
 
 1. `ruff check bot tests` и `ruff format bot tests` — чисто.
 2. `pytest -q` — всё зелёное, на новое поведение есть тест.
@@ -168,7 +238,7 @@ cd /opt/glpi-tgbot && ./venv/bin/python -m pytest -q
 который просто собирает отправленные сообщения. Смотреть образцы в
 `tests/test_client.py` (API) и `tests/test_new_ticket.py` (диалоги).
 
-## 9. Открытые хвосты
+## 10. Открытые хвосты
 
 - **Обновить GLPI 11.0.8 → 11.0.9** — релиз безопасности (12 CVE, среди них
   неаутентифицированная SQL-инъекция и race condition в маркетплейсе).
@@ -180,12 +250,27 @@ cd /opt/glpi-tgbot && ./venv/bin/python -m pytest -q
 - **Родная инвентаризация включена** (`enabled_inventory=1`), эндпоинт
   `front/inventory.php` отвечает агентам, но агенты ещё не раскатаны
   (GLPI Agent 1.20). `stale_agents_delay=0` — задать, когда машины появятся.
+- **Бэкапов GLPI по расписанию нет.** Последний — ручной, 06.07.2026
+  (`/root/glpi-backup/`, ещё версия 11.0.4). Перед обновлением и вообще:
+  ежедневный `mysqldump glpidb` + tar `files/` и `config/` куда-нибудь
+  за пределы этой ВМ. SQLite бота (`/var/lib/glpi-tgbot/`) — туда же.
+- **LDAP-бинд в GLPI идёт под `Administrator@aigrind.office`.** Заменить на
+  отдельную сервисную учётку только на чтение.
+- Мёртвые вебхуки «TG Bot Alert …» и неустановленные плагины
+  `telegrambot`/`webhook` — выключить и удалить (см. раздел 6).
 - Трое лидов из `LEAD_LOGINS` не привязались (`/start`) — их нет в списке
   выбора.
+- Дубль учётки одного сотрудника в AD (кириллический `sAMAccountName`) —
+  отключить лишнюю в AD, синк сам деактивирует её в GLPI.
+- Локальные остатки, можно удалить: ветка `backup-pre-rewrite` в репозитории
+  (старая история до чистки трейлеров), `~/.ssh/github_tgbot.old` (ключ с
+  забытой парольной фразой), `/var/www/glpi_11.0.4_old`.
+- Пароль root хоста виртуализации в ходе работ передавался в переписке —
+  сменить.
 - Версия в `pyproject.toml` (0.4.0) отстала от накопленного `[Unreleased]`;
   при следующем релизе поднять до 0.5.0 и проставить дату в changelog.
 
-## 10. Идеи, обсуждавшиеся, но не реализованные
+## 11. Идеи, обсуждавшиеся, но не реализованные
 
 Нагрузка растёт (июль 82 заявки → август 115 → сентябрь 126+, ~6/день), и
 доля «высокой» срочности выросла до 41% — люди её завышают. Обсуждали:
