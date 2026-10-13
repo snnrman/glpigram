@@ -385,8 +385,22 @@ def acc_lead_prompt(
 
 BTN_ACC_APPROVE = "✅ Approve"
 BTN_ACC_REJECT = "❌ Reject"
-ACC_ASK_REJECT_REASON = "State the rejection reason — the requester will see it. Or press Cancel."
+ACC_ASK_REJECT_REASON = (
+    "State the rejection reason — the requester will see it. "
+    "To return to the approval request, press Cancel or send /cancel."
+)
+ACC_REJECT_REASON_PLACEHOLDER = "Rejection reason"
+ACC_REJECT_REASON_REQUIRED = (
+    "Send the rejection reason as text — a blank reply or attachment is not enough."
+)
+ACC_REJECT_REPLY_STALE = (
+    "This reply is to another message. Reply to the current prompt below with the reason."
+)
 ACC_ANSWERED_STALE = "This request is already handled or not addressed to you."
+
+
+def acc_reject_reply_prompt(ticket_id: int) -> str:
+    return f"✍️ Type the rejection reason for ticket #{ticket_id} in the message field and send it."
 
 
 def acc_lead_answered(decision_line: str, original: str) -> str:

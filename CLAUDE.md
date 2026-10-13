@@ -336,12 +336,21 @@ deploy/
      the heads themselves are unmapped -> manual pick. Maintained with the tech-only
      `/setlead <employee_login> <lead_login>` command.
    - **The lead answers in their DM**: «✅ Одобрить» one tap; «❌ Отклонить» demands a
-     mandatory reason (FSM). Authority is verified against the stored approval row
+     mandatory reason (FSM). The inline Cancel controls are sent first, followed
+     by a separate ForceReply prompt that opens Telegram's message field (these
+     two markup types cannot share one message). Both «Отмена» and `/cancel`
+     clear the rejection dialog without deciding the approval. The reason can
+     be plain text or a reply to the current prompt; blank/non-text messages
+     and replies to earlier prompts ask again without changing GLPI. The role
+     menu returns when the dialog finishes or is cancelled. Approving the same
+     request while entering a rejection reason clears that state.
+     Authority is verified against the stored approval row
      (`access_approvals.lead_tg_id`), not the button. Approve → validation answered
      ACCEPTED, followup «🔑 Доступ одобрен: <лид>» (cursor bumped — no sync echo),
      requester DM, card history «👍 Согласовано: <лид>». Reject → validation REFUSED,
      ticket CLOSED, followup + requester DM with the reason, card history. The lead's
-     own DM is edited in place with the decision.
+     approval DM is edited in place on approval; rejection is confirmed with a
+     separate message containing the reason.
    - **GLPI quirk (verified live on 11.0.4):** a validation can only be ANSWERED by the
      session of its target user — answering on behalf of another user is silently
      ignored (HTTP 200, status unchanged). Therefore validations always TARGET the

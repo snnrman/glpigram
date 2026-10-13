@@ -392,8 +392,22 @@ def acc_lead_prompt(
 
 BTN_ACC_APPROVE = "✅ Одобрить"
 BTN_ACC_REJECT = "❌ Отклонить"
-ACC_ASK_REJECT_REASON = "Укажите причину отказа — заявитель её увидит. Или нажмите «Отмена»."
+ACC_ASK_REJECT_REASON = (
+    "Укажите причину отказа — заявитель её увидит. "
+    "Чтобы вернуться к согласованию, нажмите «Отмена» или отправьте /cancel."
+)
+ACC_REJECT_REASON_PLACEHOLDER = "Причина отказа"
+ACC_REJECT_REASON_REQUIRED = (
+    "Пришлите причину отказа текстом — пустой ответ или вложение не подойдут."
+)
+ACC_REJECT_REPLY_STALE = (
+    "Это ответ на другое сообщение. Напишите причину в ответ на текущий запрос ниже."
+)
 ACC_ANSWERED_STALE = "Этот запрос уже обработан или адресован не вам."
+
+
+def acc_reject_reply_prompt(ticket_id: int) -> str:
+    return f"✍️ Напишите причину отказа по заявке №{ticket_id} в поле сообщения и отправьте её."
 
 
 def acc_lead_answered(decision_line: str, original: str) -> str:

@@ -74,6 +74,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rejecting a paid-service request now opens Telegram's message field.**
+  The lead gets a ForceReply prompt to send the mandatory reason, with a
+  working Cancel button and `/cancel` to leave the request pending. Blank
+  messages, attachments and replies to an earlier rejection prompt cannot
+  reject another request. Finishing or cancelling restores the role menu.
 - **Card events that arrived before the card existed were dropped.** A lead
   approved an access request 13 seconds after creation — before the sync
   loop had posted the tech-group card — and the «👍 Согласовано» line

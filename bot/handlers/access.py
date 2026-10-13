@@ -24,7 +24,13 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from .. import texts
 from ..cache import TTLValue
@@ -326,7 +332,7 @@ def build_access_router(
         return row
 
     @router.callback_query(F.data.startswith("ap:ok:"))
-    async def on_approve(cb: CallbackQuery, bot: Bot) -> None:
+    async def on_approve(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         ticket_id = int(cb.data.rsplit(":", 1)[1])
         row = await _own_pending(cb, ticket_id)
         if row is None:
@@ -345,6 +351,11 @@ def build_access_router(
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
         await repo.set_approval_status(ticket_id, status=1)
+        if (
+            await state.get_state() == LeadReject.entering_reason.state
+            and (await state.get_data()).get("reject_ticket_id") == ticket_id
+        ):
+            await state.clear()
         await _add_followup_quiet(ticket_id, texts.acc_followup_approved(lead))
         # Feedback: the lead's DM, the requester, the living card.
         if isinstance(cb.message, Message):
@@ -360,6 +371,38 @@ def build_access_router(
         if cards is not None:
             await cards.record_event(bot, ticket_id, texts.hist_approved(lead))
 
+    async def _prompt_reject_reason(message: Message, state: FSMContext, ticket_id: int) -> None:
+        # ForceReply opens Telegram's reply field. It cannot share reply_markup
+        # with the inline Cancel button, so the input prompt follows the controls.
+        prompt = await message.answer(
+            texts.acc_reject_reply_prompt(ticket_id),
+            reply_markup=ForceReply(
+                force_reply=True, input_field_placeholder=texts.ACC_REJECT_REASON_PLACEHOLDER
+            ),
+        )
+        await state.update_data(reject_prompt_id=prompt.message_id)
+
+    # Register cancellation before the reason handler: /cancel is never a reason.
+    @router.message(StateFilter(LeadReject), Command("cancel"))
+    async def cancel_reject(message: Message, state: FSMContext, link: LinkedUser) -> None:
+        await state.clear()
+        await message.answer(
+            texts.DIALOG_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+        )
+
+    @router.callback_query(StateFilter(LeadReject), F.data == "dlg:cancel")
+    async def cancel_reject_button(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
+        await state.clear()
+        if isinstance(cb.message, Message):
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception as exc:  # noqa: BLE001 - the prompt may be old/deleted
+                log.debug("cancel_markup_cleanup_failed error=%s", exc)
+            await cb.message.answer(
+                texts.DIALOG_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+            )
+        await cb.answer()
+
     @router.callback_query(F.data.startswith("ap:no:"))
     async def on_reject(cb: CallbackQuery, state: FSMContext) -> None:
         ticket_id = int(cb.data.rsplit(":", 1)[1])
@@ -370,18 +413,33 @@ def build_access_router(
         await cb.message.answer(
             texts.ACC_ASK_REJECT_REASON, reply_markup=notify.dialog_cancel_keyboard()
         )
+        await _prompt_reject_reason(cb.message, state, ticket_id)
         await cb.answer()
 
-    @router.message(LeadReject.entering_reason, F.text)
-    async def on_reject_reason(message: Message, state: FSMContext, bot: Bot) -> None:
+    @router.message(LeadReject.entering_reason)
+    async def on_reject_reason(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
         data = await state.get_data()
         ticket_id = data["reject_ticket_id"]
         row = await repo.get_approval(ticket_id)
         if row is None or row["status"] != 0 or row["lead_tg_id"] != message.from_user.id:
             await state.clear()
-            await message.answer(texts.ACC_ANSWERED_STALE)
+            await message.answer(
+                texts.ACC_ANSWERED_STALE, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+            )
             return
-        reason = message.text.strip()
+        if message.reply_to_message is not None and message.reply_to_message.message_id != data.get(
+            "reject_prompt_id"
+        ):
+            await message.answer(texts.ACC_REJECT_REPLY_STALE)
+            await _prompt_reject_reason(message, state, ticket_id)
+            return
+        reason = (message.text or "").strip()
+        if not reason:
+            await message.answer(texts.ACC_REJECT_REASON_REQUIRED)
+            await _prompt_reject_reason(message, state, ticket_id)
+            return
         lead = row["lead_name"]
         try:
             await client.answer_validation(
@@ -398,7 +456,10 @@ def build_access_router(
         await repo.set_approval_status(ticket_id, status=-1)
         await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
         await _add_followup_quiet(ticket_id, texts.acc_followup_rejected(lead, reason))
-        await message.answer(texts.acc_decision_rejected(lead, reason))
+        await message.answer(
+            texts.acc_decision_rejected(lead, reason),
+            reply_markup=main_menu_keyboard(is_tech=link.is_tech),
+        )
         await notify.send_text(
             bot,
             row["requester_tg_id"],
