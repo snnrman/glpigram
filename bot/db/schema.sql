@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS claude_approvals (
     stage TEXT NOT NULL DEFAULT 'lead',
     stage_started_at INTEGER NOT NULL,
     lead_approved_at INTEGER NOT NULL DEFAULT 0,
+    lead_covers_service INTEGER NOT NULL DEFAULT 0,
     lead_audit_done INTEGER NOT NULL DEFAULT 0,
     actor_tg_id INTEGER,
     actor_name TEXT NOT NULL DEFAULT '',

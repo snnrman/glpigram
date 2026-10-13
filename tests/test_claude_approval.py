@@ -418,3 +418,149 @@ async def test_terminal_requester_notification_uses_current_active_link(policy):
     assert any(chat == 901 for chat, _, _ in bot.sent)
     assert not any(chat == REQUESTER for chat, _, _ in bot.sent)
     assert (await repo.get_claude_approval(TICKET))["notification_done"] == 1
+
+
+async def _make_lead_a_service_member(repo, svc, glpi_id):
+    await repo.upsert_link(
+        tg_id=LEAD,
+        glpi_users_id=glpi_id,
+        display_name="Extra A",
+        is_tech=False,
+        now=int(time.time()),
+    )
+    async with repo._tx() as db:
+        await db.execute(
+            "UPDATE access_approvals SET lead_glpi_id=?,lead_tg_id=?,lead_name=? WHERE ticket_id=?",
+            (glpi_id, LEAD, "Extra A", TICKET),
+        )
+    return glpi_id
+
+
+@pytest.mark.parametrize("lead_glpi_id", [EXTRA_A_GLPI, EXTRA_B_GLPI])
+async def test_service_member_lead_approval_alone_completes_from_original_snapshot(
+    policy, lead_glpi_id
+):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _make_lead_a_service_member(repo, svc, lead_glpi_id)
+    # Current configuration no longer contains the lead, but this ticket's
+    # original recipient snapshot still does.
+    svc.approver_ids = [999]
+    await svc.send_pending(bot, TICKET)
+    bot.sent.clear()
+
+    assert await svc.approve(bot, TICKET, "lead", LEAD) == "approved"
+
+    row = await repo.get_claude_approval(TICKET)
+    assert row["stage"] == "approved"
+    assert row["lead_covers_service"] == 1
+    assert row["lead_approved_at"] > 0
+    assert client.answer_validation.await_args.kwargs["accepted"] is True
+    # Final requester message is allowed; no second-stage decision prompt was sent.
+    assert not any(chat in {EXTRA_A, EXTRA_B} for chat, _, _ in bot.sent)
+
+
+async def test_same_name_lead_with_unrelated_glpi_id_still_requires_extra(policy):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    async with repo._tx() as db:
+        await db.execute(
+            "UPDATE access_approvals SET lead_name='Extra A' WHERE ticket_id=?", (TICKET,)
+        )
+
+    assert await svc.approve(bot, TICKET, "lead", LEAD) == "lead_approved"
+
+    row = await repo.get_claude_approval(TICKET)
+    assert row["stage"] == "extra"
+    assert row["lead_covers_service"] == 0
+    assert client.answer_validation.await_count == 0
+    assert any(chat in {EXTRA_A, EXTRA_B} for chat, _, _ in bot.sent)
+
+
+async def test_service_lead_shortcut_survives_glpi_failure_and_restart(policy):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _make_lead_a_service_member(repo, svc, EXTRA_A_GLPI)
+    client.answer_validation.side_effect = GlpiError("offline")
+
+    assert await svc.approve(bot, TICKET, "lead", LEAD) == "retry"
+    pending = await repo.get_claude_approval(TICKET)
+    assert pending["stage"] == "approve_pending"
+    assert pending["lead_covers_service"] == 1
+    assert pending["lead_approved_at"] > 0
+
+    db_path = repo._db_path
+    await repo.close()
+    restarted_repo = Repo(db_path)
+    await restarted_repo.connect()
+    try:
+        client.answer_validation.side_effect = None
+        restarted = ClaudeApprovalService(
+            client, restarted_repo, approver_ids="54", schedule=svc.schedule
+        )
+        await restarted.tick(bot)
+        row = await restarted_repo.get_claude_approval(TICKET)
+        assert row["stage"] == "approved"
+        assert row["lead_covers_service"] == 1
+        assert client.answer_validation.await_count == 2
+    finally:
+        await restarted_repo.close()
+
+
+async def test_old_extra_stage_with_recorded_service_lead_approval_reconciles(policy):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _make_lead_a_service_member(repo, svc, EXTRA_A_GLPI)
+    assert await repo.transition_claude(
+        TICKET,
+        expected="lead",
+        stage="extra",
+        now=int(time.time()),
+        actor_tg_id=LEAD,
+        actor_name="Extra A",
+    )
+    legacy = await repo.get_claude_approval(TICKET)
+    assert legacy["stage"] == "extra"
+    assert legacy["lead_approved_at"] > 0
+    assert legacy["lead_covers_service"] == 0
+
+    await svc.tick(bot)
+
+    row = await repo.get_claude_approval(TICKET)
+    assert row["stage"] == "approved"
+    assert row["lead_covers_service"] == 1
+    assert client.answer_validation.await_args.kwargs["accepted"] is True
+
+
+async def test_extra_stage_without_recorded_lead_approval_is_not_autoaccepted(policy):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _make_lead_a_service_member(repo, svc, EXTRA_A_GLPI)
+    async with repo._tx() as db:
+        await db.execute(
+            "UPDATE claude_approvals SET stage='extra',lead_approved_at=0 WHERE ticket_id=?",
+            (TICKET,),
+        )
+
+    await svc.tick(bot)
+
+    row = await repo.get_claude_approval(TICKET)
+    assert row["stage"] == "extra"
+    assert row["lead_covers_service"] == 0
+    assert client.answer_validation.await_count == 0
+    assert client.set_ticket_status.await_count == 0
+
+
+async def test_service_member_lead_rejection_remains_final(policy):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _make_lead_a_service_member(repo, svc, EXTRA_B_GLPI)
+
+    assert await svc.reject(bot, TICKET, "lead", LEAD, "not approved") == "rejected"
+
+    row = await repo.get_claude_approval(TICKET)
+    assert row["stage"] == "rejected"
+    assert row["lead_covers_service"] == 0
+    assert client.answer_validation.await_args.kwargs["accepted"] is False
+    client.set_ticket_status.assert_awaited_once()
+    assert await svc.approve(bot, TICKET, "extra", EXTRA_A) == "stale"

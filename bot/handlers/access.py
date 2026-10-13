@@ -207,7 +207,11 @@ def build_access_router(
         await state.set_state(AccessRequest.confirming)
         text = texts.acc_confirm_summary(data["request"], lead.name)
         if data.get("service") == "claude":
-            text += "\n\n" + texts.CLAUDE_CONFIRM_EXTRA
+            text += "\n\n" + (
+                texts.CLAUDE_CONFIRM_COVERED
+                if claude is not None and lead.glpi_id in claude.approver_ids
+                else texts.CLAUDE_CONFIRM_EXTRA
+            )
         if edit:
             await notify.safe_edit(target, text, reply_markup=_confirm_kb())
         else:

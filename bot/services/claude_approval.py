@@ -117,6 +117,13 @@ class ClaudeApprovalService:
             return None
         return row, name
 
+    async def _lead_has_service_authority(self, row) -> bool:
+        # The GLPI identities belong to this request's original recipient set.
+        return any(
+            m["glpi_id"] == row["lead_glpi_id"]
+            for m in await self.repo.claude_members(row["ticket_id"])
+        )
+
     async def approve(self, bot: Bot, ticket_id: int, role: str, tg_id: int) -> str:
         async with self._lock(ticket_id):
             actor = await self.authorise(ticket_id, role, tg_id)
@@ -124,7 +131,8 @@ class ClaudeApprovalService:
                 return "stale"
             row, name = actor
             now = int(time.time())
-            stage = "extra" if role == "lead" else "approve_pending"
+            covers_service = role == "lead" and await self._lead_has_service_authority(row)
+            stage = "extra" if role == "lead" and not covers_service else "approve_pending"
             if not await self.repo.transition_claude(
                 ticket_id,
                 expected=row["stage"],
@@ -132,12 +140,14 @@ class ClaudeApprovalService:
                 now=now,
                 actor_tg_id=tg_id,
                 actor_name=name,
+                lead_covers_service=covers_service,
             ):
                 return "stale"
             if role == "lead":
                 await self._ensure_lead_audit(bot, await self.repo.get_claude_approval(ticket_id))
-                await self._send_pending(bot, await self.repo.get_claude_approval(ticket_id))
-                return "lead_approved"
+                if stage == "extra":
+                    await self._send_pending(bot, await self.repo.get_claude_approval(ticket_id))
+                    return "lead_approved"
             return await self._finalise(bot, await self.repo.get_claude_approval(ticket_id))
 
     async def reject(self, bot: Bot, ticket_id: int, role: str, tg_id: int, reason: str) -> str:
@@ -162,7 +172,11 @@ class ClaudeApprovalService:
         ticket_id = row["ticket_id"]
         accepted = row["stage"] == "approve_pending"
         decision = texts.claude_final_decision(
-            row["lead_name"], row["actor_name"], accepted, row["reason"]
+            row["lead_name"],
+            row["actor_name"],
+            accepted,
+            row["reason"],
+            lead_covers_service=bool(row["lead_covers_service"]),
         )
         try:
             if not row["validation_done"]:
@@ -191,7 +205,9 @@ class ClaudeApprovalService:
     async def _ensure_lead_audit(self, bot: Bot, row) -> bool:
         if row["lead_approved_at"] == 0 or row["lead_audit_done"]:
             return True
-        note = texts.claude_lead_record(row["lead_name"])
+        note = texts.claude_lead_record(
+            row["lead_name"], covers_service=bool(row["lead_covers_service"])
+        )
         if not await self._followup(row["ticket_id"], note):
             return False
         if self.cards:
@@ -204,7 +220,11 @@ class ClaudeApprovalService:
             return
         accepted = row["stage"] == "approved"
         decision = texts.claude_final_decision(
-            row["lead_name"], row["actor_name"], accepted, row["reason"]
+            row["lead_name"],
+            row["actor_name"],
+            accepted,
+            row["reason"],
+            lead_covers_service=bool(row["lead_covers_service"]),
         )
         if not row["audit_done"]:
             if await self._followup(row["ticket_id"], decision):
@@ -295,7 +315,13 @@ class ClaudeApprovalService:
             sent = await notify.send_text(
                 bot,
                 row["lead_tg_id"],
-                prompt + "\n\n" + texts.CLAUDE_CONFIRM_EXTRA,
+                prompt
+                + "\n\n"
+                + (
+                    texts.CLAUDE_CONFIRM_COVERED
+                    if await self._lead_has_service_authority(row)
+                    else texts.CLAUDE_CONFIRM_EXTRA
+                ),
                 reply_markup=decision_keyboard(row["ticket_id"], "lead"),
             )
             if sent:
@@ -362,6 +388,23 @@ class ClaudeApprovalService:
                             or ticket.global_validation != 2
                         ):
                             await self.repo.cancel_claude(ticket_id)
+                        elif (
+                            row["stage"] == "extra"
+                            and row["lead_approved_at"] > 0
+                            and await self._lead_has_service_authority(row)
+                        ):
+                            if await self.repo.transition_claude(
+                                ticket_id,
+                                expected="extra",
+                                stage="approve_pending",
+                                now=int(time.time()),
+                                actor_tg_id=row["actor_tg_id"],
+                                actor_name=row["lead_name"],
+                                lead_covers_service=True,
+                            ):
+                                await self._finalise(
+                                    bot, await self.repo.get_claude_approval(ticket_id)
+                                )
                         else:
                             await self._send_pending(bot, row)
             except Exception:

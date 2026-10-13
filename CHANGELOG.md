@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A lead who is already a snapshotted Claude service approver completes approval
+  in one action. Other leads still require the additional service approval.
+  Saved decisions survive GLPI failures and service restarts.
+
+
 ### Added
 
 - New Claude access requests require lead approval followed by one designated

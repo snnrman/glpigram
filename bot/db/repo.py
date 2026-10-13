@@ -148,6 +148,9 @@ class Repo:
         await self._ensure_column(
             "claude_approvals", "lead_audit_done", "INTEGER NOT NULL DEFAULT 0"
         )
+        await self._ensure_column(
+            "claude_approvals", "lead_covers_service", "INTEGER NOT NULL DEFAULT 0"
+        )
         await self._migrate_ratings_to_4_point()
         await self._db.commit()
         log.info("db_connected path=%s", self._db_path)
@@ -656,14 +659,27 @@ class Repo:
         actor_tg_id: int | None = None,
         actor_name: str = "",
         reason: str = "",
+        lead_covers_service: bool = False,
     ) -> bool:
         """Compare-and-set the stage, including competing approve/reject actions."""
         async with self._tx() as db:
             cur = await db.execute(
                 "UPDATE claude_approvals SET stage=?,stage_started_at=?,actor_tg_id=?,"
-                "actor_name=?,reason=?,lead_approved_at=CASE WHEN ?='extra' THEN ? "
-                "ELSE lead_approved_at END WHERE ticket_id=? AND stage=?",
-                (stage, now, actor_tg_id, actor_name, reason, stage, now, ticket_id, expected),
+                "actor_name=?,reason=?,lead_approved_at=CASE WHEN ? THEN ? "
+                "ELSE lead_approved_at END,lead_covers_service=MAX(lead_covers_service,?) "
+                "WHERE ticket_id=? AND stage=?",
+                (
+                    stage,
+                    now,
+                    actor_tg_id,
+                    actor_name,
+                    reason,
+                    expected == "lead" and stage in ("extra", "approve_pending"),
+                    now,
+                    lead_covers_service,
+                    ticket_id,
+                    expected,
+                ),
             )
             return cur.rowcount == 1
 

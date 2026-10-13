@@ -236,3 +236,24 @@ async def test_missing_live_ticket_cannot_bypass_completed_claude_gate(flow):
     client.get_ticket.return_value = None
     await dp.feed_update(bot, _cb(bot, 9, TECH, f"ta:take:{TICKET}"))
     client.assign_ticket.assert_not_awaited()
+
+
+@pytest.mark.parametrize("lead_glpi, lead_tg", [(82, EXTRA_A), (54, EXTRA_B)])
+async def test_service_approver_selected_as_lead_needs_only_one_action(flow, lead_glpi, lead_tg):
+    dp, client, repo, bot, _ = flow
+    client.find_user_by_login.return_value = GlpiUser(id=lead_glpi, name="special-lead")
+    await _begin(flow, "Нужен Claude для работы")
+    await dp.feed_update(bot, _cb(bot, 5, REQUESTER_ID, f"ac:lead:{lead_glpi}"))
+    assert any(texts.CLAUDE_CONFIRM_COVERED in message for message in _to(bot, REQUESTER_ID))
+    await dp.feed_update(bot, _cb(bot, 6, REQUESTER_ID, "ac:send"))
+    before_a, before_b = len(_to(bot, EXTRA_A)), len(_to(bot, EXTRA_B))
+    await dp.feed_update(bot, _cb(bot, 7, lead_tg, f"ap:ok:{TICKET}"))
+    row = await repo.get_claude_approval(TICKET)
+    assert row["stage"] == "approved" and row["lead_covers_service"] == 1
+    client.answer_validation.assert_awaited_once()
+    assert client.answer_validation.call_args.kwargs["accepted"] is True
+    # Completion may edit the lead's original message; no new extra prompt is sent.
+    assert not any("Дополнительное согласование" in m for m in _to(bot, EXTRA_A)[before_a:])
+    assert not any("Дополнительное согласование" in m for m in _to(bot, EXTRA_B)[before_b:])
+    await dp.feed_update(bot, _cb(bot, 8, TECH, f"ta:take:{TICKET}"))
+    client.assign_ticket.assert_awaited_once()

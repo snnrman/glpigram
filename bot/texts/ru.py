@@ -972,6 +972,9 @@ def hist_handoff(frm: str | None, to: str) -> str:
 
 
 # Claude access policy: no public service-choice button.
+CLAUDE_CONFIRM_COVERED = (
+    "Этот лид также согласует доступ к Claude, поэтому отдельный второй этап не нужен."
+)
 CLAUDE_SERVICE_ASK = "Укажите точное название сервиса или ссылку на него."
 CLAUDE_APPROVERS_UNAVAILABLE = (
     "Не удалось связаться с согласующими сервиса. Попробуйте позже или обратитесь в поддержку."
@@ -995,7 +998,12 @@ def acc_service_clarified(request: str, service: str) -> str:
     return f"{request}\n\nУточнённый сервис: {service}"
 
 
-def claude_lead_record(lead: str) -> str:
+def claude_lead_record(lead: str, covers_service: bool = False) -> str:
+    if covers_service:
+        return (
+            f"Лид {html.escape(lead)} согласовал Claude. "
+            "Его решение покрывает согласование сервиса."
+        )
     return (
         f"Лид {html.escape(lead)} одобрил запрос Claude. "
         "Ожидается дополнительное согласование сервиса."
@@ -1018,7 +1026,14 @@ def claude_extra_prompt(
     )
 
 
-def claude_final_decision(lead: str, actor: str, accepted: bool, reason: str) -> str:
+def claude_final_decision(
+    lead: str, actor: str, accepted: bool, reason: str, lead_covers_service: bool = False
+) -> str:
+    if accepted and lead_covers_service:
+        return (
+            f"✅ Claude согласован лидом {html.escape(lead)}, "
+            "уполномоченным согласовывать этот сервис."
+        )
     if accepted:
         return f"✅ Claude согласован: лид {html.escape(lead)} и {html.escape(actor)}."
     return f"❌ Запрос Claude отклонён: {html.escape(actor)}. Причина: {html.escape(reason)}"

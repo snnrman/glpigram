@@ -436,8 +436,14 @@ or reject_pending -> rejected. Decisions are protected by per-ticket locks and
 conditional SQL transitions. The first completed decision at the extra stage is
 final: either person's refusal prevents the other from overriding it. Starting
 or cancelling the reason-entry dialog is not itself a submitted refusal.
-The requester's own account cannot be an approver; a lead who is also a configured
-service approver must explicitly perform the additional stage, not auto-approve.
+The requester's own account cannot be an approver. If the selected lead's GLPI
+identity belongs to the request's snapshotted service-approver set, that lead's
+approval covers both roles: lead -> approve_pending -> approved, without sending
+extra-stage prompts. A saved lead_covers_service flag explains the one-person
+approval in the audit. Ordinary leads still require the extra stage. Existing
+extra-stage requests with a recorded approval from such a lead are finalised by
+the sync loop after confirming GLPI is still waiting; completed/rejected requests
+are not reinterpreted. This is based on GLPI ids, not names or the current config.
 
 A single GLPI TicketValidation stays waiting until the extra approval, with
 both author names recorded in its final comment. A GLPI failure leaves a saved

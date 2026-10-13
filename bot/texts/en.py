@@ -958,6 +958,9 @@ def hist_handoff(frm: str | None, to: str) -> str:
 
 
 # Claude access policy: no public service-choice button.
+CLAUDE_CONFIRM_COVERED = (
+    "This lead also approves Claude access; no separate second stage is needed."
+)
 CLAUDE_SERVICE_ASK = "Please specify the exact service name or its website link."
 CLAUDE_APPROVERS_UNAVAILABLE = (
     "The service approvers are unavailable. Try again later or contact support."
@@ -980,7 +983,9 @@ def acc_service_clarified(request: str, service: str) -> str:
     return f"{request}\n\nClarified service: {service}"
 
 
-def claude_lead_record(lead: str) -> str:
+def claude_lead_record(lead: str, covers_service: bool = False) -> str:
+    if covers_service:
+        return f"Lead {html.escape(lead)} approved Claude. This also covers the service approval."
     return (
         f"Lead {html.escape(lead)} approved the Claude request. "
         "Additional service approval is pending."
@@ -1003,7 +1008,14 @@ def claude_extra_prompt(
     )
 
 
-def claude_final_decision(lead: str, actor: str, accepted: bool, reason: str) -> str:
+def claude_final_decision(
+    lead: str, actor: str, accepted: bool, reason: str, lead_covers_service: bool = False
+) -> str:
+    if accepted and lead_covers_service:
+        return (
+            f"✅ Claude approved by lead {html.escape(lead)}, "
+            "who is also an authorised service approver."
+        )
     if accepted:
         return f"✅ Claude approved: lead {html.escape(lead)} and {html.escape(actor)}."
     return f"❌ Claude request rejected by {html.escape(actor)}. Reason: {html.escape(reason)}"
