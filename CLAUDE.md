@@ -418,3 +418,48 @@ journalctl -u glpi-tgbot -f             # logs
 - Unit tests for the new client methods / service logic pass
 - No unhandled exceptions in the polling loop: any error is logged and the loop continues
 - README section updated if setup steps changed
+
+
+## Claude-only second approval
+
+The ordinary paid-service flow remains lead-only. New requests classified as
+Claude by `services/access_target.py` additionally require approval from one of
+`CLAUDE_APPROVER_GLPI_IDS` (active GLPI accounts linked to Telegram). No public
+Claude button is introduced. Ambiguous aliases such as cloud/клауд ask for an
+exact service name or link; multiple-service mentions and negations also ask.
+The original request and the clarification are retained for the lead.
+
+`ClaudeApprovalService` is shared by handlers and the sync task. SQLite tables
+`claude_approvals` and `claude_approval_members` are additive; existing requests
+keep their previous policy. Stages: lead -> extra -> approve_pending -> approved,
+or reject_pending -> rejected. Decisions are protected by per-ticket locks and
+conditional SQL transitions. The first completed decision at the extra stage is
+final: either person's refusal prevents the other from overriding it. Starting
+or cancelling the reason-entry dialog is not itself a submitted refusal.
+The requester's own account cannot be an approver; a lead who is also a configured
+service approver must explicitly perform the additional stage, not auto-approve.
+
+A single GLPI TicketValidation stays waiting until the extra approval, with
+both author names recorded in its final comment. A GLPI failure leaves a saved
+pending-finalisation state for the next sync tick. An unsuccessful rejection
+close is retried without re-answering a validation already confirmed successful.
+GLPI approver identities are snapshotted, but Telegram endpoints are refreshed
+from current links before sending. Unlinked/inactive recipients receive nothing;
+old endpoints cannot approve, reject or receive new reminders after a relink.
+Additional approver messages and completion notifications are retried after
+failures; reminders use working hours and APPROVAL_REMIND_HOURS. A final audit
+followup advances the tracked cursor to prevent an echo.
+
+Claude take actions require both the persisted approved stage and a successful
+live GLPI check showing validation granted. A pending, rejected, cancelled, or
+unregistered Claude-policy ticket cannot be taken through the bot; API failures
+do not bypass this check. A policy marker in the GLPI content blocks orphaned
+requests if registration failed. Empty approver config does not disable the rule:
+it blocks submission of new Claude requests while other services continue.
+
+For deployment, back up SQLite through its online backup API, configuration,
+unit and code before modifying production. Do not restore an older DB wholesale
+once users have created new tickets/decisions. Rolling back to code without this
+policy after new Claude requests requires a compatible plan; otherwise keep the
+bot stopped while restoring service safely. Old approvals must not be
+reinterpreted merely because their descriptions mention Claude.

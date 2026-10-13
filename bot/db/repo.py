@@ -142,6 +142,12 @@ class Repo:
         # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         await self._ensure_column("ticket_cards", "description", "TEXT NOT NULL DEFAULT ''")
         await self._ensure_column("ticket_ratings", "glpi_pushed", "INTEGER NOT NULL DEFAULT 0")
+        await self._ensure_column(
+            "claude_approvals", "lead_approved_at", "INTEGER NOT NULL DEFAULT 0"
+        )
+        await self._ensure_column(
+            "claude_approvals", "lead_audit_done", "INTEGER NOT NULL DEFAULT 0"
+        )
         await self._migrate_ratings_to_4_point()
         await self._db.commit()
         log.info("db_connected path=%s", self._db_path)
@@ -566,6 +572,187 @@ class Repo:
             "SELECT * FROM access_approvals WHERE ticket_id = ?", (ticket_id,)
         ) as cur:
             return await cur.fetchone()
+
+    async def create_claude_approval(
+        self,
+        ticket_id: int,
+        *,
+        validation_id: int,
+        lead_glpi_id: int,
+        lead_tg_id: int,
+        lead_name: str,
+        requester_tg_id: int,
+        requester_glpi_id: int,
+        request_text: str,
+        members: list[tuple[int, int, str]],
+        now: int,
+    ) -> None:
+        """Register the entire policy atomically; no partial ordinary approval."""
+        async with self._tx() as db:
+            await db.execute(
+                "INSERT INTO access_approvals "
+                "(ticket_id,validation_id,lead_glpi_id,lead_tg_id,lead_name,requester_tg_id,"
+                "status,requested_at) VALUES (?,?,?,?,?,?,0,?)",
+                (
+                    ticket_id,
+                    validation_id,
+                    lead_glpi_id,
+                    lead_tg_id,
+                    lead_name,
+                    requester_tg_id,
+                    now,
+                ),
+            )
+            await db.execute(
+                "INSERT INTO bot_tickets (ticket_id,requester_tg_id,requester_glpi_id,"
+                "last_status,created_at) VALUES (?,?,?,1,?)",
+                (ticket_id, requester_tg_id, requester_glpi_id, now),
+            )
+            await db.execute(
+                "INSERT INTO claude_approvals (ticket_id,request_text,stage_started_at) "
+                "VALUES (?,?,?)",
+                (ticket_id, request_text, now),
+            )
+            await db.executemany(
+                "INSERT INTO claude_approval_members (ticket_id,glpi_id,tg_id,name) "
+                "VALUES (?,?,?,?)",
+                [(ticket_id, *member) for member in members],
+            )
+
+    async def get_claude_approval(self, ticket_id: int) -> aiosqlite.Row | None:
+        async with self._conn.execute(
+            "SELECT c.*,a.validation_id,a.lead_glpi_id,a.lead_tg_id,a.lead_name,"
+            "a.requester_tg_id,a.dm_message_id,a.reminded_at,a.requested_at,t.requester_glpi_id "
+            "FROM claude_approvals c JOIN access_approvals a USING(ticket_id) "
+            "JOIN bot_tickets t USING(ticket_id) "
+            "WHERE ticket_id=?",
+            (ticket_id,),
+        ) as cur:
+            return await cur.fetchone()
+
+    async def list_claude_approvals(self) -> list[aiosqlite.Row]:
+        async with self._conn.execute(
+            "SELECT ticket_id FROM claude_approvals "
+            "WHERE stage IN ('lead','extra','approve_pending','reject_pending') "
+            "OR (stage IN ('approved','rejected') AND notification_done=0)"
+        ) as cur:
+            ids = [row[0] for row in await cur.fetchall()]
+        return [await self.get_claude_approval(ticket_id) for ticket_id in ids]
+
+    async def claude_members(self, ticket_id: int) -> list[aiosqlite.Row]:
+        async with self._conn.execute(
+            "SELECT * FROM claude_approval_members WHERE ticket_id=? ORDER BY glpi_id",
+            (ticket_id,),
+        ) as cur:
+            return list(await cur.fetchall())
+
+    async def transition_claude(
+        self,
+        ticket_id: int,
+        *,
+        expected: str,
+        stage: str,
+        now: int,
+        actor_tg_id: int | None = None,
+        actor_name: str = "",
+        reason: str = "",
+    ) -> bool:
+        """Compare-and-set the stage, including competing approve/reject actions."""
+        async with self._tx() as db:
+            cur = await db.execute(
+                "UPDATE claude_approvals SET stage=?,stage_started_at=?,actor_tg_id=?,"
+                "actor_name=?,reason=?,lead_approved_at=CASE WHEN ?='extra' THEN ? "
+                "ELSE lead_approved_at END WHERE ticket_id=? AND stage=?",
+                (stage, now, actor_tg_id, actor_name, reason, stage, now, ticket_id, expected),
+            )
+            return cur.rowcount == 1
+
+    async def mark_claude_lead_audited(self, ticket_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approvals SET lead_audit_done=1 WHERE ticket_id=?", (ticket_id,)
+            )
+
+    async def mark_claude_validation_done(self, ticket_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approvals SET validation_done=1 WHERE ticket_id=?",
+                (ticket_id,),
+            )
+
+    async def finish_claude(self, ticket_id: int, *, accepted: bool) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approvals SET stage=? WHERE ticket_id=?",
+                ("approved" if accepted else "rejected", ticket_id),
+            )
+            await db.execute(
+                "UPDATE access_approvals SET status=? WHERE ticket_id=?",
+                (1 if accepted else -1, ticket_id),
+            )
+            if not accepted:
+                await db.execute(
+                    "UPDATE bot_tickets SET last_status=6,active=0 WHERE ticket_id=?",
+                    (ticket_id,),
+                )
+
+    async def mark_claude_notified(self, ticket_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approvals SET notification_done=1 WHERE ticket_id=?",
+                (ticket_id,),
+            )
+
+    async def mark_claude_audited(self, ticket_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approvals SET audit_done=1 WHERE ticket_id=?",
+                (ticket_id,),
+            )
+
+    async def refresh_claude_recipient(
+        self, ticket_id: int, glpi_id: int, tg_id: int, *, lead: bool
+    ) -> None:
+        async with self._tx() as db:
+            if lead:
+                await db.execute(
+                    "UPDATE access_approvals SET lead_tg_id=?,dm_message_id=NULL,reminded_at=0 "
+                    "WHERE ticket_id=? AND lead_glpi_id=? AND lead_tg_id<>?",
+                    (tg_id, ticket_id, glpi_id, tg_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE claude_approval_members SET tg_id=?,dm_message_id=NULL,notified_at=0 "
+                    "WHERE ticket_id=? AND glpi_id=? AND tg_id<>?",
+                    (tg_id, ticket_id, glpi_id, tg_id),
+                )
+
+    async def set_claude_member_dm(
+        self,
+        ticket_id: int,
+        glpi_id: int,
+        *,
+        message_id: int,
+        now: int,
+    ) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approval_members SET dm_message_id=?,notified_at=? "
+                "WHERE ticket_id=? AND glpi_id=?",
+                (message_id, now, ticket_id, glpi_id),
+            )
+
+    async def cancel_claude(self, ticket_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approvals SET stage='cancelled' WHERE ticket_id=? "
+                "AND stage IN ('lead','extra')",
+                (ticket_id,),
+            )
+            await db.execute(
+                "UPDATE access_approvals SET status=-2 WHERE ticket_id=? AND status=0",
+                (ticket_id,),
+            )
 
     async def pending_approvals(self) -> list[aiosqlite.Row]:
         async with self._conn.execute(

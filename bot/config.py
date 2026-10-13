@@ -77,6 +77,10 @@ class Settings(BaseSettings):
         default=None,
         description="ITILCategory id for access-request tickets (e.g. «Учетные записи»).",
     )
+    claude_approver_glpi_ids: str = Field(
+        default="",
+        description="Comma-separated GLPI user ids allowed to give Claude's second approval.",
+    )
     approval_remind_hours: float = Field(
         default=4,
         description="Re-ping a silent lead about a pending approval every N WORKING hours.",

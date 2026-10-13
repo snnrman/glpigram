@@ -969,3 +969,60 @@ def handoff_to_requester(ticket_id: int, name: str) -> str:
 
 def hist_handoff(frm: str | None, to: str) -> str:
     return f"🔄 Передано: {html.escape(frm or '—')} → {html.escape(to)}"
+
+
+# Claude access policy: no public service-choice button.
+CLAUDE_SERVICE_ASK = "Укажите точное название сервиса или ссылку на него."
+CLAUDE_APPROVERS_UNAVAILABLE = (
+    "Не удалось связаться с согласующими сервиса. Попробуйте позже или обратитесь в поддержку."
+)
+CLAUDE_CONFIRM_EXTRA = (
+    "Для Claude после одобрения лида потребуется дополнительное согласование "
+    "ответственного за сервис. Отказ окончательный."
+)
+CLAUDE_LEAD_APPROVED = (
+    "✅ Вы одобрили запрос. Теперь ожидается дополнительное согласование ответственного за Claude."
+)
+CLAUDE_TAKE_BLOCKED = "Заявка Claude пока не прошла оба согласования. Взять её в работу нельзя."
+CLAUDE_PENDING_FINISH = "Решение сохранено. Завершение в GLPI будет повторено автоматически."
+CLAUDE_REGISTRATION_FAILED = (
+    "Не удалось сохранить обязательные этапы согласования Claude. Запрос отменён."
+)
+CLAUDE_REQUESTER_FALLBACK = "Заявитель"
+
+
+def acc_service_clarified(request: str, service: str) -> str:
+    return f"{request}\n\nУточнённый сервис: {service}"
+
+
+def claude_lead_record(lead: str) -> str:
+    return (
+        f"Лид {html.escape(lead)} одобрил запрос Claude. "
+        "Ожидается дополнительное согласование сервиса."
+    )
+
+
+def claude_extra_prompt(
+    ticket_id: int,
+    lead: str,
+    request: str,
+    url: str | None,
+    requester: str = "",
+    requester_tg_id: int | None = None,
+) -> str:
+    return (
+        f"🔑 <b>Дополнительное согласование Claude {_ticket_ref(ticket_id, url)}</b>\n\n"
+        f"👤 {user_mention(requester, requester_tg_id)}\n"
+        f"Лид {html.escape(lead)} уже одобрил запрос.\n\n{html.escape(request)}\n\n"
+        "Достаточно одобрения одного ответственного. Отказ любого из них окончательный."
+    )
+
+
+def claude_final_decision(lead: str, actor: str, accepted: bool, reason: str) -> str:
+    if accepted:
+        return f"✅ Claude согласован: лид {html.escape(lead)} и {html.escape(actor)}."
+    return f"❌ Запрос Claude отклонён: {html.escape(actor)}. Причина: {html.escape(reason)}"
+
+
+def claude_completion(ticket_id: int, decision: str, url: str | None) -> str:
+    return f"Заявка {_ticket_ref(ticket_id, url)}\n{decision}"

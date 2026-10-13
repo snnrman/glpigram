@@ -30,6 +30,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from .. import texts
 from ..db.repo import LinkedUser, Repo
 from ..glpi.client import (
+    TICKET_STATUS_CLOSED,
     TICKET_STATUS_PROCESSING_ASSIGNED,
     TICKET_STATUS_SOLVED,
     VALIDATION_WAITING,
@@ -39,6 +40,7 @@ from ..glpi.client import (
 )
 from ..services import attachments, notify
 from ..services.cards import CardService
+from ..services.claude_approval import CLAUDE_POLICY_MARKER
 from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
@@ -137,6 +139,20 @@ def build_tech_actions_router(
         )
         await cb.answer()
 
+    async def _claude_blocked(ticket_id: int) -> bool:
+        policy = await repo.get_claude_approval(ticket_id) if repo is not None else None
+        if policy is None:
+            return False  # no extra API call or behaviour change for other services
+        if policy["stage"] != "approved":
+            return True
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError:
+            return True
+        return (
+            ticket is None or ticket.global_validation != 3 or ticket.status == TICKET_STATUS_CLOSED
+        )
+
     # -- Take (immediate) --------------------------------------------------
     @router.callback_query(F.data.startswith("ta:take:"))
     async def on_take(cb: CallbackQuery, link: LinkedUser, bot: Bot) -> None:
@@ -147,12 +163,30 @@ def build_tech_actions_router(
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
         ticket_id = int(cb.data.split(":")[2])
+        policy = await repo.get_claude_approval(ticket_id) if repo is not None else None
+        if policy is not None and policy["stage"] != "approved":
+            await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+            return
         # Hard gate: an access ticket awaiting the lead's approval can't be
         # taken (checked live in GLPI — global_validation is the truth).
         try:
             ticket = await client.get_ticket(ticket_id)
         except GlpiError:
-            ticket = None  # gate check is best-effort; the assign below decides
+            if policy is not None:
+                await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+                return
+            ticket = None  # ordinary access behaviour remains unchanged
+        if policy is not None and ticket is None:
+            await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+            return
+        if ticket is not None and (policy is not None or CLAUDE_POLICY_MARKER in ticket.content):
+            if (
+                policy is None
+                or ticket.global_validation != 3
+                or ticket.status == TICKET_STATUS_CLOSED
+            ):
+                await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+                return
         if ticket is not None and ticket.global_validation == VALIDATION_WAITING:
             await cb.answer(texts.TAKE_BLOCKED_AWAITING_APPROVAL, show_alert=True)
             return
@@ -233,6 +267,9 @@ def build_tech_actions_router(
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
         ticket_id = int(cb.data.split(":")[2])
+        if await _claude_blocked(ticket_id):
+            await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+            return
         await _start_dm_dialog(
             cb,
             state,
@@ -269,6 +306,9 @@ def build_tech_actions_router(
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
         ticket_id = int(cb.data.split(":")[2])
+        if await _claude_blocked(ticket_id):
+            await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+            return
         techs = await repo.list_techs()
         if not techs:
             await cb.answer(texts.HANDOFF_NO_TECHS, show_alert=True)
@@ -303,6 +343,9 @@ def build_tech_actions_router(
             return
         _, _, tid, uid = cb.data.split(":")
         ticket_id, new_glpi_id = int(tid), int(uid)
+        if await _claude_blocked(ticket_id):
+            await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+            return
         target = await repo.get_by_glpi(new_glpi_id) if repo is not None else None
         if target is None:
             await cb.answer(texts.HANDOFF_TARGET_GONE, show_alert=True)
@@ -456,6 +499,9 @@ def build_tech_actions_router(
     ) -> None:
         data = await state.get_data()
         ticket_id = data["ticket_id"]
+        if await _claude_blocked(ticket_id):
+            await message.answer(texts.CLAUDE_TAKE_BLOCKED)
+            return
         solution = message.text.strip()
         # GLPI records the solution as the service account; name the tech in it.
         try:

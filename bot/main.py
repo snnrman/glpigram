@@ -35,6 +35,7 @@ from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
 from .schedule import WorkSchedule
 from .services.cards import CardService
+from .services.claude_approval import ClaudeApprovalService
 from .services.sync import SyncService
 
 log = logging.getLogger(__name__)
@@ -104,12 +105,23 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
     lead_directory = build_lead_directory(
         client, repo, settings.lead_login_list, settings.link_recheck_ttl
     )
+    claude = ClaudeApprovalService(
+        client,
+        repo,
+        approver_ids=settings.claude_approver_glpi_ids,
+        front_base=settings.glpi_front_base,
+        cards=cards,
+        schedule=schedule,
+        reminder_hours=settings.approval_remind_hours,
+    )
+    dp["claude_approvals"] = claude
     access = build_access_router(
         client,
         repo,
         lead_directory,
         ticket_front_base=settings.glpi_front_base,
         access_category_id=settings.access_category_id,
+        claude=claude,
         cards=cards,
     )
     business = build_new_ticket_router(
@@ -171,6 +183,7 @@ async def _run(settings: Settings) -> None:
             unassigned_remind_hours=settings.unassigned_remind_hours,
             remind_interval_hours=settings.remind_interval_hours,
             approval_remind_hours=settings.approval_remind_hours,
+            claude_approvals=dp["claude_approvals"],
         )
         sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
         sync_task.add_done_callback(_sync_task_died)

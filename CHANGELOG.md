@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New Claude access requests require lead approval followed by one designated
+  service approver; rejection is final. Other services retain lead-only approval.
+- Conservative Claude alias recognition with neutral text clarification instead
+  of a public Claude button; stages, recipients, decisions and retries persist.
+- `CLAUDE_APPROVER_GLPI_IDS`; Claude take actions require both approvals, with
+  protection against GLPI check failures and stale callbacks.
+
+
+### Added
+
 - **Lead approval for access requests («💳 Платные сервисы», formerly «🔑 Доступ»).** A new main-menu button
   for everyone. It first shows a notice that this is for *new* access only
   (broken access → a regular ticket), then asks a single question — “What do

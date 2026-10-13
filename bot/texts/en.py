@@ -955,3 +955,59 @@ def handoff_to_requester(ticket_id: int, name: str) -> str:
 
 def hist_handoff(frm: str | None, to: str) -> str:
     return f"🔄 Handed over: {html.escape(frm or '—')} → {html.escape(to)}"
+
+
+# Claude access policy: no public service-choice button.
+CLAUDE_SERVICE_ASK = "Please specify the exact service name or its website link."
+CLAUDE_APPROVERS_UNAVAILABLE = (
+    "The service approvers are unavailable. Try again later or contact support."
+)
+CLAUDE_CONFIRM_EXTRA = (
+    "Claude needs an additional service approval after your lead approves. A rejection is final."
+)
+CLAUDE_LEAD_APPROVED = (
+    "✅ You approved the request. It is now waiting for the additional Claude service approval."
+)
+CLAUDE_TAKE_BLOCKED = "This Claude request has not completed both approvals and cannot be taken."
+CLAUDE_PENDING_FINISH = "Your decision is saved. Completion in GLPI will be retried automatically."
+CLAUDE_REGISTRATION_FAILED = (
+    "The required Claude approval stages could not be saved. The request was cancelled."
+)
+CLAUDE_REQUESTER_FALLBACK = "Requester"
+
+
+def acc_service_clarified(request: str, service: str) -> str:
+    return f"{request}\n\nClarified service: {service}"
+
+
+def claude_lead_record(lead: str) -> str:
+    return (
+        f"Lead {html.escape(lead)} approved the Claude request. "
+        "Additional service approval is pending."
+    )
+
+
+def claude_extra_prompt(
+    ticket_id: int,
+    lead: str,
+    request: str,
+    url: str | None,
+    requester: str = "",
+    requester_tg_id: int | None = None,
+) -> str:
+    return (
+        f"🔑 <b>Additional Claude approval {_ticket_ref(ticket_id, url)}</b>\n\n"
+        f"👤 {user_mention(requester, requester_tg_id)}\n"
+        f"Lead {html.escape(lead)} has already approved.\n\n{html.escape(request)}\n\n"
+        "Approval from either service approver is sufficient. A rejection from either is final."
+    )
+
+
+def claude_final_decision(lead: str, actor: str, accepted: bool, reason: str) -> str:
+    if accepted:
+        return f"✅ Claude approved: lead {html.escape(lead)} and {html.escape(actor)}."
+    return f"❌ Claude request rejected by {html.escape(actor)}. Reason: {html.escape(reason)}"
+
+
+def claude_completion(ticket_id: int, decision: str, url: str | None) -> str:
+    return f"Ticket {_ticket_ref(ticket_id, url)}\n{decision}"

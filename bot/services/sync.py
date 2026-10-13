@@ -41,6 +41,7 @@ from ..glpi.client import (
 from ..schedule import WorkSchedule
 from . import notify
 from .cards import CardService
+from .claude_approval import ClaudeApprovalService
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class SyncService:
         unassigned_remind_hours: float = 2,
         remind_interval_hours: float = 3,
         approval_remind_hours: float = 4,
+        claude_approvals: ClaudeApprovalService | None = None,
     ) -> None:
         self._bot = bot
         self._client = client
@@ -78,6 +80,7 @@ class SyncService:
         self._unassigned_after = unassigned_remind_hours * 3600
         self._remind_interval = remind_interval_hours * 3600
         self._approval_remind = approval_remind_hours * 3600
+        self._claude_approvals = claude_approvals
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -113,6 +116,8 @@ class SyncService:
     _RATING_PUSH_MAX_AGE = 3 * 86400
 
     async def tick(self) -> None:
+        if self._claude_approvals is not None:
+            await self._claude_approvals.tick(self._bot)
         # Deliver anything queued overnight first, once work has resumed.
         await self._flush_deferred_if_working()
         # One GLPI page feeds both the announcer and the unassigned reminder.
@@ -134,6 +139,8 @@ class SyncService:
         if not self._schedule.is_working(now):
             return
         for row in await self._repo.pending_approvals():
+            if await self._repo.get_claude_approval(row["ticket_id"]) is not None:
+                continue  # both stages/reminders belong to the Claude coordinator
             ticket_id = row["ticket_id"]
             anchor = max(row["requested_at"], row["reminded_at"])
             waited = self._schedule.working_seconds_between(

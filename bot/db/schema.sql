@@ -139,3 +139,28 @@ CREATE TABLE IF NOT EXISTS user_leads (
     glpi_users_id INTEGER PRIMARY KEY,
     lead_glpi_id  INTEGER NOT NULL
 );
+
+-- Additive policy state: old access_approvals rows keep their original flow.
+CREATE TABLE IF NOT EXISTS claude_approvals (
+    ticket_id INTEGER PRIMARY KEY,
+    request_text TEXT NOT NULL,
+    stage TEXT NOT NULL DEFAULT 'lead',
+    stage_started_at INTEGER NOT NULL,
+    lead_approved_at INTEGER NOT NULL DEFAULT 0,
+    lead_audit_done INTEGER NOT NULL DEFAULT 0,
+    actor_tg_id INTEGER,
+    actor_name TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    validation_done INTEGER NOT NULL DEFAULT 0,
+    audit_done INTEGER NOT NULL DEFAULT 0,
+    notification_done INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS claude_approval_members (
+    ticket_id INTEGER NOT NULL,
+    glpi_id INTEGER NOT NULL,
+    tg_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    dm_message_id INTEGER,
+    notified_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (ticket_id, glpi_id)
+);

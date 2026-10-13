@@ -16,6 +16,7 @@ against GLPI + bot links with a TTL cache — composition changes need only an
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -37,7 +38,9 @@ from ..cache import TTLValue
 from ..db.repo import LinkedUser, Repo
 from ..glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, GlpiClient, GlpiError
 from ..services import notify
+from ..services.access_target import classify_access_target
 from ..services.cards import CardService
+from ..services.claude_approval import CLAUDE_POLICY_MARKER, ClaudeApprovalService
 from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
@@ -49,6 +52,7 @@ class AccessRequest(StatesGroup):
     # screen (one tap when the org map knows the lead).
     intro = State()
     entering_request = State()
+    clarifying_service = State()
     choosing_lead = State()
     confirming = State()
 
@@ -149,9 +153,11 @@ def build_access_router(
     ticket_front_base: str | None = None,
     access_category_id: int | None = None,
     cards: CardService | None = None,
+    claude: ClaudeApprovalService | None = None,
 ) -> Router:
     router = Router(name="access")
     router.message.filter(F.chat.type == "private")
+    send_locks: dict[int, asyncio.Lock] = {}
 
     def _url(ticket_id: int) -> str | None:
         if not ticket_front_base:
@@ -200,6 +206,8 @@ def build_access_router(
         data = await state.get_data()
         await state.set_state(AccessRequest.confirming)
         text = texts.acc_confirm_summary(data["request"], lead.name)
+        if data.get("service") == "claude":
+            text += "\n\n" + texts.CLAUDE_CONFIRM_EXTRA
         if edit:
             await notify.safe_edit(target, text, reply_markup=_confirm_kb())
         else:
@@ -207,7 +215,35 @@ def build_access_router(
 
     @router.message(AccessRequest.entering_request, F.text)
     async def on_request(message: Message, state: FSMContext, link: LinkedUser) -> None:
-        await state.update_data(request=message.text.strip())
+        request = message.text.strip()
+        service = classify_access_target(request)
+        await state.update_data(request=request, service=service)
+        if service == "unclear":
+            await state.set_state(AccessRequest.clarifying_service)
+            await message.answer(texts.CLAUDE_SERVICE_ASK, reply_markup=_cancel_kb())
+            return
+        await _continue_request(message, state, link)
+
+    @router.message(AccessRequest.clarifying_service, F.text)
+    async def on_service(message: Message, state: FSMContext, link: LinkedUser) -> None:
+        target = message.text.strip()
+        service = classify_access_target(target)
+        if service == "unclear" or target.casefold() in {
+            "другой",
+            "другое",
+            "не знаю",
+            "хз",
+            "other",
+        }:
+            await message.answer(texts.CLAUDE_SERVICE_ASK, reply_markup=_cancel_kb())
+            return
+        data = await state.get_data()
+        await state.update_data(
+            service=service, request=texts.acc_service_clarified(data["request"], target)
+        )
+        await _continue_request(message, state, link)
+
+    async def _continue_request(message: Message, state: FSMContext, link: LinkedUser) -> None:
         try:
             leads = await _pickable_leads(message.from_user.id)
         except GlpiError as exc:
@@ -259,15 +295,38 @@ def build_access_router(
 
     @router.callback_query(AccessRequest.confirming, F.data == "ac:send")
     async def on_send(cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot) -> None:
+        async with send_locks.setdefault(cb.from_user.id, asyncio.Lock()):
+            if await state.get_state() != AccessRequest.confirming.state:
+                await cb.answer(texts.STALE_BUTTON, show_alert=True)
+                return
+            await _send_request(cb, state, link, bot)
+
+    async def _send_request(
+        cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
         data = await state.get_data()
+        is_claude = data.get("service") == "claude"
+        members = []
+        if is_claude:
+            try:
+                members = await claude.available_members(cb.from_user.id) if claude else []
+            except GlpiError:
+                pass
+            if not members:
+                await cb.answer(texts.CLAUDE_APPROVERS_UNAVAILABLE, show_alert=True)
+                return
         await notify.safe_edit(cb, texts.NEW_CREATING)
         await cb.answer()
+        ticket_id = None
         try:
+            content = texts.acc_ticket_content(
+                link.display_name, data["request"], data["lead_name"]
+            )
+            if is_claude:
+                content += "\n\n" + CLAUDE_POLICY_MARKER
             ticket_id = await client.create_ticket(
                 name=texts.acc_ticket_title(data["request"]),
-                content=texts.acc_ticket_content(
-                    link.display_name, data["request"], data["lead_name"]
-                ),
+                content=content,
                 urgency=3,
                 itilcategories_id=access_category_id,
                 requester_users_id=link.glpi_users_id,
@@ -278,46 +337,77 @@ def build_access_router(
             )
         except GlpiError as exc:
             log.exception("access_create_failed error=%s raw=%s", exc, exc.raw)
+            if is_claude and ticket_id is not None:
+                try:
+                    await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
+                except GlpiError:
+                    log.error("claude_registration_close_failed ticket=%s", ticket_id)
             await cb.message.answer(texts.GLPI_ERROR)
             await state.clear()
             return
         now = int(time.time())
         try:
-            await repo.track_ticket(
-                ticket_id=ticket_id,
-                requester_tg_id=cb.from_user.id,
-                requester_glpi_id=link.glpi_users_id,
-                status=TICKET_STATUS_NEW,
-                now=now,
-            )
-            await repo.create_approval(
-                ticket_id,
-                validation_id=validation_id,
-                lead_glpi_id=data["lead_glpi_id"],
-                lead_tg_id=data["lead_tg_id"],
-                lead_name=data["lead_name"],
-                requester_tg_id=cb.from_user.id,
-                now=now,
-            )
-        except Exception:  # noqa: BLE001 - bookkeeping must not fail the request
+            if is_claude:
+                await repo.create_claude_approval(
+                    ticket_id,
+                    validation_id=validation_id,
+                    lead_glpi_id=data["lead_glpi_id"],
+                    lead_tg_id=data["lead_tg_id"],
+                    lead_name=data["lead_name"],
+                    requester_tg_id=cb.from_user.id,
+                    requester_glpi_id=link.glpi_users_id,
+                    request_text=data["request"],
+                    members=members,
+                    now=now,
+                )
+            else:
+                await repo.track_ticket(
+                    ticket_id=ticket_id,
+                    requester_tg_id=cb.from_user.id,
+                    requester_glpi_id=link.glpi_users_id,
+                    status=TICKET_STATUS_NEW,
+                    now=now,
+                )
+                await repo.create_approval(
+                    ticket_id,
+                    validation_id=validation_id,
+                    lead_glpi_id=data["lead_glpi_id"],
+                    lead_tg_id=data["lead_tg_id"],
+                    lead_name=data["lead_name"],
+                    requester_tg_id=cb.from_user.id,
+                    now=now,
+                )
+        except Exception:
             log.exception("access_bookkeeping_failed ticket=%s", ticket_id)
+            if is_claude:
+                try:
+                    await client.answer_validation(
+                        validation_id, accepted=False, comment=texts.CLAUDE_REGISTRATION_FAILED
+                    )
+                    await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
+                except GlpiError:
+                    log.error("claude_registration_close_failed ticket=%s", ticket_id)
+                await state.clear()
+                await cb.message.answer(texts.GLPI_ERROR)
+                return
         await state.clear()
-
-        # DM the lead right away (personal message — not gated by quiet hours).
-        msg = await notify.send_text(
-            bot,
-            data["lead_tg_id"],
-            texts.acc_lead_prompt(
-                ticket_id=ticket_id,
-                requester=link.display_name,
-                request=data["request"],
-                url=_url(ticket_id),
-                requester_tg_id=link.tg_id,
-            ),
-            reply_markup=approval_kb(ticket_id),
-        )
-        if msg:
-            await repo.set_approval_dm(ticket_id, msg.message_id)
+        if is_claude:
+            await claude.send_pending(bot, ticket_id)
+        else:
+            msg = await notify.send_text(
+                bot,
+                data["lead_tg_id"],
+                texts.acc_lead_prompt(
+                    ticket_id=ticket_id,
+                    requester=link.display_name,
+                    request=data["request"],
+                    url=_url(ticket_id),
+                    requester_tg_id=link.tg_id,
+                ),
+                reply_markup=approval_kb(ticket_id),
+            )
+            if msg:
+                await repo.set_approval_dm(ticket_id, msg.message_id)
         await cb.message.answer(
             texts.acc_sent(ticket_id, data["lead_name"], _url(ticket_id)),
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
@@ -334,6 +424,9 @@ def build_access_router(
     @router.callback_query(F.data.startswith("ap:ok:"))
     async def on_approve(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         ticket_id = int(cb.data.rsplit(":", 1)[1])
+        if await repo.get_claude_approval(ticket_id) is not None:
+            await _claude_approve(cb, state, bot, ticket_id, "lead")
+            return
         row = await _own_pending(cb, ticket_id)
         if row is None:
             return
@@ -403,13 +496,50 @@ def build_access_router(
             )
         await cb.answer()
 
+    async def _claude_approve(cb, state, bot, ticket_id, role):
+        result = await claude.approve(bot, ticket_id, role, cb.from_user.id) if claude else "stale"
+        if result == "stale":
+            await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
+            return
+        if (
+            await state.get_state() == LeadReject.entering_reason.state
+            and (await state.get_data()).get("reject_ticket_id") == ticket_id
+        ):
+            await state.clear()
+        if result == "lead_approved":
+            await notify.safe_edit(cb, texts.CLAUDE_LEAD_APPROVED)
+        await cb.answer(texts.CLAUDE_PENDING_FINISH if result == "retry" else texts.BTN_ACC_APPROVE)
+
+    @router.callback_query(F.data.startswith("ce:ok:"))
+    async def on_claude_extra_approve(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+        await _claude_approve(cb, state, bot, int(cb.data.rsplit(":", 1)[1]), "extra")
+
+    @router.callback_query(F.data.startswith("ce:no:"))
+    async def on_claude_extra_reject(cb: CallbackQuery, state: FSMContext) -> None:
+        await _claude_reject_prompt(cb, state, int(cb.data.rsplit(":", 1)[1]), "extra")
+
+    async def _claude_reject_prompt(cb, state, ticket_id, role):
+        if claude is None or await claude.authorise(ticket_id, role, cb.from_user.id) is None:
+            await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
+            return
+        await state.set_state(LeadReject.entering_reason)
+        await state.update_data(reject_ticket_id=ticket_id, reject_role=role)
+        await cb.message.answer(
+            texts.ACC_ASK_REJECT_REASON, reply_markup=notify.dialog_cancel_keyboard()
+        )
+        await _prompt_reject_reason(cb.message, state, ticket_id)
+        await cb.answer()
+
     @router.callback_query(F.data.startswith("ap:no:"))
     async def on_reject(cb: CallbackQuery, state: FSMContext) -> None:
         ticket_id = int(cb.data.rsplit(":", 1)[1])
+        if await repo.get_claude_approval(ticket_id) is not None:
+            await _claude_reject_prompt(cb, state, ticket_id, "lead")
+            return
         if await _own_pending(cb, ticket_id) is None:
             return
         await state.set_state(LeadReject.entering_reason)
-        await state.update_data(reject_ticket_id=ticket_id)
+        await state.update_data(reject_ticket_id=ticket_id, reject_role="lead")
         await cb.message.answer(
             texts.ACC_ASK_REJECT_REASON, reply_markup=notify.dialog_cancel_keyboard()
         )
@@ -423,7 +553,20 @@ def build_access_router(
         data = await state.get_data()
         ticket_id = data["reject_ticket_id"]
         row = await repo.get_approval(ticket_id)
-        if row is None or row["status"] != 0 or row["lead_tg_id"] != message.from_user.id:
+        claude_row = await repo.get_claude_approval(ticket_id)
+        if claude_row is not None:
+            valid = (
+                claude is not None
+                and await claude.authorise(
+                    ticket_id, data.get("reject_role", "lead"), message.from_user.id
+                )
+                is not None
+            )
+        else:
+            valid = (
+                row is not None and row["status"] == 0 and row["lead_tg_id"] == message.from_user.id
+            )
+        if not valid:
             await state.clear()
             await message.answer(
                 texts.ACC_ANSWERED_STALE, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
@@ -439,6 +582,24 @@ def build_access_router(
         if not reason:
             await message.answer(texts.ACC_REJECT_REASON_REQUIRED)
             await _prompt_reject_reason(message, state, ticket_id)
+            return
+        if claude_row is not None:
+            result = await claude.reject(
+                bot, ticket_id, data.get("reject_role", "lead"), message.from_user.id, reason
+            )
+            await state.clear()
+            message_text = (
+                texts.ACC_ANSWERED_STALE
+                if result == "stale"
+                else texts.CLAUDE_PENDING_FINISH
+                if result == "retry"
+                else texts.claude_final_decision(
+                    claude_row["lead_name"], link.display_name, False, reason
+                )
+            )
+            await message.answer(
+                message_text, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
+            )
             return
         lead = row["lead_name"]
         try:
