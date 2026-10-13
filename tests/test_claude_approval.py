@@ -81,6 +81,13 @@ async def test_lead_approval_waits_for_extra_and_cannot_be_taken(policy):
     svc, client, repo, _ = policy
     bot = FakeBot()
     await _to_extra(svc, bot, client, repo)
+    notices = [text for chat, text, _ in bot.sent if chat == REQUESTER]
+    assert len(notices) == 1
+    assert "Lead" in notices[0]
+    assert "Extra A" in notices[0] and "Extra B" in notices[0]
+    bot.sent.clear()
+    await svc.tick(bot)
+    assert not any(chat == REQUESTER for chat, _, _ in bot.sent)
     assert client.set_ticket_status.await_count == 0
     assert (await repo.get_approval(TICKET))["status"] == 0
     # The tech action gate permits only the terminal approved stage.

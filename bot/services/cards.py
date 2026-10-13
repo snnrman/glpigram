@@ -173,6 +173,7 @@ class CardService:
             attachments_count=card.attachments_count,
             history=history,
             assignee=taken_by or None,
+            approval_label=await self._approval_label(card.ticket_id),
         )
         try:
             await bot.edit_message_text(
@@ -183,6 +184,18 @@ class CardService:
             )
         except Exception as exc:  # noqa: BLE001 - flood/48h/deleted: next event self-heals
             log.warning("card_edit_failed ticket=%s error=%s", card.ticket_id, exc)
+
+    async def _approval_label(self, ticket_id: int) -> str | None:
+        """Render a Claude workflow label from its saved approver snapshot."""
+        row = await self._repo.get_claude_approval(ticket_id)
+        if row is None:
+            return None
+        members = await self._repo.claude_members(ticket_id)
+        return texts.claude_card_stage(
+            row["stage"],
+            row["lead_name"],
+            [member["name"] for member in members],
+        )
 
     def _keyboard(self, ticket_id: int, status: int):
         """Buttons follow the state (ITIL cycle):

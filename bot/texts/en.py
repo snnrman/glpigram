@@ -542,6 +542,7 @@ def description_block(content: str | None) -> str:
     """
     if not content:
         return ""
+    content = content.replace("[Claude: lead + designated approver]", "")
     cleaned = clean_glpi_text(content, limit=DESCRIPTION_LIMIT)
     if not cleaned:
         return ""
@@ -574,6 +575,7 @@ def notify_new_ticket(
     assignee: str | None = None,
     description: str | None = None,
     awaiting_approval: bool = False,
+    approval_label: str | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title, the description snippet, author, then a named link instead
@@ -583,6 +585,8 @@ def notify_new_ticket(
     head = f"🆕 <b>Ticket #{ticket_id}</b>"
     if awaiting_approval:
         head += f"\n{CARD_AWAITING_APPROVAL}"
+    if approval_label:
+        head += f"\n{approval_label}"
     if urgency is not None:
         head += f"\n{urgency_card_line(urgency)}"
     if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)
@@ -983,12 +987,46 @@ def acc_service_clarified(request: str, service: str) -> str:
     return f"{request}\n\nClarified service: {service}"
 
 
-def claude_lead_record(lead: str, covers_service: bool = False) -> str:
+def claude_lead_record(
+    lead: str, covers_service: bool = False, extra_approvers: list[str] | None = None
+) -> str:
     if covers_service:
         return f"Lead {html.escape(lead)} approved Claude. This also covers the service approval."
+    names = [html.escape(name) for name in (extra_approvers or [])]
+    waiting = (
+        f"Awaiting approval from: {' or '.join(names)}."
+        if names
+        else "Additional service approval is pending."
+    )
+    return f"Lead {html.escape(lead)} approved the Claude request. {waiting}"
+
+
+def claude_card_stage(stage: str, lead: str, approvers: list[str] | None = None) -> str:
+    safe_lead = html.escape(lead)
+    names = [html.escape(name) for name in (approvers or [])]
+    if stage == "lead":
+        return f"⏳ Awaiting lead approval: {safe_lead}"
+    if stage == "extra":
+        approver_names = " or ".join(names) or "service approver"
+        return f"⏳ Awaiting approval from: {approver_names}"
+    if stage in ("approve_pending", "reject_pending"):
+        return "⏳ Decision recorded; Claude approval is being finalised"
+    if stage == "approved":
+        return "✅ Claude approved"
+    if stage == "rejected":
+        return "⛔ Claude request rejected"
+    if stage == "cancelled":
+        return "⚪ Claude approval cancelled"
+    return ""
+
+
+def claude_requester_waiting(
+    ticket_id: int, lead: str, approvers: list[str], url: str | None
+) -> str:
+    names = " or ".join(html.escape(name) for name in approvers) or "service approver"
     return (
-        f"Lead {html.escape(lead)} approved the Claude request. "
-        "Additional service approval is pending."
+        f"⏳ Lead {html.escape(lead)} approved ticket {_ticket_ref(ticket_id, url)}. "
+        f"It is now awaiting approval from: {names}. One approval is sufficient."
     )
 
 

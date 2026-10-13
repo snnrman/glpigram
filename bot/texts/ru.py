@@ -557,6 +557,7 @@ def description_block(content: str | None) -> str:
     """
     if not content:
         return ""
+    content = content.replace("[Claude: lead + designated approver]", "")
     cleaned = clean_glpi_text(content, limit=DESCRIPTION_LIMIT)
     if not cleaned:
         return ""
@@ -589,6 +590,7 @@ def notify_new_ticket(
     assignee: str | None = None,
     description: str | None = None,
     awaiting_approval: bool = False,
+    approval_label: str | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title, the description snippet, author, then a named link instead
@@ -598,6 +600,8 @@ def notify_new_ticket(
     head = f"🆕 <b>Заявка №{ticket_id}</b>"
     if awaiting_approval:
         head += f"\n{CARD_AWAITING_APPROVAL}"
+    if approval_label:
+        head += f"\n{approval_label}"
     if urgency is not None:
         head += f"\n{urgency_card_line(urgency)}"
     if status and status != 1:  # 1 = New (TICKET_STATUS_NEW)
@@ -998,15 +1002,54 @@ def acc_service_clarified(request: str, service: str) -> str:
     return f"{request}\n\nУточнённый сервис: {service}"
 
 
-def claude_lead_record(lead: str, covers_service: bool = False) -> str:
+def claude_lead_record(
+    lead: str, covers_service: bool = False, extra_approvers: list[str] | None = None
+) -> str:
     if covers_service:
         return (
             f"Лид {html.escape(lead)} согласовал Claude. "
             "Его решение покрывает согласование сервиса."
         )
+    names = [html.escape(name) for name in (extra_approvers or [])]
+    waiting = (
+        f"Ожидается согласование: {' или '.join(names)}."
+        if names
+        else "Ожидается дополнительное согласование сервиса."
+    )
+    return f"Лид {html.escape(lead)} одобрил запрос Claude. {waiting}"
+
+
+def claude_card_stage(
+    stage: str,
+    lead: str,
+    approvers: list[str] | None = None,
+) -> str:
+    safe_lead = html.escape(lead)
+    names = [html.escape(name) for name in (approvers or [])]
+    if stage == "lead":
+        return f"⏳ Ждёт согласования лида: {safe_lead}"
+    if stage == "extra":
+        approver_names = " или ".join(names) or "ответственный за сервис"
+        return f"⏳ Ожидается согласование: {approver_names}"
+    if stage in ("approve_pending", "reject_pending"):
+        return "⏳ Решение принято; завершается обработка согласования Claude"
+    if stage == "approved":
+        return "✅ Claude согласован"
+    if stage == "rejected":
+        return "⛔ Запрос Claude отклонён"
+    if stage == "cancelled":
+        return "⚪ Согласование Claude отменено"
+    return ""
+
+
+def claude_requester_waiting(
+    ticket_id: int, lead: str, approvers: list[str], url: str | None
+) -> str:
+    names = " или ".join(html.escape(name) for name in approvers) or "ответственный за сервис"
     return (
-        f"Лид {html.escape(lead)} одобрил запрос Claude. "
-        "Ожидается дополнительное согласование сервиса."
+        f"⏳ Лид {html.escape(lead)} одобрил заявку {_ticket_ref(ticket_id, url)}. "
+        f"Теперь ожидается согласование: {names}. "
+        "Достаточно одного одобрения."
     )
 
 

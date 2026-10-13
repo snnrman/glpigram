@@ -1036,3 +1036,31 @@ async def test_ratings_migrate_from_3_to_4_point_scale_once(tmp_path):
     await r.connect()  # second connect: flag set, nothing moves again
     assert await r.rating_summary() == {1: 1, 3: 1, 4: 1}
     await r.close()
+
+
+async def test_new_claude_card_uses_saved_extra_stage_even_when_glpi_waits(repo):
+    bot = FakeBot()
+    ticket = _ticket(2)
+    ticket.global_validation = 2
+    ticket.content = "Access [Claude: lead + designated approver]"
+    client = FakeClient(recent=[ticket])
+    await repo.set_cursor("last_ticket_id", 1)
+    await repo.create_claude_approval(
+        2,
+        validation_id=5,
+        lead_glpi_id=19,
+        lead_tg_id=300,
+        lead_name="Lead",
+        requester_tg_id=777,
+        requester_glpi_id=8,
+        request_text="Claude",
+        members=[(82, 100, "Extra A"), (54, 101, "Extra B")],
+        now=0,
+    )
+    await repo.transition_claude(2, expected="lead", stage="extra", now=1)
+    svc = _service(bot, client, repo)
+    await svc._poll_new_tickets()
+    text = bot.sent[0][1]
+    assert "Extra A" in text and "Extra B" in text
+    assert texts.CARD_AWAITING_APPROVAL not in text
+    assert "[Claude: lead + designated approver]" not in text

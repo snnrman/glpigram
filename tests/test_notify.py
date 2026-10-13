@@ -45,6 +45,36 @@ async def test_send_waits_out_one_flood_limit(monkeypatch):
     assert bot.sent == 1
 
 
+async def test_initial_claude_card_accepts_saved_approval_label():
+    from bot.glpi.models import Ticket
+
+    bot = SeqBot([None])
+    bot.messages = []
+    original = bot.send_message
+
+    async def capture(chat_id, text, **kwargs):
+        bot.messages.append(text)
+        return await original(chat_id, text, **kwargs)
+
+    bot.send_message = capture
+    await notify.notify_new_ticket(
+        bot,
+        1,
+        Ticket(
+            id=7,
+            name="Claude",
+            content="body [Claude: lead + designated approver]",
+            status=1,
+            urgency=3,
+        ),
+        None,
+        approval_label="⏳ Awaiting lead approval: Lead",
+    )
+    assert "Awaiting lead approval: Lead" in bot.messages[0]
+    assert "[Claude: lead + designated approver]" not in bot.messages[0]
+    assert "body" in bot.messages[0]
+
+
 async def test_send_gives_up_on_repeated_flood(monkeypatch):
     monkeypatch.setattr(notify.asyncio, "sleep", AsyncMock())
     bot = SeqBot([_retry_after(7), _retry_after(7)])

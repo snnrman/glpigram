@@ -216,6 +216,13 @@ class SyncService:
             return True  # nowhere to send is not a delivery failure
         name, tg_id = await self._requester_card_info(ticket.id)
         docs = await self._ticket_documents(ticket.id)
+        workflow = await self._repo.get_claude_approval(ticket.id)
+        approval_label = None
+        if workflow is not None:
+            members = await self._repo.claude_members(ticket.id)
+            approval_label = texts.claude_card_stage(
+                workflow["stage"], workflow["lead_name"], [m["name"] for m in members]
+            )
         msg = await notify.notify_new_ticket(
             self._bot,
             self._tech_chat,
@@ -224,6 +231,7 @@ class SyncService:
             requester_name=name,
             requester_tg_id=tg_id,
             attachments_count=len(docs),
+            approval_label=approval_label,
         )
         sent = msg is not None
         if sent:

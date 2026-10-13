@@ -469,3 +469,8 @@ once users have created new tickets/decisions. Rolling back to code without this
 policy after new Claude requests requires a compatible plan; otherwise keep the
 bot stopped while restoring service safely. Old approvals must not be
 reinterpreted merely because their descriptions mention Claude.
+
+Claude card presentation reads the saved workflow stage and approver snapshot.
+The GLPI policy marker remains stored for fail-closed checks, but is hidden in
+Telegram descriptions. Lead-to-service progression names the eligible approvers
+in the card/audit and sends the requester a best-effort informational notice.

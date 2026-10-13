@@ -189,6 +189,83 @@ async def test_card_rerender_preserves_description(repo):
     assert "принтер не печатает" in text and "<p>" not in text
 
 
+async def test_claude_card_reads_saved_stage_and_approver_snapshot(repo):
+    cards, bot = _service(repo), FakeBot()
+    await repo.create_claude_approval(
+        TICKET,
+        validation_id=9,
+        lead_glpi_id=10,
+        lead_tg_id=11,
+        lead_name="Лид",
+        requester_tg_id=555,
+        requester_glpi_id=12,
+        request_text="нужен Claude",
+        members=[(21, 31, "Анна"), (22, 32, "Борис")],
+        now=0,
+    )
+    ticket = Ticket(
+        id=TICKET,
+        name="Claude",
+        content="Описание [Claude: lead + designated approver]",
+        status=1,
+        urgency=3,
+    )
+    await cards.register(
+        ticket,
+        chat_id=CHAT,
+        message_id=MSG_ID,
+        requester_name="Олег",
+        requester_tg_id=555,
+        attachments_count=0,
+        now=0,
+    )
+    await cards.record_event(bot, TICKET, "обновление")
+    rendered = bot.edits[-1][2]
+    assert "Ждёт согласования лида: Лид" in rendered
+    assert "[Claude: lead + designated approver]" not in rendered
+    assert "Описание" in rendered
+
+    await repo._conn.execute(
+        "UPDATE claude_approvals SET stage='extra' WHERE ticket_id=?", (TICKET,)
+    )
+    await cards.record_event(bot, TICKET, "этап обновлён")
+    rendered = bot.edits[-1][2]
+    assert "Анна или Борис" in rendered
+    assert "⏳" in rendered
+
+    await repo._conn.execute(
+        "UPDATE claude_approvals SET stage='approved',lead_covers_service=1 WHERE ticket_id=?",
+        (TICKET,),
+    )
+    await cards.record_event(bot, TICKET, "готово")
+    assert "✅ Claude согласован" in bot.edits[-1][2]
+    assert "Ждёт согласования" not in bot.edits[-1][2]
+
+    await repo._conn.execute(
+        "UPDATE claude_approvals SET stage='rejected' WHERE ticket_id=?", (TICKET,)
+    )
+    await cards.record_event(bot, TICKET, "отклонено")
+    assert "⛔ Запрос Claude отклонён" in bot.edits[-1][2]
+    assert "⏳" not in bot.edits[-1][2]
+
+
+def test_claude_approval_names_are_escaped_and_ordinary_cards_stay_unchanged():
+    ordinary = texts.notify_new_ticket(
+        ticket_id=7, title="обычная", description="описание", status=1, url=None
+    )
+    assert "Claude" not in ordinary and "Awaiting" not in ordinary
+    assert "[Claude: lead + designated approver]" not in texts.description_block(
+        "Описание [Claude: lead + designated approver]"
+    )
+    label = texts.claude_card_stage("extra", "Лид <тест>", ["Анна & Борис"])
+    assert "Лид &lt;тест&gt;" in texts.claude_card_stage("lead", "Лид <тест>")
+    assert "Анна &amp; Борис" in label
+    waiting = texts.claude_requester_waiting(7, "Лид", ["Анна", "Борис"], None)
+    assert "Лид Лид одобрил заявку" in waiting
+    assert "Анна или Борис" in waiting
+    assert "Достаточно одного одобрения" in waiting
+
+
 # --- events that arrive before the card is sent are not lost ------------------
 async def test_event_before_card_is_buffered_and_applied_on_register(repo):
     """Real case (#359): the lead approved 13 s after creation, the sync loop

@@ -123,6 +123,7 @@ async def notify_new_ticket(
     attachments_count: int = 0,
     history: list[str] | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
+    approval_label: str | None = None,
 ) -> Message | None:
     return await _send(
         bot,
@@ -138,7 +139,8 @@ async def notify_new_ticket(
             requester_tg_id=requester_tg_id,
             attachments_count=attachments_count,
             history=history,
-            awaiting_approval=ticket.global_validation == 2,  # VALIDATION_WAITING
+            awaiting_approval=(ticket.global_validation == 2 and approval_label is None),
+            approval_label=approval_label,
         ),
         reply_markup=reply_markup if reply_markup is not None else tech_ticket_keyboard(ticket.id),
     )

@@ -205,14 +205,28 @@ class ClaudeApprovalService:
     async def _ensure_lead_audit(self, bot: Bot, row) -> bool:
         if row["lead_approved_at"] == 0 or row["lead_audit_done"]:
             return True
+        members = await self.repo.claude_members(row["ticket_id"])
+        approvers = [m["name"] for m in members]
         note = texts.claude_lead_record(
-            row["lead_name"], covers_service=bool(row["lead_covers_service"])
+            row["lead_name"],
+            covers_service=bool(row["lead_covers_service"]),
+            extra_approvers=approvers,
         )
         if not await self._followup(row["ticket_id"], note):
             return False
         if self.cards:
             await self.cards.record_event(bot, row["ticket_id"], note)
         await self.repo.mark_claude_lead_audited(row["ticket_id"])
+        if row["stage"] == "extra" and not row["lead_covers_service"]:
+            recipient = await self._active_link(row["requester_glpi_id"])
+            if recipient is not None:
+                await notify.send_text(
+                    bot,
+                    recipient.tg_id,
+                    texts.claude_requester_waiting(
+                        row["ticket_id"], row["lead_name"], approvers, self.url(row["ticket_id"])
+                    ),
+                )
         return True
 
     async def _notify_complete(self, bot: Bot, row) -> None:
