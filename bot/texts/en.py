@@ -858,9 +858,12 @@ def hist_returned() -> str:
 UNASSIGNED_HEADER = "⚠️ <b>Unassigned tickets:</b>"
 
 
-def unassigned_line(ticket_id: int, title: str, hours: int) -> str:
+def unassigned_line(ticket_id: int, title: str, hours: int, *, url: str | None = None) -> str:
     short = title if len(title) <= 40 else title[:39] + "…"
-    return f"#{ticket_id} “{html.escape(short)}” ({hours}h)"
+    label = f"#{ticket_id} “{html.escape(short)}”"
+    if url:
+        label = f'<a href="{html.escape(url)}">{label}</a>'
+    return f"{label} ({hours}h)"
 
 
 def btn_take_ticket(ticket_id: int) -> str:

@@ -237,6 +237,16 @@ def _reminder_keyboard_without(
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
+def telegram_message_url(chat_id: int, message_id: int) -> str | None:
+    """Link to a saved supergroup/channel message using its Bot API IDs."""
+    # https://core.telegram.org/api/bots/ids#supergroup-channel-ids
+    # Basic groups and private chats do not support t.me/c message links.
+    if not -1997852516352 <= chat_id <= -1000000000001 or message_id <= 0:
+        return None
+    channel_id = -chat_id - 1000000000000
+    return f"https://t.me/c/{channel_id}/{message_id}"
+
+
 async def mark_unassigned_taken(message: Message, ticket_id: int, tech_name: str) -> None:
     """Edit an unassigned-tickets reminder to show ``ticket_id`` was just taken.
 
@@ -245,9 +255,11 @@ async def mark_unassigned_taken(message: Message, ticket_id: int, tech_name: str
     """
     prefix = texts.unassigned_line_prefix(ticket_id)
     lines = message.html_text.split("\n")
-    for i, line in enumerate(lines):
+    # Match the visible number, then edit the corresponding HTML line so a
+    # text_link around the ticket number/title survives the status update.
+    for i, line in enumerate((message.text or "").split("\n")):
         if line.startswith(prefix) and texts.unassigned_taken_suffix("") not in line:
-            lines[i] = line + texts.unassigned_taken_suffix(tech_name)
+            lines[i] += texts.unassigned_taken_suffix(tech_name)
             break
     keyboard = _reminder_keyboard_without(message.reply_markup, ticket_id)
     try:

@@ -163,7 +163,12 @@ deploy/
      `REMIND_INTERVAL_HOURS` (default 3 working hours), and it always lists the
      WHOLE overdue queue regardless of when each ticket crossed the age threshold —
      tickets never fire their own separate reminders (no one-message-per-ticket
-     drip). Top 10 listed with Take buttons, the rest as «…и ещё N». The gate
+     drip). Top 10 listed with Take buttons, the rest as «…и ещё N».
+     Each ticket number/title links to its original Telegram card using the
+     saved `ticket_cards.chat_id` + `message_id` (supergroup/channel `t.me/c`
+     link); tickets without a supported saved card remain plain text. Taking
+     a ticket marks the visible reminder line while preserving its HTML links.
+     Previously sent digests are not rewritten. The gate
      timestamp lives in sync_state (`last_unassigned_summary_ts`, survives
      restarts; the old per-ticket `unassigned_reminders` table is unused). A taken
      ticket stops matching status=New and drops out of the next digest

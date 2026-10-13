@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Ticket numbers and titles in the unassigned-ticket digest link to their
+  Telegram cards.** Tapping a row opens the original group message; taking a
+  ticket keeps the link when the reminder is updated. Tickets without a saved
+  supergroup/channel card remain plain text.
 - Claude service-approval cards preserve requester, lead approval and final decision author. All future reminder cards are updated for both approvers, with durable edit retries. Internal clarification and generic policy copy are hidden.
 
 - Claude cards show the current approval stage and approver names, hide the internal policy marker, and notify requesters when lead approval advances to service approval.

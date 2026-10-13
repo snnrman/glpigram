@@ -900,6 +900,36 @@ async def test_unassigned_summary_has_take_buttons(repo):
     assert data == ["ta:take:44", "ta:take:47"]  # existing Take handler reused
 
 
+async def test_unassigned_summary_links_to_stored_card_and_keeps_missing_card_plain(repo):
+    await repo.save_card(
+        ticket_id=44,
+        chat_id=-1001234567890,
+        message_id=999,
+        title="Принтер",
+        description="",
+        urgency=3,
+        requester_name="Заявитель",
+        requester_tg_id=None,
+        attachments_count=0,
+        status=1,
+        now=0,
+    )
+    client = FakeClient(
+        recent=[
+            _ticket(44, name="Принтер", created=_CREATED_3H_AGO),
+            _ticket(47, name="Сеть", created=_CREATED_3H_AGO),
+        ]
+    )
+    bot = FakeBot()
+
+    await _service(bot, client, repo)._remind_unassigned()
+
+    [summary] = _tech(bot)
+    assert '<a href="https://t.me/c/1234567890/999">№44 «Принтер»</a> (3ч)' in summary
+    assert "№47 «Сеть» (3ч)" in summary
+    assert summary.count("<a href=") == 1
+
+
 async def test_web_closed_solution_notice_offers_rating(repo):
     # Ticket closed outright from the GLPI web UI: the solved notice to the
     # requester carries the one-tap rating prompt.

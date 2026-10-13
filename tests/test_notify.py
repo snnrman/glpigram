@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from aiogram.exceptions import TelegramMigrateToChat, TelegramRetryAfter
+from aiogram.types import Chat, Message, MessageEntity
 
+from bot import texts
 from bot.services import notify
 
 
@@ -114,6 +118,68 @@ def test_tech_keyboard_take_is_full_width_bottom_row():
         (texts.BTN_TECH_CLOSE, "ta:close:7"),
     ]
     assert rows[1] == [(texts.BTN_TECH_TAKE, "ta:take:7")]  # primary, alone = full width
+
+
+@pytest.mark.parametrize(
+    ("chat_id", "message_id", "expected"),
+    [
+        (-1001234567890, 999, "https://t.me/c/1234567890/999"),
+        (-1000000000001, 1, "https://t.me/c/1/1"),
+        (-1997852516352, 42, "https://t.me/c/997852516352/42"),
+        (-1000000000000, 1, None),
+        (-1997852516353, 1, None),
+        (-123456789, 1, None),
+        (123456789, 1, None),
+        (-1001234567890, 0, None),
+        (-1001234567890, -1, None),
+    ],
+)
+def test_telegram_message_url_only_links_valid_supergroup_or_channel_ids(
+    chat_id, message_id, expected
+):
+    assert notify.telegram_message_url(chat_id, message_id) == expected
+
+
+async def test_mark_unassigned_taken_preserves_links_and_other_ticket():
+    # Telegram returns text + UTF-16 entities, rather than the HTML we sent.
+    header = "⚠️ Заявки без исполнителя:"
+    first = "№7 «Канал 🧩 <мониторинг>»"
+    second = "№71 «Сеть»"
+    plain = f"{header}\n{first} (3ч)\n{second} (4ч)"
+    urls = ["https://t.me/c/1234567890/999", "https://t.me/c/1234567890/1000"]
+    entities = []
+    for label, url in zip((first, second), urls, strict=True):
+        entities.append(
+            MessageEntity(
+                type="text_link",
+                offset=len(plain[: plain.index(label)].encode("utf-16-le")) // 2,
+                length=len(label.encode("utf-16-le")) // 2,
+                url=url,
+            )
+        )
+    bot = AsyncMock()
+    message = Message(
+        message_id=555,
+        date=datetime(2026, 7, 6, tzinfo=UTC),
+        chat=Chat(id=-1001234567890, type="supergroup"),
+        text=plain,
+        entities=entities,
+        reply_markup=notify.unassigned_take_keyboard([7, 71]),
+    ).as_(bot)
+
+    await notify.mark_unassigned_taken(message, 7, "Иван <админ>")
+
+    bot.assert_awaited_once()
+    edit = bot.call_args.args[0]
+    lines = edit.text.split("\n")
+    assert lines[1] == (
+        f'<a href="{urls[0]}">№7 «Канал 🧩 &lt;мониторинг&gt;»</a> (3ч)'
+        + texts.unassigned_taken_suffix("Иван <админ>")
+    )
+    assert lines[2] == f'<a href="{urls[1]}">{second}</a> (4ч)'
+    assert [b.callback_data for row in edit.reply_markup.inline_keyboard for b in row] == [
+        "ta:take:71"
+    ]
 
 
 # --- send_attachments: classify images / documents / oversized -----------------

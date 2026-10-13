@@ -160,6 +160,21 @@ def test_ticket_links_degrade_without_url():
     assert en.ticket_created(49, None) == "✅ Ticket #49 created."
 
 
+def test_unassigned_lines_link_number_and_short_title_with_plain_fallback():
+    url = 'https://t.me/c/1234567890/999?x="one"&y=2'
+    for mod, ref, quotes, hours in ((ru, "№49", "«»", "3ч"), (en, "#49", "“”", "3h")):
+        title = "<b>&" + "x" * 50
+        short_title = "&lt;b&gt;&amp;" + "x" * 35 + "…"
+        label = f"{ref} {quotes[0]}{short_title}{quotes[1]}"
+        plain = mod.unassigned_line(49, title, 3)
+        linked = mod.unassigned_line(49, title, 3, url=url)
+        assert plain == f"{label} ({hours})"
+        assert linked == (
+            f'<a href="https://t.me/c/1234567890/999?x=&quot;one&quot;&amp;y=2">'
+            f"{label}</a> ({hours})"
+        )
+
+
 def test_user_supplied_text_is_escaped_in_html_messages():
     hostile = "<b>Иван & Ко</b>"
     for mod in (ru, en):

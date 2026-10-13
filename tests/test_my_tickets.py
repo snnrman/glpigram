@@ -289,9 +289,11 @@ async def test_remind_allowed_again_after_cooldown_expires(repo):
     assert await repo.get_last_remind(TICKET) >= int(_time.time()) - 5
 
 
-async def test_remind_cooldown_boundary_still_blocked(repo):
+async def test_remind_cooldown_boundary_still_blocked(repo, monkeypatch):
     import time as _time
 
+    # A scheduler pause must not advance the clock past the one-second boundary.
+    monkeypatch.setattr(_time, "time", lambda: 1700000000)
     bot = FakeBot()
     dp = _remind_dispatcher(bot, repo)
     # 1 second short of the 4h window -> still blocked.

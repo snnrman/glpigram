@@ -497,11 +497,12 @@ class SyncService:
             return
         due.sort()
         shown = due[:10]  # keyboard/message size guard
-        text = (
-            texts.UNASSIGNED_HEADER
-            + "\n"
-            + "\n".join(texts.unassigned_line(tid, title, hours) for tid, title, hours in shown)
-        )
+        lines = []
+        for tid, title, hours in shown:
+            card = await self._repo.get_card(tid)
+            url = notify.telegram_message_url(card.chat_id, card.message_id) if card else None
+            lines.append(texts.unassigned_line(tid, title, hours, url=url))
+        text = texts.UNASSIGNED_HEADER + "\n" + "\n".join(lines)
         if len(due) > len(shown):
             text += "\n" + texts.unassigned_more(len(due) - len(shown))
         msg = await notify.send_text(
