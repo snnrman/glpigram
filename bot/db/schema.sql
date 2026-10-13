@@ -165,3 +165,15 @@ CREATE TABLE IF NOT EXISTS claude_approval_members (
     notified_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (ticket_id, glpi_id)
 );
+
+-- Keep every service-approval prompt, including reminders, as decision history.
+CREATE TABLE IF NOT EXISTS claude_approval_messages (
+    ticket_id INTEGER NOT NULL,
+    glpi_id INTEGER NOT NULL,
+    tg_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    terminal_updated INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tg_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_claude_messages_ticket
+    ON claude_approval_messages(ticket_id, terminal_updated);

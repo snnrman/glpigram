@@ -152,6 +152,12 @@ class Repo:
             "claude_approvals", "lead_covers_service", "INTEGER NOT NULL DEFAULT 0"
         )
         await self._migrate_ratings_to_4_point()
+        await self._db.execute(
+            "INSERT OR IGNORE INTO claude_approval_messages "
+            "(ticket_id,glpi_id,tg_id,message_id) "
+            "SELECT ticket_id,glpi_id,tg_id,dm_message_id FROM claude_approval_members "
+            "WHERE dm_message_id IS NOT NULL"
+        )
         await self._db.commit()
         log.info("db_connected path=%s", self._db_path)
 
@@ -637,7 +643,10 @@ class Repo:
         async with self._conn.execute(
             "SELECT ticket_id FROM claude_approvals "
             "WHERE stage IN ('lead','extra','approve_pending','reject_pending') "
-            "OR (stage IN ('approved','rejected') AND notification_done=0)"
+            "OR (stage IN ('approved','rejected') AND notification_done=0) "
+            "OR (stage IN ('approved','rejected','cancelled') AND EXISTS "
+            "(SELECT 1 FROM claude_approval_messages m "
+            "WHERE m.ticket_id=claude_approvals.ticket_id AND m.terminal_updated=0))"
         ) as cur:
             ids = [row[0] for row in await cur.fetchall()]
         return [await self.get_claude_approval(ticket_id) for ticket_id in ids]
@@ -756,6 +765,28 @@ class Repo:
                 "UPDATE claude_approval_members SET dm_message_id=?,notified_at=? "
                 "WHERE ticket_id=? AND glpi_id=?",
                 (message_id, now, ticket_id, glpi_id),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO claude_approval_messages "
+                "(ticket_id,glpi_id,tg_id,message_id) "
+                "SELECT ticket_id,glpi_id,tg_id,? FROM claude_approval_members "
+                "WHERE ticket_id=? AND glpi_id=?",
+                (message_id, ticket_id, glpi_id),
+            )
+
+    async def pending_claude_message_edits(self, ticket_id: int) -> list[aiosqlite.Row]:
+        async with self._conn.execute(
+            "SELECT * FROM claude_approval_messages WHERE ticket_id=? AND terminal_updated=0",
+            (ticket_id,),
+        ) as cur:
+            return list(await cur.fetchall())
+
+    async def mark_claude_message_updated(self, tg_id: int, message_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE claude_approval_messages SET terminal_updated=1 "
+                "WHERE tg_id=? AND message_id=?",
+                (tg_id, message_id),
             )
 
     async def cancel_claude(self, ticket_id: int) -> None:

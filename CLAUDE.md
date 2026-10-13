@@ -474,3 +474,10 @@ Claude card presentation reads the saved workflow stage and approver snapshot.
 The GLPI policy marker remains stored for fail-closed checks, but is hidden in
 Telegram descriptions. Lead-to-service progression names the eligible approvers
 in the card/audit and sends the requester a best-effort informational notice.
+
+Service-approver DMs retain requester, original request, lead approval and the
+final decision author. `claude_approval_messages` tracks every new extra-stage
+prompt/reminder and retries final edits independently of requester delivery.
+On connect, saved latest prompts are seeded idempotently; older reminder IDs
+from releases that did not retain them cannot be recovered through Telegram.
+No decisions are inferred or changed by this presentation migration.

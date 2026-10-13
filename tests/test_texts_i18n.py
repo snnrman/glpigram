@@ -53,14 +53,53 @@ def test_en_functions_render():
     assert "without a comment" in out and "Jane" in out
 
 
-# --- WELCOME_MESSAGE override -------------------------------------------------
-def test_custom_welcome_unset_and_blank(monkeypatch):
-    from bot import texts
+def test_claude_approver_card_has_clear_pending_and_terminal_states():
+    for mod, ref in ((ru, "№49"), (en, "#49")):
+        card = mod.claude_approver_card(49, "Lead <A>", "Please enable access", URL, "User <B>", 12)
+        assert ref in card and "Please enable access" in card
+        assert "approved" in card.lower() or "согласовал" in card.lower()
+        assert "Awaiting decision" in card or "Ожидает решения" in card
+        assert "one approval" not in card.lower()
+        assert "отказ любого" not in card.lower()
+        assert "<A>" not in card and "&lt;A&gt;" in card
+        assert "<B>" not in card and "&lt;B&gt;" in card
+        assert "href=" in card
 
-    monkeypatch.delenv("WELCOME_MESSAGE", raising=False)
-    assert texts.custom_welcome() is None
-    monkeypatch.setenv("WELCOME_MESSAGE", "   ")
-    assert texts.custom_welcome() is None  # blank counts as unset
+        rejected = mod.claude_approver_card(
+            49,
+            "Lead",
+            "Request",
+            None,
+            stage="rejected",
+            actor="Approver <X>",
+            reason="No <Y>",
+            lead_approved=True,
+        )
+        assert "Approver &lt;X&gt;" in rejected and "No &lt;Y&gt;" in rejected
+        assert "one approval" not in rejected.lower()
+
+        first_lead_reject = mod.claude_approver_card(
+            49,
+            "Lead",
+            "Request",
+            None,
+            stage="rejected",
+            actor="Lead",
+            reason="Denied",
+            lead_approved=False,
+        )
+        assert "Lead Lead approved" not in first_lead_reject
+        assert "согласовал\n" not in first_lead_reject if mod is ru else True
+
+
+def test_claude_legacy_wrapper_and_service_clarification():
+    for mod, label in ((ru, "Уточнённый сервис"), (en, "Clarified service")):
+        appended = mod.acc_service_clarified("Original request", "Claude")
+        assert appended == f"Original request\n\n{label}: Claude"
+        rendered = mod.claude_approver_card(1, "Lead", appended, None)
+        assert "Original request" in rendered and label not in rendered
+        original = f"{label}: Claude is important"
+        assert original in mod.claude_approver_card(1, "Lead", original, None)
 
 
 def test_custom_welcome_verbatim_with_html_and_newlines(monkeypatch):
@@ -181,3 +220,12 @@ def test_ticket_detail_shows_description_and_skips_when_empty():
         ticket_id=7, title="t", description="", status=1, assignee=None, followups=[]
     )
     assert "\n\n\n" not in without
+
+
+def test_custom_welcome_unset_and_blank(monkeypatch):
+    from bot import texts
+
+    monkeypatch.delenv("WELCOME_MESSAGE", raising=False)
+    assert texts.custom_welcome() is None
+    monkeypatch.setenv("WELCOME_MESSAGE", "   ")
+    assert texts.custom_welcome() is None  # blank counts as unset

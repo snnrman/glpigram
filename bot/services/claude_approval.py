@@ -8,6 +8,7 @@ import time
 from datetime import UTC, datetime
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .. import texts
@@ -189,9 +190,58 @@ class ClaudeApprovalService:
             await self.repo.finish_claude(ticket_id, accepted=accepted)
         except GlpiError:
             log.warning("claude_finalisation_retry ticket=%s", ticket_id)
+            await self._refresh_extra_cards(bot, row)
             return "retry"
-        await self._notify_complete(bot, await self.repo.get_claude_approval(ticket_id))
+        finished = await self.repo.get_claude_approval(ticket_id)
+        await self._refresh_extra_cards(bot, finished)
+        await self._notify_complete(bot, finished)
         return "approved" if accepted else "rejected"
+
+    async def _refresh_extra_cards(self, bot: Bot, row) -> None:
+        if row["stage"] not in (
+            "approved",
+            "rejected",
+            "cancelled",
+            "approve_pending",
+            "reject_pending",
+        ):
+            return
+        link = await self.repo.get_by_glpi(row["requester_glpi_id"])
+        content = texts.claude_approver_card(
+            row["ticket_id"],
+            row["lead_name"],
+            row["request_text"],
+            self.url(row["ticket_id"]),
+            requester=link.display_name if link else texts.CLAUDE_REQUESTER_FALLBACK,
+            requester_tg_id=link.tg_id if link else None,
+            stage=row["stage"],
+            actor=row["actor_name"],
+            reason=row["reason"],
+            lead_approved=bool(row["lead_approved_at"]),
+        )
+        terminal = row["stage"] in ("approved", "rejected", "cancelled")
+        for message in await self.repo.pending_claude_message_edits(row["ticket_id"]):
+            recipient = await self._active_link(message["glpi_id"])
+            if recipient is None or recipient.tg_id != message["tg_id"]:
+                # Revoked/relinked accounts must not receive more ticket data.
+                await self.repo.mark_claude_message_updated(message["tg_id"], message["message_id"])
+                continue
+            try:
+                await bot.edit_message_text(
+                    text=content,
+                    chat_id=message["tg_id"],
+                    message_id=message["message_id"],
+                    reply_markup=None,
+                )
+            except TelegramBadRequest as exc:
+                if "message is not modified" not in str(exc).lower():
+                    log.warning("claude_history_edit_retry ticket=%s", row["ticket_id"])
+                    continue
+            except Exception:
+                log.warning("claude_history_edit_retry ticket=%s", row["ticket_id"])
+                continue
+            if terminal:
+                await self.repo.mark_claude_message_updated(message["tg_id"], message["message_id"])
 
     async def _followup(self, ticket_id: int, content: str) -> bool:
         try:
@@ -251,10 +301,6 @@ class ClaudeApprovalService:
         # Removing both sets of buttons is cosmetic; authorisation reads the
         # persistent stage even if an edit fails or an old message is replayed.
         targets = [(row["lead_glpi_id"], row["lead_tg_id"], row["dm_message_id"])]
-        targets += [
-            (m["glpi_id"], m["tg_id"], m["dm_message_id"])
-            for m in await self.repo.claude_members(row["ticket_id"])
-        ]
         for glpi_id, chat_id, message_id in targets:
             recipient = await self._active_link(glpi_id)
             if recipient is None or recipient.tg_id != chat_id:
@@ -389,6 +435,7 @@ class ClaudeApprovalService:
             try:
                 async with self._lock(ticket_id):
                     row = await self.repo.get_claude_approval(ticket_id)
+                    await self._refresh_extra_cards(bot, row)
                     await self._ensure_lead_audit(bot, row)
                     if row["stage"] in ("approve_pending", "reject_pending"):
                         await self._finalise(bot, row)

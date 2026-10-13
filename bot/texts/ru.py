@@ -1048,9 +1048,56 @@ def claude_requester_waiting(
     names = " или ".join(html.escape(name) for name in approvers) or "ответственный за сервис"
     return (
         f"⏳ Лид {html.escape(lead)} одобрил заявку {_ticket_ref(ticket_id, url)}. "
-        f"Теперь ожидается согласование: {names}. "
-        "Достаточно одного одобрения."
+        f"Теперь ожидается согласование: {names}."
     )
+
+
+def claude_approver_card(
+    ticket_id: int,
+    lead: str,
+    request: str,
+    url: str | None,
+    requester: str = "",
+    requester_tg_id: int | None = None,
+    stage: str = "extra",
+    actor: str = "",
+    reason: str = "",
+    lead_approved: bool = True,
+) -> str:
+    suffix = "\n\nУточнённый сервис: Claude"
+    if request.endswith(suffix):
+        request = request[: -len(suffix)]
+    lines = [
+        f"🔑 <b>Доступ к Claude {_ticket_ref(ticket_id, url)}</b>",
+        f"👤 Заявитель: {user_mention(requester, requester_tg_id)}",
+    ]
+    if lead_approved:
+        lines.append(f"✅ Лид {html.escape(lead)} согласовал")
+    lines.append(f"📝 Запрос: {html.escape(request)}")
+    safe_actor = html.escape(actor) if actor else "—"
+    if stage == "extra":
+        lines.append("⏳ Ожидает решения")
+    elif stage == "approved":
+        lines.append(f"✅ Согласовал: {safe_actor}")
+    elif stage == "rejected":
+        lines.append(f"❌ Отказал: {safe_actor}")
+        if reason:
+            lines.append(f"Причина: {html.escape(reason)}")
+    elif stage == "approve_pending":
+        lines.append(f"✅ Согласовал: {safe_actor}")
+        lines.append("⏳ Завершается обработка решения")
+    elif stage == "reject_pending":
+        lines.append(f"❌ Отказал: {safe_actor}")
+        if reason:
+            lines.append(f"Причина: {html.escape(reason)}")
+        lines.append("⏳ Завершается обработка решения")
+    elif stage == "cancelled":
+        lines.append("⚪ Заявка отменена")
+    elif stage == "lead":
+        lines.append(f"⏳ Ожидает согласования лида {html.escape(lead)}")
+    else:
+        lines.append("⏳ Статус согласования неизвестен")
+    return "\n".join(lines)
 
 
 def claude_extra_prompt(
@@ -1061,12 +1108,7 @@ def claude_extra_prompt(
     requester: str = "",
     requester_tg_id: int | None = None,
 ) -> str:
-    return (
-        f"🔑 <b>Дополнительное согласование Claude {_ticket_ref(ticket_id, url)}</b>\n\n"
-        f"👤 {user_mention(requester, requester_tg_id)}\n"
-        f"Лид {html.escape(lead)} уже одобрил запрос.\n\n{html.escape(request)}\n\n"
-        "Достаточно одобрения одного ответственного. Отказ любого из них окончательный."
-    )
+    return claude_approver_card(ticket_id, lead, request, url, requester, requester_tg_id)
 
 
 def claude_final_decision(

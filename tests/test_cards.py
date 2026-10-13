@@ -263,7 +263,7 @@ def test_claude_approval_names_are_escaped_and_ordinary_cards_stay_unchanged():
     waiting = texts.claude_requester_waiting(7, "Лид", ["Анна", "Борис"], None)
     assert "Лид Лид одобрил заявку" in waiting
     assert "Анна или Борис" in waiting
-    assert "Достаточно одного одобрения" in waiting
+    assert "Достаточно одного одобрения" not in waiting
 
 
 # --- events that arrive before the card is sent are not lost ------------------

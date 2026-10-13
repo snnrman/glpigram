@@ -571,3 +571,54 @@ async def test_service_member_lead_rejection_remains_final(policy):
     assert client.answer_validation.await_args.kwargs["accepted"] is False
     client.set_ticket_status.assert_awaited_once()
     assert await svc.approve(bot, TICKET, "extra", EXTRA_A) == "stale"
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_all_approver_reminders_preserve_history_at_both_recipients(policy, accepted):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _to_extra(svc, bot, client, repo)
+    svc._reminder_due = lambda row, now, last: True
+    await svc.send_pending(bot, TICKET)
+    messages = await repo.pending_claude_message_edits(TICKET)
+    assert len(messages) == 4
+    bot.edit_message_text = AsyncMock()
+    if accepted:
+        assert await svc.approve(bot, TICKET, "extra", EXTRA_A) == "approved"
+    else:
+        assert await svc.reject(bot, TICKET, "extra", EXTRA_B, "budget") == "rejected"
+    edits = bot.edit_message_text.await_args_list
+    history = [e.kwargs for e in edits if e.kwargs["chat_id"] in (EXTRA_A, EXTRA_B)]
+    assert len(history) == 4
+    for e in history:
+        assert e["reply_markup"] is None
+        assert "Requester" in e["text"] and "Lead" in e["text"]
+        assert ("Extra A" if accepted else "Extra B") in e["text"]
+        assert "budget" in e["text"] if not accepted else True
+    assert await repo.pending_claude_message_edits(TICKET) == []
+
+
+async def test_history_edit_retries_after_requester_already_notified_and_restart(policy):
+    svc, client, repo, _ = policy
+    bot = FakeBot()
+    await _to_extra(svc, bot, client, repo)
+    original = bot.edit_message_text
+
+    async def fail_one(text, chat_id=None, **kwargs):
+        if chat_id == EXTRA_B:
+            raise RuntimeError("telegram down")
+        return await original(text, chat_id=chat_id, **kwargs)
+
+    bot.edit_message_text = fail_one
+    assert await svc.approve(bot, TICKET, "extra", EXTRA_A) == "approved"
+    assert (await repo.get_claude_approval(TICKET))["notification_done"] == 1
+    assert len(await repo.pending_claude_message_edits(TICKET)) == 1
+    restarted = ClaudeApprovalService(client, repo, approver_ids="82,54", schedule=svc.schedule)
+    bot.edit_message_text = AsyncMock()
+    await restarted.tick(bot)
+    assert bot.edit_message_text.await_count == 1
+    assert bot.edit_message_text.await_args.kwargs["chat_id"] == EXTRA_B
+    assert await repo.pending_claude_message_edits(TICKET) == []
+    bot.edit_message_text.reset_mock()
+    await restarted.tick(bot)
+    bot.edit_message_text.assert_not_awaited()

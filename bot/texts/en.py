@@ -1026,8 +1026,56 @@ def claude_requester_waiting(
     names = " or ".join(html.escape(name) for name in approvers) or "service approver"
     return (
         f"⏳ Lead {html.escape(lead)} approved ticket {_ticket_ref(ticket_id, url)}. "
-        f"It is now awaiting approval from: {names}. One approval is sufficient."
+        f"It is now awaiting approval from: {names}."
     )
+
+
+def claude_approver_card(
+    ticket_id: int,
+    lead: str,
+    request: str,
+    url: str | None,
+    requester: str = "",
+    requester_tg_id: int | None = None,
+    stage: str = "extra",
+    actor: str = "",
+    reason: str = "",
+    lead_approved: bool = True,
+) -> str:
+    suffix = "\n\nClarified service: Claude"
+    if request.endswith(suffix):
+        request = request[: -len(suffix)]
+    lines = [
+        f"🔑 <b>Claude access {_ticket_ref(ticket_id, url)}</b>",
+        f"👤 Requester: {user_mention(requester, requester_tg_id)}",
+    ]
+    if lead_approved:
+        lines.append(f"✅ Lead {html.escape(lead)} approved")
+    lines.append(f"📝 Request: {html.escape(request)}")
+    safe_actor = html.escape(actor) if actor else "—"
+    if stage == "extra":
+        lines.append("⏳ Awaiting decision")
+    elif stage == "approved":
+        lines.append(f"✅ Approved by: {safe_actor}")
+    elif stage == "rejected":
+        lines.append(f"❌ Rejected by: {safe_actor}")
+        if reason:
+            lines.append(f"Reason: {html.escape(reason)}")
+    elif stage == "approve_pending":
+        lines.append(f"✅ Approved by: {safe_actor}")
+        lines.append("⏳ Finalising the decision")
+    elif stage == "reject_pending":
+        lines.append(f"❌ Rejected by: {safe_actor}")
+        if reason:
+            lines.append(f"Reason: {html.escape(reason)}")
+        lines.append("⏳ Finalising the decision")
+    elif stage == "cancelled":
+        lines.append("⚪ Request cancelled")
+    elif stage == "lead":
+        lines.append(f"⏳ Awaiting lead approval: {html.escape(lead)}")
+    else:
+        lines.append("⏳ Approval status unknown")
+    return "\n".join(lines)
 
 
 def claude_extra_prompt(
@@ -1038,12 +1086,7 @@ def claude_extra_prompt(
     requester: str = "",
     requester_tg_id: int | None = None,
 ) -> str:
-    return (
-        f"🔑 <b>Additional Claude approval {_ticket_ref(ticket_id, url)}</b>\n\n"
-        f"👤 {user_mention(requester, requester_tg_id)}\n"
-        f"Lead {html.escape(lead)} has already approved.\n\n{html.escape(request)}\n\n"
-        "Approval from either service approver is sufficient. A rejection from either is final."
-    )
+    return claude_approver_card(ticket_id, lead, request, url, requester, requester_tg_id)
 
 
 def claude_final_decision(
