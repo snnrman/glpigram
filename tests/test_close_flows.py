@@ -444,3 +444,30 @@ async def test_rate_mirrors_into_glpi_satisfaction_immediately(env):
 
     client.push_ticket_satisfaction.assert_awaited_once_with(TICKET, 5)  # 🤩 -> GLPI 5
     assert await repo.pending_ratings() == []  # marked as mirrored
+
+
+async def test_tech_close_of_already_closed_ticket_is_informational_without_write(env):
+    from bot import texts
+    from bot.glpi.models import Ticket
+
+    dp, client, repo = env
+    bot = FakeBot()
+    client.get_ticket.return_value = Ticket(id=77, name="Closed", content="", status=6, urgency=3)
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, "ta:close:77"))
+    assert texts.TICKET_ALREADY_CLOSED in bot.toasts
+    assert not bot.sent
+    client.add_solution.assert_not_awaited()
+
+
+async def test_ticket_closed_while_tech_was_typing_solution_does_not_write(env):
+    from bot import texts
+    from bot.glpi.models import Ticket
+
+    dp, client, repo = env
+    bot = FakeBot()
+    await dp.feed_update(bot, _group_cb(bot, 1, TECH_ID, "ta:close:77"))
+    client.get_ticket.return_value = Ticket(id=77, name="Closed", content="", status=6, urgency=3)
+    bot.sent.clear()
+    await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "done"))
+    assert any(texts.TICKET_ALREADY_CLOSED in text for _, text in bot.sent)
+    client.add_solution.assert_not_awaited()

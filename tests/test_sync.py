@@ -1094,3 +1094,19 @@ async def test_new_claude_card_uses_saved_extra_stage_even_when_glpi_waits(repo)
     assert "Extra A" in text and "Extra B" in text
     assert texts.CARD_AWAITING_APPROVAL not in text
     assert "[Claude: lead + designated approver]" not in text
+
+
+@pytest.mark.parametrize("status", [5, 6], ids=["solved", "closed"])
+async def test_closed_or_solved_waiting_approval_is_moot_without_reminders(repo, status):
+    bot = FakeBot()
+    waiting = _ticket(80, status=status)
+    waiting.global_validation = 2  # GLPI still says the validation is pending
+    client = FakeClient(tickets={80: waiting})
+    old = int(datetime(2026, 7, 3, 12, 0, tzinfo=_KGD).timestamp())
+    await _pending_approval(repo, 80, requested_at=old)
+
+    for _ in range(3):
+        await _service(bot, client, repo)._remind_pending_approvals()
+
+    assert bot.sent == []
+    assert (await repo.get_approval(80))["status"] == -2

@@ -215,6 +215,8 @@ TECH_TICKETS_EMPTY = "No active tickets are assigned to you."
 GLPI_ERROR = (
     "An error occurred while talking to GLPI. The ticket was not created — try again later."
 )
+GLPI_ACTION_ERROR = "Could not complete the action in GLPI. Please try again later."
+TICKET_ALREADY_CLOSED = "This ticket is already closed. It does not need to be closed again."
 GENERIC_ERROR = "Something went wrong. Please try again."
 STALE_BUTTON = "This button has expired. Open the menu again."
 USE_BUTTONS = "Please use the buttons above."

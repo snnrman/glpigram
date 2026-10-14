@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Closed and solved access requests stop lead approval reminders. Stale approval actions validate live ticket state, and repeat technician closes report an already-closed ticket without submitting another solution. Action errors no longer claim ticket creation failed.
+
 - **Ticket numbers and titles in the unassigned-ticket digest link to their
   Telegram cards.** Tapping a row opens the original group message; taking a
   ticket keeps the link when the reminder is updated. Tickets without a saved

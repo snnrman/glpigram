@@ -93,6 +93,9 @@ def _client() -> AsyncMock:
     client.create_ticket.return_value = TICKET
     client.create_validation.return_value = 5
     client.add_followup.return_value = 900
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="Доступ: Jenkins", content="c", status=1, urgency=3, global_validation=2
+    )
     client.find_user_by_login.return_value = GlpiUser(
         id=LEAD_GLPI, name="uliana.metlina", realname="Метлина", firstname="Ульяна"
     )
@@ -430,7 +433,7 @@ async def test_glpi_failure_keeps_rejection_open_for_retry(env):
 
     await dp.feed_update(bot, _dm(bot, 11, LEAD_ID, "Нет бюджета", reply_to=_reply_prompt(bot)))
 
-    assert texts.GLPI_ERROR in _to(bot, LEAD_ID)
+    assert texts.GLPI_ACTION_ERROR in _to(bot, LEAD_ID)
     assert await _lead_state(dp, bot).get_state() == LeadReject.entering_reason.state
     assert (await repo.get_approval(TICKET))["status"] == 0
     client.set_ticket_status.assert_not_awaited()
@@ -657,3 +660,65 @@ async def test_access_button_shows_new_access_notice_first(env):
 
     await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "ac:go"))
     assert any(texts.ACC_ASK_REQUEST == t for t in _to(bot, REQUESTER_ID))
+
+
+@pytest.mark.parametrize(
+    "ticket",
+    [
+        Ticket(id=TICKET, name="t", content="c", status=6, urgency=3, global_validation=2),
+        Ticket(id=TICKET, name="t", content="c", status=5, urgency=3, global_validation=2),
+        Ticket(id=TICKET, name="t", content="c", status=1, urgency=3, global_validation=3),
+        None,
+    ],
+    ids=["closed", "solved", "validation-answered", "missing"],
+)
+@pytest.mark.parametrize("action", ["approve", "reject"], ids=["approval", "rejection"])
+async def test_stale_ticket_cannot_start_lead_decision(env, ticket, action):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _run_dialog_to_sent(dp, bot)
+    client.get_ticket.return_value = ticket
+    bot.sent.clear()
+
+    callback = "ap:ok" if action == "approve" else "ap:no"
+    await dp.feed_update(bot, _cb(bot, 10, LEAD_ID, f"{callback}:{TICKET}"))
+
+    client.answer_validation.assert_not_awaited()
+    client.set_ticket_status.assert_not_awaited()
+    client.add_followup.assert_not_awaited()
+    assert (await repo.get_approval(TICKET))["status"] == -2
+    if action == "reject":
+        assert await _lead_state(dp, bot).get_state() is None
+
+
+async def test_ticket_closed_after_rejection_prompt_blocks_reason_write(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _run_dialog_to_sent(dp, bot)
+    await dp.feed_update(bot, _cb(bot, 10, LEAD_ID, f"ap:no:{TICKET}"))
+    prompt = _reply_prompt(bot)
+    client.get_ticket.return_value = Ticket(
+        id=TICKET, name="t", content="c", status=6, urgency=3, global_validation=2
+    )
+
+    await dp.feed_update(bot, _dm(bot, 11, LEAD_ID, "Заявка уже закрыта", reply_to=prompt))
+
+    client.answer_validation.assert_not_awaited()
+    client.set_ticket_status.assert_not_awaited()
+    client.add_followup.assert_not_awaited()
+    assert (await repo.get_approval(TICKET))["status"] == -2
+    assert await _lead_state(dp, bot).get_state() is None
+
+
+async def test_ticket_read_failure_does_not_moot_or_answer_approval(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _run_dialog_to_sent(dp, bot)
+    client.get_ticket.side_effect = GlpiError("temporary read failure")
+
+    await dp.feed_update(bot, _cb(bot, 10, LEAD_ID, f"ap:ok:{TICKET}"))
+
+    client.answer_validation.assert_not_awaited()
+    client.set_ticket_status.assert_not_awaited()
+    client.add_followup.assert_not_awaited()
+    assert (await repo.get_approval(TICKET))["status"] == 0

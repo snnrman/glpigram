@@ -36,7 +36,13 @@ from aiogram.types import (
 from .. import texts
 from ..cache import TTLValue
 from ..db.repo import LinkedUser, Repo
-from ..glpi.client import TICKET_STATUS_CLOSED, TICKET_STATUS_NEW, GlpiClient, GlpiError
+from ..glpi.client import (
+    TICKET_STATUS_CLOSED,
+    TICKET_STATUS_NEW,
+    TICKET_STATUS_SOLVED,
+    GlpiClient,
+    GlpiError,
+)
 from ..services import notify
 from ..services.access_target import classify_access_target
 from ..services.cards import CardService
@@ -423,7 +429,26 @@ def build_access_router(
         if row is None or row["status"] != 0 or row["lead_tg_id"] != cb.from_user.id:
             await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
             return None
+        try:
+            if not await _ordinary_approval_live(ticket_id):
+                await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
+                return None
+        except GlpiError:
+            log.warning("access_live_check_failed ticket=%s", ticket_id)
+            await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return None
         return row
+
+    async def _ordinary_approval_live(ticket_id: int) -> bool:
+        ticket = await client.get_ticket(ticket_id)
+        if (
+            ticket is None
+            or ticket.status in (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED)
+            or ticket.global_validation != 2
+        ):
+            await repo.set_approval_status(ticket_id, status=-2)
+            return False
+        return True
 
     @router.callback_query(F.data.startswith("ap:ok:"))
     async def on_approve(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
@@ -445,7 +470,7 @@ def build_access_router(
             log.exception(
                 "access_approve_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw
             )
-            await cb.answer(texts.GLPI_ERROR, show_alert=True)
+            await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
             return
         await repo.set_approval_status(ticket_id, status=1)
         if (
@@ -576,6 +601,20 @@ def build_access_router(
                 texts.ACC_ANSWERED_STALE, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
             )
             return
+        if claude_row is None:
+            try:
+                still_live = await _ordinary_approval_live(ticket_id)
+            except GlpiError:
+                log.warning("access_live_check_failed ticket=%s", ticket_id)
+                await message.answer(texts.GLPI_ACTION_ERROR)
+                return
+            if not still_live:
+                await state.clear()
+                await message.answer(
+                    texts.ACC_ANSWERED_STALE,
+                    reply_markup=main_menu_keyboard(is_tech=link.is_tech),
+                )
+                return
         if message.reply_to_message is not None and message.reply_to_message.message_id != data.get(
             "reject_prompt_id"
         ):
@@ -615,7 +654,7 @@ def build_access_router(
             await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
         except GlpiError as exc:
             log.exception("access_reject_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
-            await message.answer(texts.GLPI_ERROR)
+            await message.answer(texts.GLPI_ACTION_ERROR)
             return
         await state.clear()
         await repo.set_approval_status(ticket_id, status=-1)
@@ -659,7 +698,7 @@ def build_access_router(
             lead = await client.find_user_by_login(lead_login)
         except GlpiError as exc:
             log.warning("setlead_lookup_failed error=%s", exc)
-            await message.answer(texts.GLPI_ERROR)
+            await message.answer(texts.GLPI_ACTION_ERROR)
             return
         if employee is None or lead is None:
             await message.answer(texts.SETLEAD_NOT_FOUND)

@@ -486,3 +486,10 @@ prompt/reminder and retries final edits independently of requester delivery.
 On connect, saved latest prompts are seeded idempotently; older reminder IDs
 from releases that did not retain them cannot be recovered through Telegram.
 No decisions are inferred or changed by this presentation migration.
+
+Ordinary access reminders and lead decisions treat closed/solved tickets as
+moot even if global_validation is still waiting. GLPI read failures preserve
+pending state and do not authorise decisions. Technician close actions recheck
+for already-closed tickets at dialog entry and before submitting a solution.
+Use GLPI_ACTION_ERROR for failures of these existing-ticket actions; GLPI_ERROR
+retains its ticket-creation semantics for creation failures.

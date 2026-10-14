@@ -267,6 +267,15 @@ def build_tech_actions_router(
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
         ticket_id = int(cb.data.split(":")[2])
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError:
+            log.warning("tech_close_check_failed ticket=%s", ticket_id)
+            await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return
+        if ticket is not None and ticket.status == TICKET_STATUS_CLOSED:
+            await cb.answer(texts.TICKET_ALREADY_CLOSED, show_alert=True)
+            return
         if await _claude_blocked(ticket_id):
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
             return
@@ -499,6 +508,16 @@ def build_tech_actions_router(
     ) -> None:
         data = await state.get_data()
         ticket_id = data["ticket_id"]
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError:
+            log.warning("tech_close_check_failed ticket=%s", ticket_id)
+            await message.answer(texts.GLPI_ACTION_ERROR)
+            return
+        if ticket is not None and ticket.status == TICKET_STATUS_CLOSED:
+            await state.clear()
+            await message.answer(texts.TICKET_ALREADY_CLOSED)
+            return
         if await _claude_blocked(ticket_id):
             await message.answer(texts.CLAUDE_TAKE_BLOCKED)
             return
@@ -508,7 +527,7 @@ def build_tech_actions_router(
             await client.add_solution(ticket_id, f"{link.display_name}:\n{solution}")
         except GlpiError as exc:
             log.exception("tech_close_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
-            await message.answer(texts.GLPI_ERROR)
+            await message.answer(texts.GLPI_ACTION_ERROR)
             return
         await state.clear()
         await message.answer(texts.TECH_SOLUTION_DONE)

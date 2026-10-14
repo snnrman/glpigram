@@ -153,7 +153,11 @@ class SyncService:
             except GlpiError as exc:
                 log.warning("approval_check_failed ticket=%s error=%s", ticket_id, exc)
                 continue
-            if ticket is None or ticket.global_validation != 2:  # VALIDATION_WAITING
+            if (
+                ticket is None
+                or ticket.status in (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED)
+                or ticket.global_validation != 2  # VALIDATION_WAITING
+            ):
                 # answered/closed elsewhere -> stop nagging, mark moot
                 await self._repo.set_approval_status(ticket_id, status=-2)
                 continue
