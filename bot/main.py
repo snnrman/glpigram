@@ -36,6 +36,7 @@ from .middleware import AuthMiddleware
 from .schedule import WorkSchedule
 from .services.cards import CardService
 from .services.claude_approval import ClaudeApprovalService
+from .services.profile_links import ProfileLinksMiddleware
 from .services.sync import SyncService
 
 log = logging.getLogger(__name__)
@@ -171,6 +172,7 @@ async def _run(settings: Settings) -> None:
     # failure (DB perms, bad schedule config) still closes the HTTP sessions.
     try:
         await repo.connect()
+        bot.session.middleware(ProfileLinksMiddleware(repo, front_base=settings.glpi_front_base))
         dp = build_dispatcher(client, repo, settings)
         sync = SyncService(
             bot,

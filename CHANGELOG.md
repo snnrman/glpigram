@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Requester profile links now prefer the public Telegram username, including
+  users whose forwarding privacy disables ID mentions in the support group.
+  The same resolution applies to new cards, card edits, technician details and
+  approval prompts. If no usable Telegram link is available, a linked user's
+  GLPI profile is used. Profile lookups have a short timeout and bounded cache;
+  temporary failures preserve a previously resolved link.
+
 ### Changed
 
 - Closed and solved access requests stop lead approval reminders. Stale approval actions validate live ticket state, and repeat technician closes report an already-closed ticket without submitting another solution. Action errors no longer claim ticket creation failed.

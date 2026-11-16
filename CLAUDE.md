@@ -395,6 +395,19 @@ history line («Решение предложено: <техник>»), never th
 
 ## Conventions
 
+- Profile links: renderers keep emitting `user_mention(name, tg_id)`. The shared
+  `ProfileLinksMiddleware`, installed on the production Bot session in `_run`,
+  resolves those anchors for HTML `sendMessage` and `editMessageText` requests.
+  Prefer `https://t.me/<username>` from `getChat` (including active usernames):
+  `has_private_forwards` can cause Telegram to silently drop `tg://user` mentions
+  outside the user's own chat. With no username, retain ID mentions only when
+  privacy permits; otherwise use the current linked GLPI user profile. Unknown
+  unlinked accounts have no guaranteed accessible profile and retain the ID
+  mention. Lookup timeout is 3 seconds; the bounded cache lasts 10 minutes,
+  refreshing changed/removed usernames. Lookup failures reuse the last resolved
+  URL or the GLPI fallback and retry after 30 seconds. Card storage remains ID
+  based, so legacy cards get the fix on their next edit. Preserve this middleware
+  when constructing an operational Bot outside `_run` (e.g. a card repair).
 - All user-facing strings live in `bot/texts/` (`ru.py` + `en.py`, selected by the
   `BOT_LANGUAGE` env var, default ru; no i18n framework). Every new string goes into
   BOTH files — a test enforces that the key sets match.
