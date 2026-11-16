@@ -595,3 +595,33 @@ Take/resolve/handoff recheck pending GLPI validation; unresolved registration al
 blocks them before GLPI reflects the pending state. Comments remain available.
 Old group cards gain the button on their next update; reopening technician detail
 or using /approval works immediately. No existing tickets are submitted in bulk.
+
+
+## Solution-confirmation reminders
+
+`SOLUTION_REMIND_MINUTES=30` enables requester reminders while the live ticket
+status is Solved (5); 0 disables. `SyncService` counts elapsed working minutes
+using the existing WORK_HOURS/WORK_DAYS/TZ schedule, never sends outside it, and
+sends at most one overdue reminder per ticket per tick. Existing solved tickets
+start from GLPI's UTC `solvedate`; missing timestamps start from first observation.
+A freshly sent initial solution prompt starts a new 30-minute wait. This applies
+to both technician and GLPI-web solution paths.
+
+The additive `solution_reminders` table stores the solution timestamp, wait start,
+last reserved attempt and last successful delivery. Attempts are reserved BEFORE
+sending using a conditional SQLite update; failed/uncertain sends wait the full
+interval instead of causing bursts after restart. A new solution timestamp resets
+the cycle. `Repo.set_ticket_status` deletes the reminder when leaving Solved or
+becoming inactive. No automatic closure, group reminders or AI calls are involved.
+
+Before a due send, re-read GLPI status/requester and the current Telegram mapping.
+Requesters who are unlinked, relinked or replaced in GLPI are not sent old ticket
+content. Reminder buttons include a hash of the solution timestamp. Requester
+confirmation and return revalidate live Solved status, identity and that token;
+the return reason is checked again on submission. Existing unversioned buttons
+remain compatible but also require a live solved ticket. Per-ticket locks serialize
+these actions, direct requester closure, technician solutions and reminder sends.
+
+`GlpiClient.get_ticket` returns None for is_deleted tickets as well as 404; sync
+deactivates those stale tracked rows without notifying requesters. Reminder sends
+do not retry a Telegram flood wait across the end of working hours.

@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
+import time
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -603,7 +604,7 @@ def build_tech_actions_router(
             await repo.set_solver(ticket_id, tg_id=message.from_user.id, name=link.display_name)
             tracked = await repo.get_tracked_ticket(ticket_id)
             if tracked is not None:
-                await notify.send_text(
+                sent = await notify.send_text(
                     bot,
                     tracked.requester_tg_id,
                     texts.solution_proposed(
@@ -612,6 +613,9 @@ def build_tech_actions_router(
                     reply_markup=notify.solution_confirm_keyboard(ticket_id),
                 )
                 await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_SOLVED, active=True)
+                await repo.reset_solution_reminder(
+                    ticket_id, "", int(time.time()), delivered=sent is not None
+                )
         # The solution text (with confirm/return buttons) goes ONLY to the
         # requester — the group gets just a history line on the card, no
         # solution body and no ping (it doesn't need the team's attention).

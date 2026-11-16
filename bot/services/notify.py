@@ -9,6 +9,7 @@ loop.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 
 from aiogram import Bot
@@ -398,18 +399,25 @@ def rating_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def solution_confirm_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
+def solution_token(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def solution_confirm_keyboard(
+    ticket_id: int, *, solution_key: str | None = None
+) -> InlineKeyboardMarkup:
     """Requester's prompt under a proposed solution: confirm or return to work."""
+    suffix = f":{solution_token(solution_key)}" if solution_key is not None else ""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=texts.BTN_CONFIRM_SOLUTION, callback_data=f"rs:ok:{ticket_id}"
+                    text=texts.BTN_CONFIRM_SOLUTION, callback_data=f"rs:ok:{ticket_id}{suffix}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=texts.BTN_RETURN_TO_WORK, callback_data=f"rs:back:{ticket_id}"
+                    text=texts.BTN_RETURN_TO_WORK, callback_data=f"rs:back:{ticket_id}{suffix}"
                 )
             ],
         ]

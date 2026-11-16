@@ -189,6 +189,8 @@ set `AI_SHADOW_ENABLED=false` and restart. Existing approvals continue normally.
 
 A technician can request approval for an existing open ticket using **📨 Request approval** on the card or technician detail view, or `/approval 714` for older cards. The bot suggests the requester's lead or offers a list, then asks for confirmation. The lead receives decision buttons. Taking, handing off and resolving the ticket through the bot are blocked while approval is pending; rejection closes it. Claude retains its additional approval stage.
 
+After a solution is proposed, the requester receives confirmation reminders every **30 working minutes**, with confirm/return buttons. No reminders are sent outside working hours; they stop after confirmation or return to work. Set `SOLUTION_REMIND_MINUTES=30`, or `0` to disable.
+
 ### Local checks
 
 ```bash

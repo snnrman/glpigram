@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Trashed GLPI tickets are treated as unavailable, so stale tracked rows cannot trigger requester reminders.
+
 - Shadow classification applies the approval policy to all external SaaS, including
   short access requests and provider switches phrased as restoring access. Existing
   internal deployments can be configured with `AI_INTERNAL_SERVICES`; explicit new
@@ -42,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Added
+
+- Requesters receive solution-confirmation reminders every 30 working minutes while a ticket is solved and awaiting their decision. Timers persist across restarts; confirmation/return stops reminders. Messages carry confirm/return buttons bound to the solution timestamp, and stale actions recheck ownership and live status. Configure `SOLUTION_REMIND_MINUTES` (0 disables).
 
 - Technicians can request lead approval for an existing open ticket from its card or `/approval ID`. The private dialog suggests the requester's lead, confirms the action and preserves the original ticket and assignee. Existing Claude approvals retain their second stage. Durable registration prevents duplicate GLPI validations and retries notification delivery after failures. Pending approvals block take, handoff and resolve actions, including stale buttons and already-open solution dialogs.
 

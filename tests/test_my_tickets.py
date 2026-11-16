@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
@@ -159,7 +160,9 @@ def _make_client() -> AsyncMock:
 
 async def _closing_dispatcher(bot: FakeBot, client: AsyncMock):
     storage = MemoryStorage()
-    router = build_my_tickets_router(client, AsyncMock(), tech_group_chat_id=TECH_CHAT)
+    repo = AsyncMock()
+    repo.ticket_action_lock = MagicMock(return_value=asyncio.Lock())
+    router = build_my_tickets_router(client, repo, tech_group_chat_id=TECH_CHAT)
     router.message.middleware(_inject_link)
     router.callback_query.middleware(_inject_link)
     dp = Dispatcher(storage=storage)

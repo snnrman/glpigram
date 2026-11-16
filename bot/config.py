@@ -50,6 +50,13 @@ class Settings(BaseSettings):
         description="Min hours between a requester's reminders about the same ticket.",
     )
 
+    solution_remind_minutes: int = Field(
+        default=30,
+        ge=0,
+        le=1440,
+        description="Working minutes between requester solution-confirmation nudges; 0 disables.",
+    )
+
     # --- Unassigned-tickets reminder for the tech group ---
     unassigned_remind_hours: float = Field(
         default=2,

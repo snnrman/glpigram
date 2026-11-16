@@ -22,6 +22,7 @@ from aiogram.types import User as TgUser
 
 from bot import texts
 from bot.db.repo import Repo
+from bot.glpi.models import Ticket
 from bot.handlers.my_tickets import MyTickets
 from bot.handlers.tech_actions import TechAction
 
@@ -69,6 +70,8 @@ def _client() -> AsyncMock:
     client.add_solution.return_value = 3
     client.add_followup.return_value = 7
     client.get_ticket_assignees.return_value = []
+    client.get_ticket.return_value = Ticket(TICKET, "t", "c", 5, 3)
+    client.get_ticket_requester.return_value = (8, "Заявитель")
     return client
 
 
@@ -471,3 +474,48 @@ async def test_ticket_closed_while_tech_was_typing_solution_does_not_write(env):
     await dp.feed_update(bot, _dm_msg(bot, 2, TECH_ID, "done"))
     assert any(texts.TICKET_ALREADY_CLOSED in text for _, text in bot.sent)
     client.add_solution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status", [2, 6])
+async def test_old_confirmation_buttons_do_not_close_reopened_or_closed_ticket(env, status):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    client.get_ticket.return_value.status = status
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:ok:{TICKET}"))
+    client.set_ticket_status.assert_not_awaited()
+    assert texts.STALE_BUTTON in bot.toasts
+
+
+async def test_reminder_button_from_previous_solution_is_rejected(env):
+    from bot.services.notify import solution_token
+
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    client.get_ticket.return_value.solvedate = "2026-11-16 12:00:00"
+    token = solution_token("2026-11-16 11:00:00")
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:ok:{TICKET}:{token}"))
+    client.set_ticket_status.assert_not_awaited()
+
+
+async def test_return_dialog_rechecks_live_solution_before_writing_reason(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:back:{TICKET}"))
+    client.get_ticket.return_value.status = 6
+    await dp.feed_update(bot, _dm_msg(bot, 4, REQUESTER_ID, "still broken"))
+    client.add_followup.assert_not_awaited()
+    client.set_ticket_status.assert_not_awaited()
+
+
+async def test_confirmation_clears_reminder_timer(env):
+    dp, client, repo = env
+    bot = FakeBot()
+    await _solve_via_bot(dp, repo, bot)
+    async with repo._conn.execute("SELECT count(*) FROM solution_reminders") as cur:
+        assert (await cur.fetchone())[0] == 1
+    await dp.feed_update(bot, _dm_cb(bot, 3, REQUESTER_ID, f"rs:ok:{TICKET}"))
+    async with repo._conn.execute("SELECT count(*) FROM solution_reminders") as cur:
+        assert (await cur.fetchone())[0] == 0

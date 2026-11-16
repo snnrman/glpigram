@@ -43,6 +43,27 @@ async def _init_route(mock, token: str = "sess-1"):
     )
 
 
+@pytest.mark.parametrize("deleted", [1, "1", True])
+async def test_trashed_ticket_is_not_actionable(mock, deleted):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/43").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 43,
+                "name": "Old ticket",
+                "status": 5,
+                "is_deleted": deleted,
+            },
+        )
+    )
+    client = make_client()
+    try:
+        assert await client.get_ticket(43) is None
+    finally:
+        await client.close()
+
+
 async def test_validation_reconciliation_matches_only_our_marker(mock):
     await _init_route(mock)
     marker = "[TG tech approval:unique-token]"

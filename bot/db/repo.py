@@ -449,6 +449,62 @@ class Repo:
                 "UPDATE bot_tickets SET last_status = ?, active = ? WHERE ticket_id = ?",
                 (status, int(active), ticket_id),
             )
+            if status != 5 or not active:
+                await db.execute("DELETE FROM solution_reminders WHERE ticket_id=?", (ticket_id,))
+
+    async def reset_solution_reminder(
+        self, ticket_id: int, solution_key: str, now: int, *, delivered: bool
+    ) -> None:
+        """Start the 30-minute wait after the initial solution prompt."""
+        async with self._tx() as db:
+            await db.execute(
+                "INSERT INTO solution_reminders VALUES (?,?,?,?,?) "
+                "ON CONFLICT(ticket_id) DO UPDATE SET solution_key=excluded.solution_key,"
+                "started_at=excluded.started_at,last_attempt_at=excluded.last_attempt_at,"
+                "last_sent_at=excluded.last_sent_at",
+                (ticket_id, solution_key, now, now, now if delivered else 0),
+            )
+
+    async def ensure_solution_reminder(self, ticket_id: int, solution_key: str, started: int):
+        """Adopt GLPI's solution timestamp, preserving a bot prompt's fresh timer."""
+        async with self._tx() as db:
+            await db.execute(
+                "INSERT INTO solution_reminders(ticket_id,solution_key,started_at) VALUES (?,?,?) "
+                "ON CONFLICT(ticket_id) DO UPDATE SET solution_key=excluded.solution_key,"
+                "started_at=CASE WHEN solution_reminders.solution_key='' "
+                "THEN solution_reminders.started_at ELSE excluded.started_at END,"
+                "last_attempt_at=CASE WHEN solution_reminders.solution_key='' "
+                "THEN solution_reminders.last_attempt_at ELSE 0 END,"
+                "last_sent_at=CASE WHEN solution_reminders.solution_key='' "
+                "THEN solution_reminders.last_sent_at ELSE 0 END "
+                "WHERE solution_reminders.solution_key!=excluded.solution_key",
+                (ticket_id, solution_key, started),
+            )
+            async with db.execute(
+                "SELECT * FROM solution_reminders WHERE ticket_id=?", (ticket_id,)
+            ) as cur:
+                return await cur.fetchone()
+
+    async def claim_solution_reminder(
+        self, ticket_id: int, key: str, previous: int, now: int
+    ) -> bool:
+        async with self._tx() as db:
+            cur = await db.execute(
+                "UPDATE solution_reminders SET last_attempt_at=? WHERE ticket_id=? "
+                "AND solution_key=? AND last_attempt_at=? "
+                "AND EXISTS (SELECT 1 FROM bot_tickets b WHERE b.ticket_id=? "
+                "AND b.active=1 AND b.last_status=5)",
+                (now, ticket_id, key, previous, ticket_id),
+            )
+            return cur.rowcount == 1
+
+    async def mark_solution_reminder_sent(self, ticket_id: int, key: str, now: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE solution_reminders SET last_sent_at=? WHERE ticket_id=? "
+                "AND solution_key=? AND last_attempt_at=?",
+                (now, ticket_id, key, now),
+            )
 
     async def set_ticket_followup_cursor(self, ticket_id: int, last_followup_id: int) -> None:
         async with self._tx() as db:

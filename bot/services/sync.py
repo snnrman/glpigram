@@ -67,6 +67,7 @@ class SyncService:
         approval_remind_hours: float = 4,
         claude_approvals: ClaudeApprovalService | None = None,
         tech_approvals=None,
+        solution_remind_minutes: int = 30,
     ) -> None:
         self._bot = bot
         self._client = client
@@ -83,6 +84,7 @@ class SyncService:
         self._approval_remind = approval_remind_hours * 3600
         self._claude_approvals = claude_approvals
         self._tech_approvals = tech_approvals
+        self._solution_remind = solution_remind_minutes * 60
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -391,11 +393,19 @@ class SyncService:
                 author_uid, tech_name, content = solution
         except GlpiError as exc:
             log.warning("sync_solution_lookup_failed id=%s error=%s", ticket.id, exc)
-        await notify.send_text(
+        sent = await notify.send_text(
             self._bot,
             row.requester_tg_id,
             texts.solution_proposed(ticket_id=ticket.id, tech_name=tech_name, solution=content),
-            reply_markup=notify.solution_confirm_keyboard(ticket.id),
+            reply_markup=notify.solution_confirm_keyboard(
+                ticket.id, solution_key=ticket.solvedate or "unknown"
+            ),
+        )
+        await self._repo.reset_solution_reminder(
+            ticket.id,
+            ticket.solvedate or "unknown",
+            int(self._now().timestamp()),
+            delivered=sent is not None,
         )
         # Remember the solver so a return-to-work can ping them directly.
         if tech_name:
@@ -533,6 +543,72 @@ class SyncService:
             except Exception:  # noqa: BLE001 - one poisoned ticket must not stop the rest
                 log.exception("sync_ticket_crashed id=%s", row.ticket_id)
 
+    async def _remind_solution(self, ticket) -> None:
+        ticket_id = ticket.id
+        now = self._now()
+        if not self._solution_remind or not self._schedule.is_working(now):
+            return
+        # Same lock as technician solutions and requester confirmation/return.
+        async with self._repo.ticket_action_lock(ticket_id):
+            now = self._now()
+            if not self._schedule.is_working(now):
+                return
+            row = await self._repo.get_tracked_ticket(ticket_id)
+            if row is None or not row.active or row.last_status != TICKET_STATUS_SOLVED:
+                return
+            solved = timeutil.parse_glpi_utc(ticket.solvedate)
+            key = ticket.solvedate or "unknown"
+            reminder = await self._repo.ensure_solution_reminder(
+                ticket_id, key, int((solved or now).timestamp())
+            )
+            anchor = max(
+                reminder["started_at"], reminder["last_attempt_at"], reminder["last_sent_at"]
+            )
+            waited = self._schedule.working_seconds_between(
+                datetime.fromtimestamp(anchor, tz=UTC), now
+            )
+            if waited < self._solution_remind:
+                return
+            latest = await self._client.get_ticket(ticket_id)
+            if (
+                latest is None
+                or latest.status != TICKET_STATUS_SOLVED
+                or (latest.solvedate or "unknown") != key
+            ):
+                return
+            # Do not deliver old ticket details to an unlinked/reassigned account.
+            requester = await self._client.get_ticket_requester(ticket_id)
+            linked = await self._repo.get_by_glpi(row.requester_glpi_id)
+            if (
+                requester is None
+                or requester[0] != row.requester_glpi_id
+                or linked is None
+                or linked.tg_id != row.requester_tg_id
+                or not row.requester_tg_id
+            ):
+                return
+            now = self._now()
+            if not self._schedule.is_working(now):
+                return
+            stamp = int(now.timestamp())
+            if not await self._repo.claim_solution_reminder(
+                ticket_id, key, reminder["last_attempt_at"], stamp
+            ):
+                return
+            try:
+                # Do not sleep/retry a flood wait across the end of working hours.
+                # The reserved attempt permits another try after 30 working minutes.
+                await self._bot.send_message(
+                    row.requester_tg_id,
+                    texts.solution_reminder(ticket_id, ticket.name, self._ticket_url(ticket_id)),
+                    reply_markup=notify.solution_confirm_keyboard(ticket_id, solution_key=key),
+                )
+            except Exception:  # delivery is best-effort, with no in-request retries
+                log.warning("solution_reminder_delivery_failed ticket=%s", ticket_id)
+                return
+            await self._repo.mark_solution_reminder_sent(ticket_id, key, stamp)
+            log.info("solution_reminder_sent ticket=%s", ticket_id)
+
     async def _sync_ticket(self, row: TrackedTicket) -> None:
         ticket = await self._client.get_ticket(row.ticket_id)
         if ticket is None:
@@ -568,6 +644,8 @@ class SyncService:
                 row.ticket_id, status=ticket.status, active=still_active
             )
 
+        if ticket.status == TICKET_STATUS_SOLVED:
+            await self._remind_solution(ticket)
         await self._forward_new_followups(row, ticket)
 
     async def _forward_new_followups(self, row: TrackedTicket, ticket) -> None:

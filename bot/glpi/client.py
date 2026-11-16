@@ -631,7 +631,7 @@ class GlpiClient:
         return [Ticket.from_api(r) for r in rows]
 
     async def get_ticket(self, ticket_id: int) -> Ticket | None:
-        """Fetch one ticket, or ``None`` if it no longer exists (404)."""
+        """Fetch a live ticket; missing or trashed tickets are no longer actionable."""
         try:
             resp = await self._request("GET", f"/Ticket/{ticket_id}", idempotent=True)
         except GlpiHTTPError as exc:
@@ -642,6 +642,8 @@ class GlpiClient:
         if isinstance(data, list):
             data = data[0] if data else None
         if not isinstance(data, dict):
+            return None
+        if str(data.get("is_deleted", 0)).lower() in ("1", "true"):
             return None
         return Ticket.from_api(data)
 

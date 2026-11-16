@@ -35,6 +35,7 @@ from ..glpi.client import (
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_NEW,
     TICKET_STATUS_PROCESSING_ASSIGNED,
+    TICKET_STATUS_SOLVED,
     GlpiClient,
     GlpiDocumentRejected,
     GlpiError,
@@ -115,6 +116,27 @@ def build_my_tickets_router(
     # Dialogs and menu buttons are private-chat only: in groups the bot
     # must not react to free text (callbacks are not affected).
     router.message.filter(F.chat.type == "private")
+
+    async def solution_lock(handler, event, data):
+        ticket_id = None
+        if isinstance(event, CallbackQuery) and (event.data or "").startswith("rs:"):
+            parts = event.data.split(":")
+            if len(parts) >= 3 and parts[2].isdigit():
+                ticket_id = int(parts[2])
+        if ticket_id is None and data.get("state") is not None:
+            current = await data["state"].get_state()
+            values = await data["state"].get_data()
+            if current == MyTickets.returning.state:
+                ticket_id = values.get("return_ticket_id")
+            elif current == MyTickets.closing.state:
+                ticket_id = values.get("close_ticket_id")
+        if ticket_id is not None:
+            async with repo.ticket_action_lock(ticket_id):
+                return await handler(event, data)
+        return await handler(event, data)
+
+    router.callback_query.middleware(solution_lock)
+    router.message.middleware(solution_lock)
 
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:
@@ -467,10 +489,37 @@ def build_my_tickets_router(
         await message.answer(texts.MYT_CLOSE_PROMPT, reply_markup=_close_prompt_keyboard())
 
     # -- ITIL solution cycle: requester confirms or returns to work ---------
+    async def _live_solution(ticket_id: int, tg_id: int, token: str | None = None):
+        tracked = await repo.get_tracked_ticket(ticket_id)
+        if (
+            tracked is None
+            or not tracked.active
+            or tracked.requester_tg_id != tg_id
+            or tracked.last_status != TICKET_STATUS_SOLVED
+        ):
+            return None
+        linked = await repo.get_by_tg(tg_id)
+        if linked is None or linked.glpi_users_id != tracked.requester_glpi_id:
+            return None
+        ticket = await client.get_ticket(ticket_id)
+        if ticket is None or ticket.status != TICKET_STATUS_SOLVED:
+            return None
+        if token is not None and token != notify.solution_token(ticket.solvedate or "unknown"):
+            return None
+        requester = await client.get_ticket_requester(ticket_id)
+        return tracked if requester and requester[0] == tracked.requester_glpi_id else None
+
     async def _own_tracked(cb: CallbackQuery, ticket_id: int):
         """The tracked row, but only if the presser is that ticket's requester."""
-        tracked = await repo.get_tracked_ticket(ticket_id)
-        if tracked is None or tracked.requester_tg_id != cb.from_user.id:
+        parts = cb.data.split(":")
+        try:
+            tracked = await _live_solution(
+                ticket_id, cb.from_user.id, parts[3] if len(parts) == 4 else None
+            )
+        except GlpiError:
+            await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return None
+        if tracked is None:
             await cb.answer(texts.STALE_BUTTON, show_alert=True)
             return None
         return tracked
@@ -548,7 +597,10 @@ def build_my_tickets_router(
         if await _own_tracked(cb, ticket_id) is None:
             return
         await state.set_state(MyTickets.returning)
-        await state.update_data(return_ticket_id=ticket_id)
+        parts = cb.data.split(":")
+        await state.update_data(
+            return_ticket_id=ticket_id, return_solution_token=parts[3] if len(parts) == 4 else None
+        )
         await _show(cb, texts.ask_return_reason(ticket_id), notify.dialog_cancel_keyboard())
         await cb.answer()
 
@@ -556,7 +608,19 @@ def build_my_tickets_router(
     async def on_return_reason(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
-        ticket_id = (await state.get_data())["return_ticket_id"]
+        data = await state.get_data()
+        ticket_id = data.get("return_ticket_id")
+        try:
+            valid = ticket_id is not None and await _live_solution(
+                ticket_id, message.from_user.id, data.get("return_solution_token")
+            )
+        except GlpiError:
+            await message.answer(texts.GLPI_ACTION_ERROR)
+            return
+        if not valid:
+            await state.clear()
+            await message.answer(texts.STALE_BUTTON)
+            return
         reason = message.text.strip()
         try:
             followup_id = await client.add_followup(ticket_id, f"{link.display_name}:\n{reason}")

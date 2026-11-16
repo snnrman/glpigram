@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS bot_tickets (
 
 CREATE INDEX IF NOT EXISTS idx_bot_tickets_active ON bot_tickets (active);
 
+-- Requester confirmation nudges, separate from requester -> technician reminders.
+-- Reserve attempts before Telegram sends so a restart cannot cause a burst.
+CREATE TABLE IF NOT EXISTS solution_reminders (
+    ticket_id INTEGER PRIMARY KEY,
+    solution_key TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+    last_sent_at INTEGER NOT NULL DEFAULT 0
+);
+
 -- Generic integer cursor store for the sync loop (e.g. last seen ticket id).
 CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,

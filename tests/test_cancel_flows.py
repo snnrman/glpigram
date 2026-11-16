@@ -19,6 +19,7 @@ from aiogram.types import User as TgUser
 
 from bot import texts
 from bot.db.repo import Repo
+from bot.glpi.models import Ticket
 from bot.handlers.my_tickets import MyTickets
 
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "x")
@@ -88,6 +89,8 @@ async def env(tmp_path):
         ticket_id=TICKET, requester_tg_id=REQUESTER_ID, requester_glpi_id=8, status=5, now=now
     )
     client = AsyncMock()
+    client.get_ticket.return_value = Ticket(TICKET, "t", "c", 5, 3)
+    client.get_ticket_requester.return_value = (8, "Заявитель")
     settings = Settings()
     settings.tech_group_chat_id = GROUP
     dp = build_dispatcher(client, repo, settings)

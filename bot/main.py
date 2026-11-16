@@ -218,6 +218,7 @@ async def _run(settings: Settings) -> None:
             approval_remind_hours=settings.approval_remind_hours,
             claude_approvals=dp["claude_approvals"],
             tech_approvals=dp["tech_approvals"],
+            solution_remind_minutes=settings.solution_remind_minutes,
         )
         sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
         sync_task.add_done_callback(_sync_task_died)

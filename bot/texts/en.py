@@ -876,6 +876,15 @@ def solution_proposed(*, ticket_id: int, tech_name: str | None, solution: str) -
     return head + "\n\nIs the problem solved?"
 
 
+def solution_reminder(ticket_id: int, title: str, url: str | None) -> str:
+    return (
+        f"⏰ <b>Please confirm the solution for ticket {_ticket_ref(ticket_id, url)}</b>\n"
+        f"{html.escape(title[:200])}\n\n"
+        "If the issue is resolved, confirm to close the ticket. "
+        "If it persists, return the ticket to work."
+    )
+
+
 def closed_thanks(ticket_id: int) -> str:
     return f"Ticket #{ticket_id} is closed, thank you!"
 
