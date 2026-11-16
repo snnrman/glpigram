@@ -12,9 +12,9 @@ from pathlib import Path
 from .services.ai_shadow import ClassifierError, OpenAIClassifier, prepare_input
 
 
-async def evaluate(path: str, model: str, key: str) -> bool:
+async def evaluate(path: str, model: str, key: str, internal_services: str = "") -> bool:
     cases = json.loads(Path(path).read_text(encoding="utf-8"))
-    client = OpenAIClassifier(key, model=model)
+    client = OpenAIClassifier(key, model=model, internal_services=internal_services)
     passed = tokens = 0
     try:
         for case in cases:
@@ -43,9 +43,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cases", help="JSON file of synthetic cases, never a production export")
     parser.add_argument("--model", default="gpt-5-mini-2025-08-07")
+    parser.add_argument("--internal-services", default=os.environ.get("AI_INTERNAL_SERVICES", ""))
     args = parser.parse_args()
     key = os.environ.get("OPENAI_API_KEY") or getpass.getpass("OpenAI API key: ")
-    raise SystemExit(0 if asyncio.run(evaluate(args.cases, args.model, key)) else 1)
+    raise SystemExit(
+        0 if asyncio.run(evaluate(args.cases, args.model, key, args.internal_services)) else 1
+    )
 
 
 if __name__ == "__main__":

@@ -188,6 +188,7 @@ async def _run(settings: Settings) -> None:
                     model=settings.openai_model,
                     timeout=settings.ai_shadow_timeout,
                     proxy=settings.https_proxy,
+                    internal_services=settings.ai_internal_services,
                 )
                 shadow = ShadowClassifier(
                     repo, ai_client, daily_limit=settings.ai_shadow_daily_limit

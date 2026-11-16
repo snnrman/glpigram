@@ -128,6 +128,25 @@ async def test_structured_response_and_request_have_no_tools_or_storage():
     assert (result.input_tokens, result.output_tokens) == (100, 30)
 
 
+@respx.mock
+async def test_internal_policy_is_per_client_and_never_part_of_requester_input():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=response_body()))
+    configured = OpenAIClassifier(
+        "test-secret", model=MODEL, internal_services="InternalDesk, TeamWiki,InternalDesk, "
+    )
+    default = OpenAIClassifier("test-secret", model=MODEL)
+    try:
+        await configured.classify(prepare_input("Access", "Need InternalDesk"))
+        await default.classify(prepare_input("Access", "Need ExampleCloud"))
+    finally:
+        await configured.close()
+        await default.close()
+    first, second = [json.loads(call.request.content) for call in route.calls]
+    assert first["instructions"].endswith('["InternalDesk", "TeamWiki"]')
+    assert second["instructions"].endswith("[]")
+    assert "TeamWiki" not in first["input"]
+
+
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 503, 302])
 @respx.mock
 async def test_http_errors_are_not_retried_or_leaked(status):

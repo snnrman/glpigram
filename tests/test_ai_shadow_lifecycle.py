@@ -19,6 +19,7 @@ async def test_optional_worker_startup_and_cleanup(tmp_path, monkeypatch, enable
         db_path=str(tmp_path / "lifecycle.sqlite3"),
         ai_shadow_enabled=enabled,
         openai_api_key=key,
+        ai_internal_services="InternalDesk,TeamWiki",
     )
     bot = MagicMock()
     bot.set_my_commands = AsyncMock()
@@ -46,6 +47,7 @@ async def test_optional_worker_startup_and_cleanup(tmp_path, monkeypatch, enable
     assert (injected is not None) is expected
     if expected:
         factory.assert_called_once()
+        assert factory.call_args.kwargs["internal_services"] == "InternalDesk,TeamWiki"
         ai.close.assert_awaited_once()
         assert injected.repo._db is None
     else:

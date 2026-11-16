@@ -409,6 +409,20 @@ against the corresponding GLPI tickets before considering automatic routing.
 paid API evaluation of synthetic cases, never part of offline pytest or startup.
 No fine-tuning. Future routing changes require separate user authorisation.
 
+Prompt `saas-access-shadow-v2` covers all external SaaS, with no closed brand list.
+Under this deployment policy, public free tiers do not exempt company access.
+`AI_INTERNAL_SERVICES` holds comma-separated names of existing internal deployments;
+these names are injected into each classifier instance's instructions, not request
+text. A name alone refers to that configured internal deployment. Explicit purchases
+of new licences or external Cloud editions still require approval. Keep actual
+deployment-specific exceptions in the private environment file.
+Provider switches/re-activation after another service is withdrawn are paid access,
+not repairs of the same existing account. Classify the target, not the discontinued
+source. Short access titles count as intent. Existing-account faults remain technical
+issues; acquisition of new hardware remains other. The synthetic suite has 48 cases.
+Use `--internal-services` (or `AI_INTERNAL_SERVICES` in the evaluator environment) for
+an explicit live evaluation with the same internal exception configuration.
+
 ## Dialog cancellation
 
 Every FSM state that awaits text input (comment, solution, close reason, return

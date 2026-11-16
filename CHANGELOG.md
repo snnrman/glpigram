@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Shadow classification applies the approval policy to all external SaaS, including
+  short access requests and provider switches phrased as restoring access. Existing
+  internal deployments can be configured with `AI_INTERNAL_SERVICES`; explicit new
+  licence/Cloud purchases remain subject to approval. Added 20 synthetic checks.
 - Disable link previews when sending or editing requester profile links, so
   Telegram does not append a profile preview below the ticket card.
 - Requester profile links now prefer the public Telegram username, including

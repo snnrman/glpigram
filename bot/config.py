@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5-mini-2025-08-07"
     ai_shadow_timeout: float = Field(default=15, ge=1, le=60)
     ai_shadow_daily_limit: int = Field(default=100, ge=1, le=1000)
+    ai_internal_services: str = Field(
+        default="",
+        max_length=1000,
+        description="Comma-separated existing internal systems exempt from SaaS access approval.",
+    )
 
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(

@@ -158,6 +158,10 @@ background; it does not change the menu, ticket category, or approval policy.
 `AI_SHADOW_DAILY_LIMIT=100` bound total request time and calls per UTC day.
 Requests are not retried; exceeding the cap skips observation, not ticket creation.
 
+The policy covers all external SaaS. Set `AI_INTERNAL_SERVICES` to comma-separated
+names of existing internal deployments exempt from new SaaS access approval.
+Explicit purchases of new licences/Cloud subscriptions remain subject to approval.
+
 Only title/request text is sent, with common credentials and identifiers masked.
 Attachments and identity metadata are excluded. Masking is not full anonymisation
 of arbitrary free text. Requests use `store=false`; local input is cleared after
@@ -172,13 +176,15 @@ venv/bin/python -m bot.ai_shadow_report --limit 30
 
 `source` records the chosen flow, not a correctness verdict. Review against the
 GLPI ticket; synthetic accuracy alone does not justify automatic routing.
-To explicitly evaluate the 28 fictional examples (billed API calls, no GLPI writes):
+To explicitly evaluate the 48 fictional examples (billed API calls, no GLPI writes):
 
 ```bash
 venv/bin/python -m bot.ai_shadow_eval tests/fixtures/ai_shadow_cases.json
 ```
 
-The evaluator reads `OPENAI_API_KEY` or prompts without echo. To disable the pilot,
+The evaluator reads `OPENAI_API_KEY` or prompts without echo. It also accepts
+`--internal-services` or the `AI_INTERNAL_SERVICES` environment variable.
+To disable the pilot,
 set `AI_SHADOW_ENABLED=false` and restart. Existing approvals continue normally.
 
 ### Local checks
