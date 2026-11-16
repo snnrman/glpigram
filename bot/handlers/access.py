@@ -45,6 +45,7 @@ from ..glpi.client import (
 )
 from ..services import notify
 from ..services.access_target import classify_access_target
+from ..services.ai_shadow import ShadowClassifier
 from ..services.cards import CardService
 from ..services.claude_approval import CLAUDE_POLICY_MARKER, ClaudeApprovalService
 from .new_ticket import main_menu_keyboard
@@ -160,6 +161,7 @@ def build_access_router(
     access_category_id: int | None = None,
     cards: CardService | None = None,
     claude: ClaudeApprovalService | None = None,
+    shadow: ShadowClassifier | None = None,
 ) -> Router:
     router = Router(name="access")
     router.message.filter(F.chat.type == "private")
@@ -422,6 +424,9 @@ def build_access_router(
             texts.acc_sent(ticket_id, data["lead_name"], _url(ticket_id)),
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
         )
+        if shadow is not None:
+            # Only the employee's request; exclude generated identity/lead metadata.
+            await shadow.observe(ticket_id, "access", "", data["request"])
 
     # --- the lead answers -----------------------------------------------------
     async def _own_pending(cb: CallbackQuery, ticket_id: int):

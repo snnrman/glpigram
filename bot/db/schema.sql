@@ -1,6 +1,28 @@
 -- SQLite schema for the GLPI Telegram bot.
 -- Applied idempotently on startup (CREATE ... IF NOT EXISTS).
 
+-- Observation only. No foreign keys or writes to ticket/approval state.
+-- Sanitised input is erased after processing; terminal results expire after 30 days.
+CREATE TABLE IF NOT EXISTS ai_shadow (
+    ticket_id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL CHECK(source IN ('new', 'access')),
+    payload TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'pending',
+    queued_at INTEGER NOT NULL,
+    started_at INTEGER NOT NULL DEFAULT 0,
+    finished_at INTEGER NOT NULL DEFAULT 0,
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    service TEXT NOT NULL DEFAULT '',
+    error_code TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ai_shadow_state ON ai_shadow (state, queued_at);
+CREATE INDEX IF NOT EXISTS idx_ai_shadow_started ON ai_shadow (started_at);
+
 -- Telegram <-> GLPI account mapping (feature 2).
 -- One row per linked Telegram user.
 CREATE TABLE IF NOT EXISTS users (

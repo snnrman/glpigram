@@ -371,8 +371,43 @@ deploy/
      working hours only. An approval answered elsewhere / whose ticket is gone is marked
      moot (-2) and dropped. State in `access_approvals` (SQLite).
 
-Out of scope for now: SLA warnings, LLM-based auto-classification, multi-entity support.
+Out of scope for now: SLA warnings, LLM-based automatic routing, multi-entity support.
 Keep the code structured so these can be added later.
+
+## OpenAI shadow classification
+
+`AI_SHADOW_ENABLED` defaults to false. With a configured `OPENAI_API_KEY`, `_run`
+starts an independent `ShadowClassifier` task, injects it into the /new and /access
+routers, and cancels/closes it before closing the repository. A missing optional
+key disables observation with a warning; it must not prevent the bot from starting.
+The handlers enqueue only AFTER creation and the requester confirmation. There is
+no classifier call on the ticket-creation path. API failures never change tickets,
+menus, validators, lead selection, Claude stages, or notifications.
+
+The new `ai_shadow` table is observational and is never consulted by routing or
+approval code. Unique ticket IDs prevent repeated calls; claims reserve a UTC-day
+budget under the repository transaction lock. HTTP failures and interrupted calls
+consume budget and are not retried. Pending jobs survive restarts; running jobs
+become interrupted errors to avoid rebilling uncertain requests. Budget excess is
+skipped. Cleanup runs on startup and daily, retaining rows for 30 days.
+
+Only title and original request text are sent; no requester/lead metadata, files,
+GLPI credentials, ticket numbers, history, or backfill. `redact` masks common keys,
+password assignments, emails, phones, IPv4 addresses, handles and URL details.
+This is best effort, not full anonymisation of names or arbitrary prose. Sanitised
+input is stored only until completion/error/skip, then cleared. Journals and the
+read-only report contain labels and IDs, never request text or API error bodies.
+OpenAI requests use the fixed official Responses endpoint, `store=false`, a strict
+two-enum schema, no tools, a 6000-character input cap and 512 output tokens. Invalid,
+refused or incomplete replies are errors, not decisions. Model and prompt version
+are saved for review. Default deadline: 15s; default request cap: 100 per UTC day.
+
+`python -m bot.ai_shadow_report` reads results without changing the DB. The `source`
+column is the user's chosen flow, NOT a ground-truth label. Assess real predictions
+against the corresponding GLPI tickets before considering automatic routing.
+`python -m bot.ai_shadow_eval tests/fixtures/ai_shadow_cases.json` is an explicit,
+paid API evaluation of synthetic cases, never part of offline pytest or startup.
+No fine-tuning. Future routing changes require separate user authorisation.
 
 ## Dialog cancellation
 

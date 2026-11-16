@@ -210,6 +210,95 @@ class Repo:
             else:
                 await db.commit()
 
+    # -- optional AI observation (never read by approval/ticket handlers) ---
+    async def enqueue_ai_shadow(
+        self, ticket_id: int, source: str, payload: str, now: int, *, skip_reason: str = ""
+    ) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO ai_shadow "
+                "(ticket_id,source,payload,queued_at,state,error_code,finished_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (
+                    ticket_id,
+                    source,
+                    payload,
+                    now,
+                    "skipped" if skip_reason else "pending",
+                    skip_reason,
+                    now if skip_reason else 0,
+                ),
+            )
+
+    async def recover_ai_shadow(self, now: int) -> None:
+        async with self._tx() as db:
+            # A request may already have been billed before a crash. Do not replay it.
+            await db.execute(
+                "UPDATE ai_shadow SET state='error',error_code='interrupted',payload='',"
+                "finished_at=? WHERE state='running'",
+                (now,),
+            )
+            await db.execute("DELETE FROM ai_shadow WHERE queued_at < ?", (now - 30 * 86400,))
+
+    async def claim_ai_shadow(
+        self, now: int, daily_limit: int, model: str, prompt_version: str
+    ) -> aiosqlite.Row | None:
+        async with self._tx() as db:
+            async with db.execute(
+                "SELECT * FROM ai_shadow WHERE state='pending' ORDER BY queued_at,ticket_id LIMIT 1"
+            ) as cur:
+                row = await cur.fetchone()
+            if row is None:
+                return None
+            async with db.execute(
+                "SELECT COUNT(*) FROM ai_shadow WHERE started_at>=? AND started_at>0",
+                (now // 86400 * 86400,),
+            ) as cur:
+                used = (await cur.fetchone())[0]
+            if used >= daily_limit:
+                await db.execute(
+                    "UPDATE ai_shadow SET state='skipped',error_code='daily_limit',payload='',"
+                    "finished_at=? WHERE state='pending'",
+                    (now,),
+                )
+                return None
+            await db.execute(
+                "UPDATE ai_shadow SET state='running',started_at=?,model=?,prompt_version=? "
+                "WHERE ticket_id=?",
+                (now, model, prompt_version, row["ticket_id"]),
+            )
+            return row
+
+    async def finish_ai_shadow(
+        self,
+        ticket_id: int,
+        now: int,
+        *,
+        category: str = "",
+        service: str = "",
+        error_code: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        latency_ms: int = 0,
+    ) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE ai_shadow SET state=?,payload='',finished_at=?,category=?,service=?,"
+                "error_code=?,input_tokens=?,output_tokens=?,latency_ms=? "
+                "WHERE ticket_id=? AND state='running'",
+                (
+                    "error" if error_code else "done",
+                    now,
+                    category,
+                    service,
+                    error_code,
+                    input_tokens,
+                    output_tokens,
+                    latency_ms,
+                    ticket_id,
+                ),
+            )
+
     # -- account linking ---------------------------------------------------
     async def get_by_tg(self, tg_id: int) -> LinkedUser | None:
         async with self._conn.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,)) as cur:

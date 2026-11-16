@@ -34,6 +34,7 @@ from .handlers.tech_tickets import build_tech_tickets_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
 from .schedule import WorkSchedule
+from .services.ai_shadow import OpenAIClassifier, ShadowClassifier
 from .services.cards import CardService
 from .services.claude_approval import ClaudeApprovalService
 from .services.profile_links import ProfileLinksMiddleware
@@ -58,7 +59,9 @@ def _work_schedule(settings: Settings) -> WorkSchedule:
     )
 
 
-def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Dispatcher:
+def build_dispatcher(
+    client: GlpiClient, repo: Repo, settings: Settings, *, shadow: ShadowClassifier | None = None
+) -> Dispatcher:
     dp = Dispatcher()
     category_cache: TTLValue = TTLValue(client.list_categories, settings.category_cache_ttl)
     schedule = _work_schedule(settings)
@@ -124,6 +127,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         access_category_id=settings.access_category_id,
         claude=claude,
         cards=cards,
+        shadow=shadow,
     )
     business = build_new_ticket_router(
         client,
@@ -131,6 +135,7 @@ def build_dispatcher(client: GlpiClient, repo: Repo, settings: Settings) -> Disp
         repo,
         ticket_front_base=settings.glpi_front_base,
         schedule=schedule,
+        shadow=shadow,
     )
     for router in (tech, tech_tickets, my_tickets, stats, access, business):
         router.message.middleware(auth)
@@ -168,12 +173,30 @@ async def _run(settings: Settings) -> None:
     )
     repo = Repo(settings.db_path)
     sync_task: asyncio.Task | None = None
+    shadow_task: asyncio.Task | None = None
+    ai_client: OpenAIClassifier | None = None
     # Everything after resource creation runs under the finally so a startup
     # failure (DB perms, bad schedule config) still closes the HTTP sessions.
     try:
         await repo.connect()
         bot.session.middleware(ProfileLinksMiddleware(repo, front_base=settings.glpi_front_base))
-        dp = build_dispatcher(client, repo, settings)
+        shadow = None
+        if settings.ai_shadow_enabled:
+            if settings.openai_api_key.get_secret_value():
+                ai_client = OpenAIClassifier(
+                    settings.openai_api_key.get_secret_value(),
+                    model=settings.openai_model,
+                    timeout=settings.ai_shadow_timeout,
+                    proxy=settings.https_proxy,
+                )
+                shadow = ShadowClassifier(
+                    repo, ai_client, daily_limit=settings.ai_shadow_daily_limit
+                )
+                shadow_task = asyncio.create_task(shadow.run(), name="ai_shadow")
+                log.info("ai_shadow_enabled daily_limit=%s", settings.ai_shadow_daily_limit)
+            else:
+                log.warning("ai_shadow_disabled reason=missing_key")
+        dp = build_dispatcher(client, repo, settings, shadow=shadow)
         sync = SyncService(
             bot,
             client,
@@ -193,6 +216,12 @@ async def _run(settings: Settings) -> None:
         await _set_commands(bot)
         await dp.start_polling(bot, handle_signals=True)
     finally:
+        if shadow_task is not None:
+            shadow_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await shadow_task
+        if ai_client is not None:
+            await ai_client.close()
         if sync_task is not None:
             sync_task.cancel()
             with suppress(asyncio.CancelledError):

@@ -149,6 +149,40 @@ Key design points:
 
 ## Development
 
+### Optional AI observation
+
+Set `AI_SHADOW_ENABLED=true` and `OPENAI_API_KEY` in the private environment file,
+then restart the service. This classifies only newly submitted bot requests in the
+background; it does not change the menu, ticket category, or approval policy.
+`OPENAI_MODEL` defaults to `gpt-5-mini-2025-08-07`; `AI_SHADOW_TIMEOUT=15` and
+`AI_SHADOW_DAILY_LIMIT=100` bound total request time and calls per UTC day.
+Requests are not retried; exceeding the cap skips observation, not ticket creation.
+
+Only title/request text is sent, with common credentials and identifiers masked.
+Attachments and identity metadata are excluded. Masking is not full anonymisation
+of arbitrary free text. Requests use `store=false`; local input is cleared after
+processing, and observation records expire after 30 days.
+
+Read results on the bot host:
+
+```bash
+cd /opt/glpi-tgbot
+venv/bin/python -m bot.ai_shadow_report --limit 30
+```
+
+`source` records the chosen flow, not a correctness verdict. Review against the
+GLPI ticket; synthetic accuracy alone does not justify automatic routing.
+To explicitly evaluate the 28 fictional examples (billed API calls, no GLPI writes):
+
+```bash
+venv/bin/python -m bot.ai_shadow_eval tests/fixtures/ai_shadow_cases.json
+```
+
+The evaluator reads `OPENAI_API_KEY` or prompts without echo. To disable the pilot,
+set `AI_SHADOW_ENABLED=false` and restart. Existing approvals continue normally.
+
+### Local checks
+
 ```bash
 python3 -m venv venv && venv/bin/pip install -r requirements.txt
 venv/bin/pip install pytest pytest-asyncio pytest-cov respx ruff

@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional OpenAI shadow classification of newly submitted bot tickets. A durable
+  background worker records paid-access, technical, other or unclear predictions;
+  menus, GLPI fields and existing approval workflows remain unchanged. Includes
+  bounded requests, input masking, a read-only report and 28 synthetic evaluation cases.
 - New Claude access requests require lead approval followed by one designated
   service approver; rejection is final. Other services retain lead-only approval.
 - Conservative Claude alias recognition with neutral text clarification instead

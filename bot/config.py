@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -85,6 +85,13 @@ class Settings(BaseSettings):
         default=4,
         description="Re-ping a silent lead about a pending approval every N WORKING hours.",
     )
+
+    # Optional observation only: never changes ticket routing or approvals.
+    ai_shadow_enabled: bool = False
+    openai_api_key: SecretStr = SecretStr("")
+    openai_model: str = "gpt-5-mini-2025-08-07"
+    ai_shadow_timeout: float = Field(default=15, ge=1, le=60)
+    ai_shadow_daily_limit: int = Field(default=100, ge=1, le=1000)
 
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(

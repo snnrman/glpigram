@@ -44,6 +44,7 @@ from ..glpi.client import (
 from ..glpi.models import ITILCategory
 from ..schedule import WorkSchedule
 from ..services import attachments, notify
+from ..services.ai_shadow import ShadowClassifier
 
 log = logging.getLogger(__name__)
 
@@ -183,6 +184,7 @@ def build_new_ticket_router(
     *,
     ticket_front_base: str | None = None,
     schedule: WorkSchedule | None = None,
+    shadow: ShadowClassifier | None = None,
 ) -> Router:
     """Wire the /new dialog with its GLPI dependencies (closure-injected)."""
     router = Router(name="new_ticket")
@@ -452,6 +454,8 @@ def build_new_ticket_router(
         notice = _quiet_notice(data["urgency"])
         if notice:
             await message.answer(notice)
+        if shadow is not None:
+            await shadow.observe(ticket_id, "new", data["title"], data["description"])
 
     async def _upload_attachments(
         bot: Bot, ticket_id: int, files: list[dict]
