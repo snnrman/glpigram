@@ -23,6 +23,7 @@ from aiogram.client.session.middlewares.base import BaseRequestMiddleware, NextR
 from aiogram.exceptions import TelegramAPIError
 from aiogram.methods import EditMessageText, Response, SendMessage, TelegramMethod
 from aiogram.methods.base import TelegramType
+from aiogram.types import LinkPreviewOptions
 
 from ..db.repo import Repo
 
@@ -109,5 +110,10 @@ class ProfileLinksMiddleware(BaseRequestMiddleware):
                         lambda match: f'href="{html.escape(urls[int(match[1])], quote=True)}"',
                         method.text,
                     )
-                    method = method.model_copy(update={"text": text})
+                    method = method.model_copy(
+                        update={
+                            "text": text,
+                            "link_preview_options": LinkPreviewOptions(is_disabled=True),
+                        }
+                    )
         return await make_request(bot, method)

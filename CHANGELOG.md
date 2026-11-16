@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Disable link previews when sending or editing requester profile links, so
+  Telegram does not append a profile preview below the ticket card.
 - Requester profile links now prefer the public Telegram username, including
   users whose forwarding privacy disables ID mentions in the support group.
   The same resolution applies to new cards, card edits, technician details and

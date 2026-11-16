@@ -398,6 +398,8 @@ history line («Решение предложено: <техник>»), never th
 - Profile links: renderers keep emitting `user_mention(name, tg_id)`. The shared
   `ProfileLinksMiddleware`, installed on the production Bot session in `_run`,
   resolves those anchors for HTML `sendMessage` and `editMessageText` requests.
+  It also disables link previews on those requests, retaining clickable names
+  without appending a Telegram profile preview below cards or approval prompts.
   Prefer `https://t.me/<username>` from `getChat` (including active usernames):
   `has_private_forwards` can cause Telegram to silently drop `tg://user` mentions
   outside the user's own chat. With no username, retain ID mentions only when

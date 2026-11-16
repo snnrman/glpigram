@@ -12,7 +12,12 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import GetChat, SendMessage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    MessageEntity,
+)
 
 from bot.db.repo import Repo
 from bot.glpi.models import Ticket
@@ -112,7 +117,12 @@ async def test_private_forward_setting_does_not_remove_requester_profile(harness
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="Take", callback_data="ta:take:7")]]
     )
-    original = SendMessage(chat_id=-100, text=text, reply_markup=keyboard)
+    original = SendMessage(
+        chat_id=-100,
+        text=text,
+        reply_markup=keyboard,
+        link_preview_options=LinkPreviewOptions(is_disabled=False),
+    )
     await bot(original)
     await bot.edit_message_text(text, chat_id=-100, message_id=123, reply_markup=keyboard)
     for sent in session.messages:
@@ -120,7 +130,9 @@ async def test_private_forward_setting_does_not_remove_requester_profile(harness
         assert f"tg://user?id={TG_ID}" not in sent.text
         assert sent.reply_markup == keyboard
         assert common["url"] in sent.text
+        assert sent.link_preview_options.is_disabled is True
     assert original.text == text  # no mutation of the caller's retryable method
+    assert original.link_preview_options.is_disabled is False
     assert session.lookups == [(TG_ID, 3)]
 
 
@@ -141,6 +153,7 @@ async def test_old_saved_card_uses_public_profile_after_restart_and_on_every_edi
     await cards.record_event(bot, 7, "Solved", status=5)
     assert len(session.messages) == 2
     assert all(PUBLIC_URL in method.text for method in session.messages)
+    assert all(method.link_preview_options.is_disabled is True for method in session.messages)
     assert "Description" in session.messages[-1].text
     assert "Taken" in session.messages[-1].text and "Solved" in session.messages[-1].text
     card = await repo.get_card(7)
