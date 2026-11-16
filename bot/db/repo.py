@@ -128,6 +128,46 @@ class Repo:
         self._db_path = db_path
         self._db: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
+        self._ticket_locks: dict[int, asyncio.Lock] = {}
+
+    def ticket_action_lock(self, ticket_id: int) -> asyncio.Lock:
+        """Serialize approval registration and technician mutations in this process."""
+        return self._ticket_locks.setdefault(ticket_id, asyncio.Lock())
+
+    async def get_tech_approval(self, ticket_id: int):
+        async with self._conn.execute(
+            "SELECT * FROM tech_approval_requests WHERE ticket_id=?", (ticket_id,)
+        ) as cur:
+            return await cur.fetchone()
+
+    async def pending_tech_approvals(self):
+        async with self._conn.execute(
+            "SELECT ticket_id FROM tech_approval_requests "
+            "WHERE phase NOT IN ('done','cancelled','failed')"
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+    async def reserve_tech_approval(self, ticket_id: int, token: str, payload: str, now: int):
+        async with self._tx() as db:
+            cur = await db.execute(
+                "INSERT INTO tech_approval_requests(ticket_id,token,payload,created_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(ticket_id) DO UPDATE SET "
+                "token=excluded.token,payload=excluded.payload,created_at=excluded.created_at,"
+                "phase='prepared',validation_id=NULL WHERE tech_approval_requests.phase='failed'",
+                (ticket_id, token, payload, now),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("Ticket already reserved for approval")
+
+    async def update_tech_approval(
+        self, ticket_id: int, phase: str, validation_id: int | None = None
+    ):
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE tech_approval_requests SET phase=?, "
+                "validation_id=COALESCE(?,validation_id) WHERE ticket_id=?",
+                (phase, validation_id, ticket_id),
+            )
 
     async def connect(self) -> None:
         """Open the connection and apply the schema (idempotent)."""
@@ -702,7 +742,7 @@ class Repo:
                 ),
             )
             await db.execute(
-                "INSERT INTO bot_tickets (ticket_id,requester_tg_id,requester_glpi_id,"
+                "INSERT OR IGNORE INTO bot_tickets (ticket_id,requester_tg_id,requester_glpi_id,"
                 "last_status,created_at) VALUES (?,?,?,1,?)",
                 (ticket_id, requester_tg_id, requester_glpi_id, now),
             )

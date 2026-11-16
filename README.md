@@ -187,6 +187,8 @@ The evaluator reads `OPENAI_API_KEY` or prompts without echo. It also accepts
 To disable the pilot,
 set `AI_SHADOW_ENABLED=false` and restart. Existing approvals continue normally.
 
+A technician can request approval for an existing open ticket using **📨 Request approval** on the card or technician detail view, or `/approval 714` for older cards. The bot suggests the requester's lead or offers a list, then asks for confirmation. The lead receives decision buttons. Taking, handing off and resolving the ticket through the bot are blocked while approval is pending; rejection closes it. Claude retains its additional approval stage.
+
 ### Local checks
 
 ```bash

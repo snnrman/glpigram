@@ -66,6 +66,7 @@ class SyncService:
         remind_interval_hours: float = 3,
         approval_remind_hours: float = 4,
         claude_approvals: ClaudeApprovalService | None = None,
+        tech_approvals=None,
     ) -> None:
         self._bot = bot
         self._client = client
@@ -81,6 +82,7 @@ class SyncService:
         self._remind_interval = remind_interval_hours * 3600
         self._approval_remind = approval_remind_hours * 3600
         self._claude_approvals = claude_approvals
+        self._tech_approvals = tech_approvals
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -116,6 +118,8 @@ class SyncService:
     _RATING_PUSH_MAX_AGE = 3 * 86400
 
     async def tick(self) -> None:
+        if self._tech_approvals is not None:
+            await self._tech_approvals.tick(self._bot)
         if self._claude_approvals is not None:
             await self._claude_approvals.tick(self._bot)
         # Deliver anything queued overnight first, once work has resumed.

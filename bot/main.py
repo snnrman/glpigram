@@ -30,6 +30,7 @@ from .handlers.my_tickets import build_my_tickets_router
 from .handlers.new_ticket import build_new_ticket_router
 from .handlers.stats import build_stats_router
 from .handlers.tech_actions import build_tech_actions_router
+from .handlers.tech_approval import build_tech_approval_router
 from .handlers.tech_tickets import build_tech_tickets_router
 from .logging_setup import setup_logging
 from .middleware import AuthMiddleware
@@ -39,6 +40,7 @@ from .services.cards import CardService
 from .services.claude_approval import ClaudeApprovalService
 from .services.profile_links import ProfileLinksMiddleware
 from .services.sync import SyncService
+from .services.tech_approval import TechApprovalService
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +121,11 @@ def build_dispatcher(
         reminder_hours=settings.approval_remind_hours,
     )
     dp["claude_approvals"] = claude
+    tech_approval_service = TechApprovalService(
+        client, repo, claude, cards=cards, front_base=settings.glpi_front_base
+    )
+    dp["tech_approvals"] = tech_approval_service
+    tech_approval = build_tech_approval_router(tech_approval_service, lead_directory)
     access = build_access_router(
         client,
         repo,
@@ -137,7 +144,7 @@ def build_dispatcher(
         schedule=schedule,
         shadow=shadow,
     )
-    for router in (tech, tech_tickets, my_tickets, stats, access, business):
+    for router in (tech_approval, tech, tech_tickets, my_tickets, stats, access, business):
         router.message.middleware(auth)
         router.callback_query.middleware(auth)
         dp.include_router(router)
@@ -210,6 +217,7 @@ async def _run(settings: Settings) -> None:
             remind_interval_hours=settings.remind_interval_hours,
             approval_remind_hours=settings.approval_remind_hours,
             claude_approvals=dp["claude_approvals"],
+            tech_approvals=dp["tech_approvals"],
         )
         sync_task = asyncio.create_task(sync.run(), name="glpi_sync")
         sync_task.add_done_callback(_sync_task_died)

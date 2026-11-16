@@ -5,6 +5,82 @@ from __future__ import annotations
 import html
 import re
 
+# Technician-initiated approval of an existing ticket.
+BTN_TECH_APPROVAL = "📨 Request approval"
+TECH_APPROVAL_EXISTS = "This ticket already has an approval. Do not submit it again."
+TECH_APPROVAL_CLOSED = "Approval is available only for open, unsolved tickets."
+TECH_APPROVAL_NO_REQUESTER = "This ticket has no requester. Set the requester in GLPI first."
+TECH_APPROVAL_CHANGED = "The ticket changed. Start approval again and review its content."
+TECH_APPROVAL_BUSY = "Finish your current bot dialog or send /cancel in your private chat first."
+TECH_APPROVAL_DM = "Choose the approving lead in your private chat with the bot."
+TECH_APPROVAL_USAGE = "Usage: /approval 714 — request approval for an existing ticket."
+TECH_APPROVAL_PENDING = (
+    "Request saved. Delivery is not yet confirmed: "
+    "the bot will check GLPI and retry the notification. Do not submit again."
+)
+TECH_APPROVAL_CANCELLED = "The ticket state changed. Approval submission was cancelled."
+TECH_APPROVAL_BLOCKED = (
+    "The ticket awaits approval. Taking, handing off or resolving it is blocked until a decision."
+)
+TECH_APPROVAL_WAITING = "⏳ Awaiting approval"
+
+
+def tech_approval_pick(ticket_id: int) -> str:
+    return f"📨 Ticket #{ticket_id}: choose the approving lead."
+
+
+def tech_approval_confirm(ticket_id: int, request: str, lead: str) -> str:
+    return (
+        f"📨 <b>Request approval for ticket #{ticket_id}?</b>\n\n"
+        f"{html.escape(request)}\n\nApprover: <b>{html.escape(lead)}</b>\n"
+        "Work is paused until a decision. A rejection will close the ticket."
+    )
+
+
+def tech_approval_audit(tech: str, lead: str) -> str:
+    return f"Approval requested by technician: {tech}. Approving lead: {lead} (via Telegram bot)."
+
+
+def tech_approval_history(tech: str, lead: str) -> str:
+    return f"📨 Approval: {html.escape(lead)} · requested by {html.escape(tech)}"
+
+
+def tech_approval_sent(ticket_id: int, lead: str, url: str | None) -> str:
+    return (
+        f"📨 Ticket {_ticket_ref(ticket_id, url)} sent to "
+        f"{html.escape(lead)} for approval. Awaiting a decision."
+    )
+
+
+def tech_approval_decision(
+    ticket_id: int, lead: str, accepted: bool, reason: str, url: str | None
+) -> str:
+    if accepted:
+        return (
+            f"✅ Ticket {_ticket_ref(ticket_id, url)} approved by "
+            f"{html.escape(lead)}. Work may continue."
+        )
+    return (
+        f"❌ Ticket {_ticket_ref(ticket_id, url)} rejected and closed by "
+        f"{html.escape(lead)}.\nReason: {html.escape(reason)}"
+    )
+
+
+def tech_approval_lead_prompt(
+    ticket_id: int,
+    requester: str,
+    requester_tg_id: int | None,
+    request: str,
+    tech: str,
+    url: str | None,
+) -> str:
+    return (
+        f"📨 <b>Ticket {_ticket_ref(ticket_id, url)} — your decision is needed</b>\n\n"
+        f"👤 {user_mention(requester, requester_tg_id)}\n"
+        f"{html.escape(request)}\n\nRequested by technician: {html.escape(tech)}"
+    )
+
+
 # --- /start + main menu ---
 START_GREETING = (
     "Hello! This is GLPIgram — the tech-support bot.\n"

@@ -49,6 +49,11 @@ def tech_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
                 ),
             ],
             [InlineKeyboardButton(text=texts.BTN_TECH_TAKE, callback_data=f"ta:take:{ticket_id}")],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_APPROVAL, callback_data=f"ta:approval:{ticket_id}"
+                )
+            ],
         ]
     )
 
@@ -60,6 +65,8 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> Message | None:
     living card; None (falsy) on failure — callers that must not lose messages
     (the quiet-hours flush) keep the item queued then.
     """
+    if not chat_id:  # Existing GLPI requester without a Telegram account.
+        return None
     for attempt in (1, 2):
         try:
             return await bot.send_message(chat_id, text, **kwargs)
@@ -340,6 +347,11 @@ def tech_ticket_keyboard_taken(ticket_id: int) -> InlineKeyboardMarkup:
                 ),
             ],
             [InlineKeyboardButton(text=texts.BTN_HANDOFF, callback_data=f"ta:handoff:{ticket_id}")],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_APPROVAL, callback_data=f"ta:approval:{ticket_id}"
+                )
+            ],
         ]
     )
 

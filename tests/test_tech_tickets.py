@@ -157,7 +157,7 @@ async def test_open_detail_has_reply_and_close_for_in_work(env):
     text, kb = bot.edits[-1]
     assert "Принтер" in text and texts.ticket_status_label(2) in text
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert data == ["ta:comment:5", "ta:close:5", "ta:handoff:5", "tt:list"]
+    assert data == ["ta:approval:5", "ta:comment:5", "ta:close:5", "ta:handoff:5", "tt:list"]
 
 
 async def test_solved_detail_hides_close(env):
@@ -234,7 +234,7 @@ async def test_unassigned_detail_has_take_and_back_to_all(env):
     assert "Не работает VPN" in text
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
     # Full-width Take first; no handoff (nobody to hand off from); back to tt:all
-    assert data == ["ta:take:74", "ta:comment:74", "ta:close:74", "tt:all"]
+    assert data == ["ta:take:74", "ta:approval:74", "ta:comment:74", "ta:close:74", "tt:all"]
 
 
 async def test_back_from_unassigned_detail_re_renders_queue(env):

@@ -15,6 +15,7 @@ from bot.glpi.client import (
     GlpiAuthError,
     GlpiClient,
     GlpiDocumentRejected,
+    GlpiError,
     GlpiHTTPError,
     GlpiNetworkError,
 )
@@ -40,6 +41,37 @@ async def _init_route(mock, token: str = "sess-1"):
     return mock.get(f"{BASE}/initSession").mock(
         return_value=httpx.Response(200, json={"session_token": token})
     )
+
+
+async def test_validation_reconciliation_matches_only_our_marker(mock):
+    await _init_route(mock)
+    marker = "[TG tech approval:unique-token]"
+    route = mock.get(f"{BASE}/Ticket/714/TicketValidation").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 1, "comment_submission": None},
+                {"id": 2, "comment_submission": f"<p>{marker}</p>"},
+            ],
+        )
+    )
+    client = make_client()
+    try:
+        assert await client.find_validation(714, marker) == 2
+        assert await client.find_validation(714, "missing") is None
+        route.mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {"id": 2, "comment_submission": marker},
+                    {"id": 3, "comment_submission": marker},
+                ],
+            )
+        )
+        with pytest.raises(GlpiError, match="Ambiguous"):
+            await client.find_validation(714, marker)
+    finally:
+        await client.close()
 
 
 # --- init session -----------------------------------------------------------

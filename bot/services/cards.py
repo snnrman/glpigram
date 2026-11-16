@@ -189,6 +189,9 @@ class CardService:
         """Render a Claude workflow label from its saved approver snapshot."""
         row = await self._repo.get_claude_approval(ticket_id)
         if row is None:
+            approval = await self._repo.get_approval(ticket_id)
+            if approval is not None and approval["status"] == 0:
+                return texts.TECH_APPROVAL_WAITING
             return None
         members = await self._repo.claude_members(ticket_id)
         return texts.claude_card_stage(

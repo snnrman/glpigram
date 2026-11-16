@@ -62,6 +62,14 @@ def _detail_keyboard(
             InlineKeyboardButton(text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}")
         )
     tail = [InlineKeyboardButton(text=texts.BTN_MYT_BACK, callback_data=back_data)]
+    if status not in (5, 6):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_APPROVAL, callback_data=f"ta:approval:{ticket_id}"
+                )
+            ]
+        )
     if status not in (TICKET_STATUS_SOLVED, TICKET_STATUS_NEW):
         # Handoff needs a current assignee — pointless on an untaken ticket.
         tail.insert(

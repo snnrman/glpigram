@@ -144,6 +144,17 @@ CREATE TABLE IF NOT EXISTS access_approvals (
 
 CREATE INDEX IF NOT EXISTS idx_access_pending ON access_approvals (status);
 
+-- Durable registration of approvals initiated by technicians on existing tickets.
+-- A POST of unknown outcome is reconciled by its marker, never blindly repeated.
+CREATE TABLE IF NOT EXISTS tech_approval_requests (
+    ticket_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'prepared',
+    validation_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+
 -- Requester's one-tap rating of a solved ticket (1=😞, 2=😐, 3=🤩).
 -- One row per ticket; re-rating overwrites (only reachable on old messages).
 CREATE TABLE IF NOT EXISTS ticket_ratings (

@@ -70,7 +70,12 @@ async def test_event_edits_card_with_history_and_time(repo):
     assert "Статус: ⚙️ В работе (назначена)" in text  # header updated
     # taken -> the Take button is gone; Reply/Close plus Reassign
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert data == [f"ta:comment:{TICKET}", f"ta:close:{TICKET}", f"ta:handoff:{TICKET}"]
+    assert data == [
+        f"ta:comment:{TICKET}",
+        f"ta:close:{TICKET}",
+        f"ta:handoff:{TICKET}",
+        f"ta:approval:{TICKET}",
+    ]
 
 
 async def test_reply_ping_is_a_reply_to_the_card(repo):

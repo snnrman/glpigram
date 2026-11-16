@@ -320,6 +320,8 @@ class ClaudeApprovalService:
                 log.warning("claude_decision_edit_failed ticket=%s", row["ticket_id"])
         recipient = await self._active_link(row["requester_glpi_id"])
         if recipient is None:
+            if not row["requester_tg_id"]:
+                await self.repo.mark_claude_notified(row["ticket_id"])
             return
         sent = await notify.send_text(
             bot,

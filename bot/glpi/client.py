@@ -897,6 +897,19 @@ class GlpiClient:
             self._session_user_id = int(resp.json()["session"]["glpiID"])
         return self._session_user_id
 
+    async def find_validation(self, ticket_id: int, marker: str) -> int | None:
+        """Recover our validation after a lost POST response; no write/retry."""
+        resp = await self._request("GET", f"/Ticket/{ticket_id}/TicketValidation", idempotent=True)
+        rows = resp.json()
+        if not isinstance(rows, list):
+            raise GlpiError("Unexpected validation list")
+        matches = [
+            int(row["id"]) for row in rows if marker in (row.get("comment_submission") or "")
+        ]
+        if len(matches) > 1:
+            raise GlpiError("Ambiguous validation registration")
+        return matches[0] if matches else None
+
     async def create_validation(self, ticket_id: int, *, comment: str) -> int:
         """Attach an approval request to a ticket; returns the validation id.
 

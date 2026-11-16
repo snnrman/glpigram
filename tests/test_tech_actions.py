@@ -43,7 +43,7 @@ def test_router_builds():
 def test_after_take_keyboard_drops_take_keeps_comment_and_close():
     kb = _card_keyboard_after_take(5)
     data = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert data == ["ta:comment:5", "ta:close:5"]
+    assert data == ["ta:comment:5", "ta:close:5", "ta:approval:5"]
     assert all(not d.startswith("ta:take:") for d in data)
 
 

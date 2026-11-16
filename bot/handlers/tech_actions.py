@@ -75,7 +75,12 @@ def _card_keyboard_after_take(ticket_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=texts.BTN_TECH_CLOSE, callback_data=f"ta:close:{ticket_id}"
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.BTN_TECH_APPROVAL, callback_data=f"ta:approval:{ticket_id}"
+                )
+            ],
         ]
     )
 
@@ -101,6 +106,33 @@ def build_tech_actions_router(
     # FSM dialogs live in private chats only; in groups the bot reacts solely
     # to its inline buttons (callbacks are not affected by this filter).
     router.message.filter(F.chat.type == "private")
+
+    async def mutation_lock(handler, event, data):
+        ticket_id = None
+        if isinstance(event, CallbackQuery):
+            match = re.match(r"^ta:(?:take|close|handoff|hto):(\d+)(?::|$)", event.data or "")
+            if match:
+                ticket_id = int(match[1])
+        elif isinstance(event, Message) and data.get("state") is not None:
+            state = data["state"]
+            if await state.get_state() == TechAction.closing.state:
+                ticket_id = (await state.get_data()).get("ticket_id")
+        if repo is not None and ticket_id is not None:
+            async with repo.ticket_action_lock(ticket_id):
+                return await handler(event, data)
+        return await handler(event, data)
+
+    router.callback_query.middleware(mutation_lock)
+    router.message.middleware(mutation_lock)
+
+    async def _registration_pending(ticket_id: int) -> bool:
+        row = await repo.get_tech_approval(ticket_id) if repo is not None else None
+        return row is not None and row["phase"] in ("prepared", "posting")
+
+    async def _ordinary_blocked(ticket_id: int, ticket) -> bool:
+        return (
+            ticket is not None and ticket.global_validation == VALIDATION_WAITING
+        ) or await _registration_pending(ticket_id)
 
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:
@@ -163,6 +195,9 @@ def build_tech_actions_router(
             await cb.answer(texts.TECH_ONLY, show_alert=True)
             return
         ticket_id = int(cb.data.split(":")[2])
+        if await _registration_pending(ticket_id):
+            await cb.answer(texts.TECH_APPROVAL_BLOCKED, show_alert=True)
+            return
         policy = await repo.get_claude_approval(ticket_id) if repo is not None else None
         if policy is not None and policy["stage"] != "approved":
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
@@ -175,7 +210,8 @@ def build_tech_actions_router(
             if policy is not None:
                 await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
                 return
-            ticket = None  # ordinary access behaviour remains unchanged
+            await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return
         if policy is not None and ticket is None:
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
             return
@@ -279,6 +315,9 @@ def build_tech_actions_router(
         if await _claude_blocked(ticket_id):
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
             return
+        if await _ordinary_blocked(ticket_id, ticket):
+            await cb.answer(texts.TECH_APPROVAL_BLOCKED, show_alert=True)
+            return
         await _start_dm_dialog(
             cb,
             state,
@@ -294,6 +333,20 @@ def build_tech_actions_router(
         await cb.answer(texts.WAITING_TOAST, show_alert=True)
 
     # -- Handoff: reassign the ticket to another technician -----------------
+    async def _handoff_blocked(cb, ticket_id):
+        try:
+            ticket = await client.get_ticket(ticket_id)
+        except GlpiError:
+            await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return True
+        if await _ordinary_blocked(ticket_id, ticket):
+            await cb.answer(texts.TECH_APPROVAL_BLOCKED, show_alert=True)
+            return True
+        if ticket is not None and ticket.status in (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED):
+            await cb.answer(texts.TICKET_ALREADY_CLOSED, show_alert=True)
+            return True
+        return False
+
     def _handoff_keyboard(ticket_id: int, techs) -> InlineKeyboardMarkup:
         rows = [
             [
@@ -319,6 +372,8 @@ def build_tech_actions_router(
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
             return
         techs = await repo.list_techs()
+        if await _handoff_blocked(cb, ticket_id):
+            return
         if not techs:
             await cb.answer(texts.HANDOFF_NO_TECHS, show_alert=True)
             return
@@ -354,6 +409,8 @@ def build_tech_actions_router(
         ticket_id, new_glpi_id = int(tid), int(uid)
         if await _claude_blocked(ticket_id):
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
+            return
+        if await _handoff_blocked(cb, ticket_id):
             return
         target = await repo.get_by_glpi(new_glpi_id) if repo is not None else None
         if target is None:
@@ -506,6 +563,10 @@ def build_tech_actions_router(
     async def on_solution_text(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
+        if not link.is_tech:
+            await state.clear()
+            await message.answer(texts.TECH_ONLY)
+            return
         data = await state.get_data()
         ticket_id = data["ticket_id"]
         try:
@@ -520,6 +581,9 @@ def build_tech_actions_router(
             return
         if await _claude_blocked(ticket_id):
             await message.answer(texts.CLAUDE_TAKE_BLOCKED)
+            return
+        if await _ordinary_blocked(ticket_id, ticket):
+            await message.answer(texts.TECH_APPROVAL_BLOCKED)
             return
         solution = message.text.strip()
         # GLPI records the solution as the service account; name the tech in it.

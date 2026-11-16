@@ -5,6 +5,88 @@ from __future__ import annotations
 import html
 import re
 
+# Technician-initiated approval of an existing ticket.
+BTN_TECH_APPROVAL = "📨 На согласование"
+TECH_APPROVAL_EXISTS = "У заявки уже есть согласование. Повторная отправка не нужна."
+TECH_APPROVAL_CLOSED = "Согласование доступно только для открытой нерешённой заявки."
+TECH_APPROVAL_NO_REQUESTER = "В заявке не указан заявитель. Сначала укажите его в GLPI."
+TECH_APPROVAL_CHANGED = "Заявка изменилась. Откройте согласование заново и проверьте её текст."
+TECH_APPROVAL_BUSY = "Сначала завершите текущий диалог с ботом или отправьте /cancel в личном чате."
+TECH_APPROVAL_DM = "Выберите согласующего в личном чате с ботом."
+TECH_APPROVAL_USAGE = (
+    "Использование: /approval 714 — отправить существующую заявку на согласование."
+)
+TECH_APPROVAL_PENDING = (
+    "Запрос сохранён. Отправка пока не "
+    "подтверждена: бот проверит GLPI и повторит доставку уведомления. "
+    "Повторно отправлять заявку не нужно."
+)
+TECH_APPROVAL_CANCELLED = "Состояние заявки изменилось. Отправка на согласование отменена."
+TECH_APPROVAL_BLOCKED = (
+    "Заявка ожидает согласования. До решения её нельзя взять в работу, передать или закрыть."
+)
+TECH_APPROVAL_WAITING = "⏳ Ожидает согласования"
+
+
+def tech_approval_pick(ticket_id: int) -> str:
+    return f"📨 Заявка №{ticket_id}: выберите согласующего лида."
+
+
+def tech_approval_confirm(ticket_id: int, request: str, lead: str) -> str:
+    return (
+        f"📨 <b>Отправить заявку №{ticket_id} на согласование?</b>\n\n"
+        f"{html.escape(request)}\n\nСогласует: <b>{html.escape(lead)}</b>\n"
+        "До решения выполнение заявки будет приостановлено. При отказе заявка будет закрыта."
+    )
+
+
+def tech_approval_audit(tech: str, lead: str) -> str:
+    return (
+        f"На согласование направил техник: {tech}. Согласующий лид: "
+        f"{lead} (ответ через Telegram-бота)."
+    )
+
+
+def tech_approval_history(tech: str, lead: str) -> str:
+    return f"📨 На согласование: {html.escape(lead)} · направил {html.escape(tech)}"
+
+
+def tech_approval_sent(ticket_id: int, lead: str, url: str | None) -> str:
+    return (
+        f"📨 Заявка {_ticket_ref(ticket_id, url)} направлена на "
+        f"согласование: {html.escape(lead)}. Ожидаем решения."
+    )
+
+
+def tech_approval_decision(
+    ticket_id: int, lead: str, accepted: bool, reason: str, url: str | None
+) -> str:
+    if accepted:
+        return (
+            f"✅ Заявка {_ticket_ref(ticket_id, url)} согласована: "
+            f"{html.escape(lead)}. Можно продолжать работу."
+        )
+    return (
+        f"❌ Заявка {_ticket_ref(ticket_id, url)} отклонена и закрыта: "
+        f"{html.escape(lead)}.\nПричина: {html.escape(reason)}"
+    )
+
+
+def tech_approval_lead_prompt(
+    ticket_id: int,
+    requester: str,
+    requester_tg_id: int | None,
+    request: str,
+    tech: str,
+    url: str | None,
+) -> str:
+    return (
+        f"📨 <b>Заявка {_ticket_ref(ticket_id, url)} — нужно ваше решение</b>\n\n"
+        f"👤 {user_mention(requester, requester_tg_id)}\n"
+        f"{html.escape(request)}\n\nНаправил техник: {html.escape(tech)}"
+    )
+
+
 # --- /start + main menu ---
 START_GREETING = (
     "Здравствуйте! Это GLPIgram — бот техподдержки.\n"

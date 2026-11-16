@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Technicians can request lead approval for an existing open ticket from its card or `/approval ID`. The private dialog suggests the requester's lead, confirms the action and preserves the original ticket and assignee. Existing Claude approvals retain their second stage. Durable registration prevents duplicate GLPI validations and retries notification delivery after failures. Pending approvals block take, handoff and resolve actions, including stale buttons and already-open solution dialogs.
+
 - Optional OpenAI shadow classification of newly submitted bot tickets. A durable
   background worker records paid-access, technical, other or unclear predictions;
   menus, GLPI fields and existing approval workflows remain unchanged. Includes

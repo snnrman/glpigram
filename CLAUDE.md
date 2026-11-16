@@ -557,3 +557,41 @@ pending state and do not authorise decisions. Technician close actions recheck
 for already-closed tickets at dialog entry and before submitting a solution.
 Use GLPI_ACTION_ERROR for failures of these existing-ticket actions; GLPI_ERROR
 retains its ticket-creation semantics for creation failures.
+
+
+## Technician-initiated approval of existing tickets
+
+`handlers/tech_approval.py` exposes `ta:approval:ID` on open-ticket cards and
+technician details, plus private `/approval ID` for older cards. The dialog uses
+the same lead directory and employee-to-lead mapping as /access. It never changes
+that mapping. Nonce-bound controls prevent an old dialog submitting a new one;
+an existing unrelated draft must be completed or cancelled first. Unknown/ambiguous
+Claude targets are clarified by the technician; the shadow AI is never consulted.
+
+Confirmation revalidates technician rights, the live ticket, requester identity,
+content digest, lead directory membership and the lead's active account/link.
+Self-approval, solved/closed tickets and tickets already carrying a validation
+are refused. One approval cycle per ticket is supported; completed approvals are
+not overwritten. Declining closes the original ticket, as in /access, and this is
+shown before confirmation. Approved tickets keep their existing status/assignee.
+
+`TechApprovalService` stores a reservation and recipient snapshot in the additive
+`tech_approval_requests` table BEFORE any GLPI write. A unique marker in
+TicketValidation.comment_submission allows recovery after a lost response.
+The sync loop resumes incomplete registrations and initial Telegram deliveries.
+A POST of uncertain outcome is NEVER repeated automatically: recovery only reads
+`GET /Ticket/ID/TicketValidation`. If the marker never appears, an operator must
+reconcile the saved row against GLPI; do not delete the reservation blindly.
+Explicit 400/403/404/422 rejections mark the registration failed and permit a new
+manual attempt. A late-closed/changed ticket cancels an unposted registration.
+
+The same `access_approvals` and, for Claude, `claude_approvals` decision flows are
+used. Registering Claude on a tracked ticket preserves tracking/cursors. Existing
+GLPI requesters without Telegram use requester_tg_id=0: approvals still go to the
+lead, with no attempt to notify chat 0. Configured leads must be linked. Manual
+approval decisions revalidate the recipient's GLPI identity after relinking.
+Per-ticket locks serialize registration, technician mutations and lead decisions.
+Take/resolve/handoff recheck pending GLPI validation; unresolved registration also
+blocks them before GLPI reflects the pending state. Comments remain available.
+Old group cards gain the button on their next update; reopening technician detail
+or using /approval works immediately. No existing tickets are submitted in bulk.

@@ -167,6 +167,23 @@ def build_access_router(
     router.message.filter(F.chat.type == "private")
     send_locks: dict[int, asyncio.Lock] = {}
 
+    async def decision_lock(handler, event, data):
+        ticket_id = None
+        if isinstance(event, CallbackQuery) and (event.data or "").startswith("ap:"):
+            tail = event.data.rsplit(":", 1)[-1]
+            if tail.isdigit():
+                ticket_id = int(tail)
+        elif isinstance(event, Message) and data.get("state") is not None:
+            if await data["state"].get_state() == LeadReject.entering_reason.state:
+                ticket_id = (await data["state"].get_data()).get("reject_ticket_id")
+        if ticket_id is not None:
+            async with repo.ticket_action_lock(ticket_id):
+                return await handler(event, data)
+        return await handler(event, data)
+
+    router.callback_query.middleware(decision_lock)
+    router.message.middleware(decision_lock)
+
     def _url(ticket_id: int) -> str | None:
         if not ticket_front_base:
             return None
@@ -429,12 +446,24 @@ def build_access_router(
             await shadow.observe(ticket_id, "access", "", data["request"])
 
     # --- the lead answers -----------------------------------------------------
+    async def _manual_lead_identity(row, tg_id):
+        if await repo.get_tech_approval(row["ticket_id"]) is None:
+            return True
+        current = await repo.get_by_tg(tg_id)
+        if current is None or current.glpi_users_id != row["lead_glpi_id"]:
+            return False
+        user = await client.get_user(row["lead_glpi_id"])
+        return user is not None and user.is_usable
+
     async def _own_pending(cb: CallbackQuery, ticket_id: int):
         row = await repo.get_approval(ticket_id)
         if row is None or row["status"] != 0 or row["lead_tg_id"] != cb.from_user.id:
             await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
             return None
         try:
+            if not await _manual_lead_identity(row, cb.from_user.id):
+                await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
+                return None
             if not await _ordinary_approval_live(ticket_id):
                 await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
                 return None
@@ -483,7 +512,13 @@ def build_access_router(
             and (await state.get_data()).get("reject_ticket_id") == ticket_id
         ):
             await state.clear()
-        await _add_followup_quiet(ticket_id, texts.acc_followup_approved(lead))
+        manual = await repo.get_tech_approval(ticket_id) is not None
+        await _add_followup_quiet(
+            ticket_id,
+            texts.acc_validation_comment_approved(lead)
+            if manual
+            else texts.acc_followup_approved(lead),
+        )
         # Feedback: the lead's DM, the requester, the living card.
         if isinstance(cb.message, Message):
             await notify.safe_edit(
@@ -493,7 +528,9 @@ def build_access_router(
         await notify.send_text(
             bot,
             row["requester_tg_id"],
-            texts.acc_requester_approved(ticket_id, lead, _url(ticket_id)),
+            texts.tech_approval_decision(ticket_id, lead, True, "", _url(ticket_id))
+            if manual
+            else texts.acc_requester_approved(ticket_id, lead, _url(ticket_id)),
         )
         if cards is not None:
             await cards.record_event(bot, ticket_id, texts.hist_approved(lead))
@@ -585,7 +622,10 @@ def build_access_router(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
         data = await state.get_data()
-        ticket_id = data["reject_ticket_id"]
+        ticket_id = data.get("reject_ticket_id")
+        if ticket_id is None:
+            await message.answer(texts.ACC_ANSWERED_STALE)
+            return
         row = await repo.get_approval(ticket_id)
         claude_row = await repo.get_claude_approval(ticket_id)
         if claude_row is not None:
@@ -608,7 +648,9 @@ def build_access_router(
             return
         if claude_row is None:
             try:
-                still_live = await _ordinary_approval_live(ticket_id)
+                still_live = await _manual_lead_identity(
+                    row, message.from_user.id
+                ) and await _ordinary_approval_live(ticket_id)
             except GlpiError:
                 log.warning("access_live_check_failed ticket=%s", ticket_id)
                 await message.answer(texts.GLPI_ACTION_ERROR)
@@ -664,7 +706,13 @@ def build_access_router(
         await state.clear()
         await repo.set_approval_status(ticket_id, status=-1)
         await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
-        await _add_followup_quiet(ticket_id, texts.acc_followup_rejected(lead, reason))
+        manual = await repo.get_tech_approval(ticket_id) is not None
+        await _add_followup_quiet(
+            ticket_id,
+            texts.acc_validation_comment_rejected(lead, reason)
+            if manual
+            else texts.acc_followup_rejected(lead, reason),
+        )
         await message.answer(
             texts.acc_decision_rejected(lead, reason),
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
@@ -672,7 +720,9 @@ def build_access_router(
         await notify.send_text(
             bot,
             row["requester_tg_id"],
-            texts.acc_requester_rejected(ticket_id, lead, reason, _url(ticket_id)),
+            texts.tech_approval_decision(ticket_id, lead, False, reason, _url(ticket_id))
+            if manual
+            else texts.acc_requester_rejected(ticket_id, lead, reason, _url(ticket_id)),
         )
         if cards is not None:
             await cards.record_event(
