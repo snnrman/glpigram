@@ -59,6 +59,68 @@ def tech_ticket_keyboard(ticket_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def intake_ticket_keyboard(
+    ticket_id: int,
+    intake: dict,
+    *,
+    status: int = 1,
+    base: InlineKeyboardMarkup | None = None,
+) -> InlineKeyboardMarkup | None:
+    """Versioned technician review actions on every new single-text ticket."""
+    if status == 6:
+        return base
+    if status == 5:
+        return base or tech_ticket_keyboard_solved(ticket_id)
+    if base is None:
+        base = (
+            tech_ticket_keyboard(ticket_id)
+            if status == 1
+            else tech_ticket_keyboard_taken(ticket_id)
+        )
+    rows = [
+        [b for b in row if b.callback_data != f"ta:approval:{ticket_id}"]
+        for row in base.inline_keyboard
+    ]
+    rows = [row for row in rows if row]
+    if intake.get("review_state", "pending") == "pending":
+        # First-phase review is explicit: taking/closing must not silently mean
+        # "routine". The action handlers enforce the same rule server-side.
+        rows = [
+            [
+                b
+                for b in row
+                if not (b.callback_data or "").startswith(("ta:take:", "ta:close:", "ta:handoff:"))
+            ]
+            for row in rows
+        ]
+        rows = [row for row in rows if row]
+    version = intake["version"]
+    if intake.get("review_state", "pending") != "approval":
+        row = [
+            InlineKeyboardButton(
+                text=texts.INTAKE_APPROVAL_BUTTON,
+                callback_data=f"ir:approval:{ticket_id}:{version}",
+            )
+        ]
+        if intake.get("review_state", "pending") == "pending":
+            row.append(
+                InlineKeyboardButton(
+                    text=texts.INTAKE_ROUTINE_BUTTON,
+                    callback_data=f"ir:routine:{ticket_id}:{version}",
+                )
+            )
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=texts.INTAKE_CATEGORY_BUTTON,
+                callback_data=f"ir:category:{ticket_id}:{version}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> Message | None:
     """Best-effort send. Honours one Telegram flood-wait.
 
@@ -132,7 +194,12 @@ async def notify_new_ticket(
     history: list[str] | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
     approval_label: str | None = None,
+    intake: dict | None = None,
 ) -> Message | None:
+    if intake is not None:
+        reply_markup = intake_ticket_keyboard(
+            ticket.id, intake, status=ticket.status, base=reply_markup
+        )
     return await _send(
         bot,
         chat_id,
@@ -149,6 +216,7 @@ async def notify_new_ticket(
             history=history,
             awaiting_approval=(ticket.global_validation == 2 and approval_label is None),
             approval_label=approval_label,
+            intake=intake,
         ),
         reply_markup=reply_markup if reply_markup is not None else tech_ticket_keyboard(ticket.id),
     )

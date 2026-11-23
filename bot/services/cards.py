@@ -161,6 +161,7 @@ class CardService:
 
     async def _edit(self, bot: Bot, card, status: int, taken_by: str, history: list[str]) -> None:
         """Re-render the whole card from stored ingredients + the new state."""
+        intake = await self._repo.get_ticket_intake(card.ticket_id)
         text = texts.notify_new_ticket(
             ticket_id=card.ticket_id,
             title=card.title,
@@ -174,13 +175,14 @@ class CardService:
             history=history,
             assignee=taken_by or None,
             approval_label=await self._approval_label(card.ticket_id),
+            intake=intake,
         )
         try:
             await bot.edit_message_text(
                 text,
                 chat_id=card.chat_id,
                 message_id=card.message_id,
-                reply_markup=self._keyboard(card.ticket_id, status),
+                reply_markup=self._keyboard(card.ticket_id, status, intake=intake),
             )
         except Exception as exc:  # noqa: BLE001 - flood/48h/deleted: next event self-heals
             log.warning("card_edit_failed ticket=%s error=%s", card.ticket_id, exc)
@@ -200,7 +202,7 @@ class CardService:
             [member["name"] for member in members],
         )
 
-    def _keyboard(self, ticket_id: int, status: int):
+    def _keyboard(self, ticket_id: int, status: int, *, intake: dict | None = None):
         """Buttons follow the state (ITIL cycle):
 
         New -> Reply/Close + full-width Take; taken -> no re-take; solved ->
@@ -217,6 +219,8 @@ class CardService:
             )
         if status == TICKET_STATUS_SOLVED:
             return notify.tech_ticket_keyboard_solved(ticket_id)
+        if intake is not None:
+            return notify.intake_ticket_keyboard(ticket_id, intake, status=status)
         if status != 1:  # taken / in progress
             return notify.tech_ticket_keyboard_taken(ticket_id)
         return notify.tech_ticket_keyboard(ticket_id)

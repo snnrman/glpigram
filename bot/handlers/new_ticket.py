@@ -1,8 +1,11 @@
 """/new — FSM dialog that creates a GLPI ticket.
 
-Flow (CLAUDE.md features 1 & 6):
+Legacy flow (CLAUDE.md features 1 & 6):
     category -> urgency -> title -> description -> attachments ->
     «📨 Отправить заявку» -> create ticket -> upload attachments.
+
+With the opt-in intake service: description -> urgency -> attachments -> send.
+The service supplies the GLPI title/category without another requester step.
 
 Optional photos/documents are collected in the ``attaching`` step and uploaded
 to the ticket (as GLPI Documents) after it is created. There is deliberately
@@ -12,8 +15,10 @@ walked away thinking the ticket was sent, so the last step IS the send.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from weakref import WeakValueDictionary
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -45,6 +50,9 @@ from ..glpi.models import ITILCategory
 from ..schedule import WorkSchedule
 from ..services import attachments, notify
 from ..services.ai_shadow import ShadowClassifier
+from ..services.intake import IntakeService, category_matches, fallback_result
+from ..services.intake_ui import single_text_mode
+from ..texts import intake as intake_texts
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +72,7 @@ class NewTicket(StatesGroup):
     entering_title = State()
     entering_description = State()
     attaching = State()
+    submitting = State()
 
 
 def _categories_keyboard(categories: list[ITILCategory]) -> InlineKeyboardMarkup:
@@ -75,13 +84,14 @@ def _categories_keyboard(categories: list[ITILCategory]) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _urgency_keyboard() -> InlineKeyboardMarkup:
+def _urgency_keyboard(*, unified: bool = False) -> InlineKeyboardMarkup:
     # Exceptional urgent (prod) level first, on its own row — it opens a warning
     # and is the only red marker, set apart from the ordinary levels below.
     rows = [
         [
             InlineKeyboardButton(
-                text=texts.URGENCY_URGENT_LABEL, callback_data=f"nt:urg:{URGENCY_URGENT}"
+                text=intake_texts.urgent_label() if unified else texts.URGENCY_URGENT_LABEL,
+                callback_data=f"nt:urg:{URGENCY_URGENT}",
             )
         ]
     ]
@@ -173,7 +183,8 @@ def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
             ]
         )
     # Access requests (lead-approved) — everyone, full-width last row.
-    rows.append([KeyboardButton(text=texts.BTN_ACCESS)])
+    if not single_text_mode.get():
+        rows.append([KeyboardButton(text=texts.BTN_ACCESS)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -185,12 +196,16 @@ def build_new_ticket_router(
     ticket_front_base: str | None = None,
     schedule: WorkSchedule | None = None,
     shadow: ShadowClassifier | None = None,
+    intake: IntakeService | None = None,
 ) -> Router:
     """Wire the /new dialog with its GLPI dependencies (closure-injected)."""
     router = Router(name="new_ticket")
     # Dialogs and menu buttons are private-chat only: in groups the bot
     # must not react to free text (callbacks are not affected).
     router.message.filter(F.chat.type == "private")
+    # A weak map avoids keeping one permanent lock for every employee. The
+    # local reference held by a submitter keeps its lock alive until done.
+    submission_locks: WeakValueDictionary = WeakValueDictionary()
 
     def _quiet_notice(urgency: int) -> str | None:
         """Off-hours note for the requester after creation (None in work hours).
@@ -205,7 +220,7 @@ def build_new_ticket_router(
         if schedule.is_working(now):
             return None
         if urgency >= URGENCY_URGENT:
-            return texts.QUIET_URGENT_NOTICE
+            return intake_texts.quiet_urgent_notice() if intake else texts.QUIET_URGENT_NOTICE
         return texts.quiet_hours_notice(schedule.next_open(now), now)
 
     def _ticket_url(ticket_id: int) -> str | None:
@@ -241,19 +256,34 @@ def build_new_ticket_router(
 
     @router.message(Command("new"))
     async def cmd_new(message: Message, state: FSMContext, link: LinkedUser) -> None:
+        if await state.get_state() == NewTicket.submitting:
+            await message.answer(intake_texts.submitting_notice())
+            return
         await state.clear()
+        if intake is not None:
+            await state.set_state(NewTicket.entering_description)
+            await message.answer(intake_texts.description_prompt(), reply_markup=_cancel_keyboard())
+            return
         await _open_category_step(message, state, is_tech=link.is_tech)
 
     # Persistent menu buttons work from any state (they restart / route the flow).
     @router.message(F.text == texts.BTN_NEW_TICKET)
     async def btn_new_ticket(message: Message, state: FSMContext, link: LinkedUser) -> None:
-        await state.clear()
-        await _open_category_step(message, state, is_tech=link.is_tech)
+        await cmd_new(message, state, link)
+
+    if intake is not None:
+        # Old reply keyboards and /access remain usable after the menu changes.
+        # Existing lead-approval callbacks stay in the access router.
+        router.message.register(cmd_new, Command("access"))
+        router.message.register(cmd_new, F.text.in_({texts.BTN_ACCESS, texts.BTN_ACCESS_LEGACY}))
 
     # /cancel must be registered BEFORE the state text handlers, or the title/
     # description steps would swallow it as content (found by the FSM tests).
     @router.message(StateFilter(NewTicket), Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext, link: LinkedUser) -> None:
+        if await state.get_state() == NewTicket.submitting:
+            await message.answer(intake_texts.submitting_notice())
+            return
         await state.clear()
         await message.answer(
             texts.NEW_CANCELLED, reply_markup=main_menu_keyboard(is_tech=link.is_tech)
@@ -283,18 +313,30 @@ def build_new_ticket_router(
 
     async def _to_title_step(cb: CallbackQuery, state: FSMContext, urgency: int) -> None:
         await state.update_data(urgency=urgency)
+        if intake is not None:
+            await cb.answer()
+            await _open_attach_step(cb.message, state)
+            return
         await state.set_state(NewTicket.entering_title)
         await cb.message.edit_text(texts.NEW_ENTER_TITLE, reply_markup=_cancel_keyboard())
         await cb.answer()
 
     @router.callback_query(NewTicket.choosing_urgency, F.data.startswith("nt:urg:"))
     async def on_urgency(cb: CallbackQuery, state: FSMContext) -> None:
-        urgency = int(cb.data.rsplit(":", 1)[1])
+        try:
+            urgency = int(cb.data.rsplit(":", 1)[1])
+        except ValueError:
+            await cb.answer(texts.USE_BUTTONS)
+            return
+        if urgency not in (URGENCY_LOW, URGENCY_MEDIUM, URGENCY_HIGH, URGENCY_URGENT):
+            await cb.answer(texts.USE_BUTTONS)
+            return
         if urgency == URGENCY_URGENT:
             # Gate the urgent (prod) level behind an explicit warning; the level
             # is NOT stored until the user confirms.
             await cb.message.edit_text(
-                texts.URGENT_WARNING, reply_markup=_urgent_confirm_keyboard()
+                intake_texts.urgent_warning() if intake else texts.URGENT_WARNING,
+                reply_markup=_urgent_confirm_keyboard(),
             )
             await cb.answer()
             return
@@ -307,7 +349,9 @@ def build_new_ticket_router(
     @router.callback_query(NewTicket.choosing_urgency, F.data == "nt:urg_decline")
     async def on_urgent_decline(cb: CallbackQuery, state: FSMContext) -> None:
         # Back to the urgency choices — nothing is created as urgent.
-        await cb.message.edit_text(texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard())
+        await cb.message.edit_text(
+            texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard(unified=intake is not None)
+        )
         await cb.answer()
 
     @router.message(NewTicket.entering_title, F.text)
@@ -331,7 +375,17 @@ def build_new_ticket_router(
 
     @router.message(NewTicket.entering_description, F.text)
     async def on_description(message: Message, state: FSMContext) -> None:
-        await state.update_data(description=message.text.strip())
+        if not message.text.strip():
+            await message.answer(texts.NEW_EXPECT_TEXT)
+            return
+        # Keep the exact requester text for GLPI and for durable review history.
+        await state.update_data(description=message.text if intake else message.text.strip())
+        if intake is not None:
+            await state.set_state(NewTicket.choosing_urgency)
+            await message.answer(
+                texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard(unified=True)
+            )
+            return
         await _open_attach_step(message, state)
 
     @router.message(NewTicket.entering_description)
@@ -385,6 +439,14 @@ def build_new_ticket_router(
     async def on_attaching_other(message: Message) -> None:
         await message.answer(texts.ATTACH_UNSUPPORTED, reply_markup=_attach_keyboard())
 
+    @router.message(NewTicket.submitting)
+    async def on_submitting_message(message: Message) -> None:
+        await message.answer(intake_texts.submitting_notice())
+
+    @router.callback_query(NewTicket.submitting, F.data.startswith("nt:"))
+    async def on_submitting_callback(cb: CallbackQuery) -> None:
+        await cb.answer(intake_texts.submitting_notice())
+
     @router.callback_query(NewTicket.attaching, F.data == "nt:send")
     async def on_send(cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot) -> None:
         # The user's intent is explicit — create the ticket even if the prompt
@@ -410,6 +472,76 @@ def build_new_ticket_router(
     async def _create_ticket(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
+        if intake is None:
+            await _create_ticket_once(message, state, link, bot)
+            return
+        lock = submission_locks.setdefault(state.key, asyncio.Lock())
+        async with lock:
+            # Concurrent callback/text submits may already have matched the old
+            # FSM state. Re-check under the lock before any external work.
+            if await state.get_state() != NewTicket.attaching:
+                return
+            data = await state.get_data()
+            if not str(data.get("description", "")).strip() or data.get("urgency") not in (
+                URGENCY_LOW,
+                URGENCY_MEDIUM,
+                URGENCY_HIGH,
+                URGENCY_URGENT,
+            ):
+                await message.answer(intake_texts.incomplete_notice())
+                return
+            await state.set_state(NewTicket.submitting)
+            nonce = time.monotonic_ns()
+            await state.update_data(intake_submission_nonce=nonce)
+
+            async def still_current() -> bool:
+                return (
+                    await state.get_state() == NewTicket.submitting
+                    and (await state.get_data()).get("intake_submission_nonce") == nonce
+                )
+
+            result = data.get("intake_result")
+            if result is None:
+                try:
+                    decision = await intake.classify(data["description"])
+                    result = decision.as_dict()
+                except Exception:  # noqa: BLE001 - AI must never block ticket creation
+                    log.warning("ticket_intake_classifier_fallback")
+                    result = fallback_result(data["description"]).as_dict()
+                if not await still_current():
+                    return
+                await state.update_data(intake_result=result)
+            try:
+                category_id = intake.category_id(result["category"])
+                if type(category_id) is not int or category_id <= 0:
+                    raise ValueError("invalid category id")
+                # Deliberately bypass the 10-minute cache: a renamed/deleted
+                # category must not silently become another classifier label.
+                categories = await client.list_categories()
+                selected = next((c for c in categories if c.id == category_id), None)
+                if selected is None or not category_matches(selected, result["category"]):
+                    raise ValueError("mapped category unavailable")
+            except (GlpiError, KeyError, TypeError, ValueError) as exc:
+                log.warning("ticket_intake_category_unavailable error_type=%s", type(exc).__name__)
+                if not await still_current():
+                    return
+                await state.set_state(NewTicket.attaching)
+                await message.answer(
+                    intake_texts.category_unavailable(), reply_markup=_attach_keyboard()
+                )
+                return
+            if not await still_current():
+                # Another router may have started a different dialog while the
+                # classifier ran. Never create from that replaced FSM context.
+                return
+            await state.update_data(
+                title=result["title"], category_id=category_id, category_name=selected.completename
+            )
+            await _create_ticket_once(message, state, link, bot)
+
+    async def _create_ticket_once(
+        message: Message, state: FSMContext, link: LinkedUser, bot: Bot
+    ) -> None:
         """Create the ticket from the FSM data and report to ``message.chat``."""
         data = await state.get_data()
         try:
@@ -422,10 +554,36 @@ def build_new_ticket_router(
                 requester_users_id=link.glpi_users_id,
             )
         except GlpiError as exc:
-            log.exception("new_ticket_create_failed error=%s raw=%s", exc, exc.raw)
-            await message.answer(texts.GLPI_ERROR)
+            log.warning("new_ticket_create_failed error_type=%s", type(exc).__name__)
+            # A failed Telegram reply must not leave the draft in submitting.
+            # In particular an unknown POST outcome must never be retried here.
             await state.clear()
+            if intake is not None and (
+                exc.response is None or exc.response.status_code not in (400, 401, 403, 404, 422)
+            ):
+                # A timeout/5xx/malformed 201 can hide a successful POST. Never
+                # retry it automatically or claim that no ticket was created.
+                await message.answer(intake_texts.creation_uncertain())
+            else:
+                await message.answer(texts.GLPI_ERROR)
             return
+        if intake is not None:
+            try:
+                await repo.save_ticket_intake(
+                    ticket_id,
+                    {
+                        **data["intake_result"],
+                        "category_id": data["category_id"],
+                        "original_description": data["description"],
+                    },
+                    int(time.time()),
+                )
+            except Exception as exc:  # noqa: BLE001 - the ticket already exists
+                log.error(
+                    "ticket_intake_save_failed ticket_id=%s error_type=%s",
+                    ticket_id,
+                    type(exc).__name__,
+                )
         # Track it so the sync loop can notify this requester of updates.
         try:
             await repo.track_ticket(
@@ -454,7 +612,7 @@ def build_new_ticket_router(
         notice = _quiet_notice(data["urgency"])
         if notice:
             await message.answer(notice)
-        if shadow is not None:
+        if shadow is not None and intake is None:
             await shadow.observe(ticket_id, "new", data["title"], data["description"])
 
     async def _upload_attachments(
@@ -486,6 +644,9 @@ def build_new_ticket_router(
     # Cancel from any state (inline button).
     @router.callback_query(F.data == "nt:cancel")
     async def on_cancel_cb(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
+        if await state.get_state() == NewTicket.submitting:
+            await cb.answer(intake_texts.submitting_notice())
+            return
         await state.clear()
         try:
             await cb.message.edit_reply_markup(reply_markup=None)
@@ -501,7 +662,9 @@ def build_new_ticket_router(
     @router.message(StateFilter(None), F.text, ~F.text.startswith("/"))
     async def on_free_text(message: Message, state: FSMContext) -> None:
         # Stash the text as the ticket description and ask for confirmation.
-        await state.update_data(description=message.text.strip())
+        if not message.text.strip():
+            return
+        await state.update_data(description=message.text if intake else message.text.strip())
         await message.answer(texts.FREETEXT_OFFER, reply_markup=_offer_keyboard())
 
     @router.callback_query(StateFilter(None), F.data == "nt:offer:yes")
@@ -510,6 +673,13 @@ def build_new_ticket_router(
         description = data.get("description")
         if not description:
             # Stale prompt (already handled or state reset) — nothing to do.
+            await cb.answer()
+            return
+        if intake is not None:
+            await state.set_state(NewTicket.choosing_urgency)
+            await cb.message.edit_text(
+                texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard(unified=True)
+            )
             await cb.answer()
             return
         try:

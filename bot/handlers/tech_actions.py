@@ -34,6 +34,7 @@ from ..glpi.client import (
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_PROCESSING_ASSIGNED,
     TICKET_STATUS_SOLVED,
+    VALIDATION_ACCEPTED,
     VALIDATION_WAITING,
     GlpiClient,
     GlpiDocumentRejected,
@@ -42,6 +43,8 @@ from ..glpi.client import (
 from ..services import attachments, notify
 from ..services.cards import CardService
 from ..services.claude_approval import CLAUDE_POLICY_MARKER
+from ..services.intake_snapshot import refresh_intake_snapshot
+from ..texts import intake as intake_texts
 from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
@@ -135,6 +138,35 @@ def build_tech_actions_router(
             ticket is not None and ticket.global_validation == VALIDATION_WAITING
         ) or await _registration_pending(ticket_id)
 
+    async def _intake_block_reason(ticket_id: int, ticket) -> str | None:
+        """Re-check the latest text before mutations, including stale legacy buttons.
+
+        The middleware already holds the per-ticket lock. The snapshot update
+        invalidates a routine decision if somebody edited its GLPI title/body.
+        Tickets outside the intake workflow keep the existing behavior.
+        """
+        if repo is None:
+            return None
+        row = await repo.get_ticket_intake(ticket_id)
+        if row is None and (
+            ticket is None or ticket.itilcategories_id not in repo.intake_category_ids.values()
+        ):
+            return None
+        if ticket is None:
+            return texts.GLPI_ACTION_ERROR
+        row = await refresh_intake_snapshot(repo, ticket)
+        if row is not None and row["review_state"] == "pending":
+            return intake_texts.review_required()
+        if (
+            row is not None
+            and (row["review_state"] == "approval" or row.get("approval_recheck"))
+            and ticket.global_validation != VALIDATION_ACCEPTED
+        ):
+            # A stale button must not bypass a refused, reset or not-yet-created
+            # validation just because it is no longer in the WAITING state.
+            return texts.TECH_APPROVAL_BLOCKED
+        return None
+
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:
             return None
@@ -212,6 +244,10 @@ def build_tech_actions_router(
                 await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
                 return
             await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return
+        blocked = await _intake_block_reason(ticket_id, ticket)
+        if blocked:
+            await cb.answer(blocked, show_alert=True)
             return
         if policy is not None and ticket is None:
             await cb.answer(texts.CLAUDE_TAKE_BLOCKED, show_alert=True)
@@ -310,6 +346,10 @@ def build_tech_actions_router(
             log.warning("tech_close_check_failed ticket=%s", ticket_id)
             await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
             return
+        blocked = await _intake_block_reason(ticket_id, ticket)
+        if blocked:
+            await cb.answer(blocked, show_alert=True)
+            return
         if ticket is not None and ticket.status == TICKET_STATUS_CLOSED:
             await cb.answer(texts.TICKET_ALREADY_CLOSED, show_alert=True)
             return
@@ -339,6 +379,10 @@ def build_tech_actions_router(
             ticket = await client.get_ticket(ticket_id)
         except GlpiError:
             await cb.answer(texts.GLPI_ACTION_ERROR, show_alert=True)
+            return True
+        blocked = await _intake_block_reason(ticket_id, ticket)
+        if blocked:
+            await cb.answer(blocked, show_alert=True)
             return True
         if await _ordinary_blocked(ticket_id, ticket):
             await cb.answer(texts.TECH_APPROVAL_BLOCKED, show_alert=True)
@@ -434,10 +478,12 @@ def build_tech_actions_router(
             pass
         # New executor's DM (skip a self-handoff — the presser knows already).
         if target.tg_id != cb.from_user.id:
+            intake_row = await repo.get_ticket_intake(ticket_id)
+            handoff_text = intake_texts.handoff_to_new if intake_row else texts.handoff_to_new
             await notify.send_text(
                 bot,
                 target.tg_id,
-                texts.handoff_to_new(
+                handoff_text(
                     ticket_id,
                     ticket.name if ticket else "",
                     ticket.urgency or None if ticket else None,
@@ -575,6 +621,10 @@ def build_tech_actions_router(
         except GlpiError:
             log.warning("tech_close_check_failed ticket=%s", ticket_id)
             await message.answer(texts.GLPI_ACTION_ERROR)
+            return
+        blocked = await _intake_block_reason(ticket_id, ticket)
+        if blocked:
+            await message.answer(blocked)
             return
         if ticket is not None and ticket.status == TICKET_STATUS_CLOSED:
             await state.clear()

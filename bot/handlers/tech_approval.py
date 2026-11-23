@@ -15,6 +15,7 @@ from .. import texts
 from ..glpi.client import GlpiError
 from ..services import notify
 from ..services.access_target import classify_access_target
+from ..services.intake_snapshot import refresh_intake_snapshot
 from ..services.tech_approval import ApprovalUnavailable
 
 
@@ -107,10 +108,33 @@ def build_tech_approval_router(service, lead_directory):
         else:
             await target.answer(text, reply_markup=keyboard(data, leads=leads))
 
-    async def begin(ticket_id, target, state, link, bot, *, callback=False):
+    async def begin(
+        ticket_id,
+        target,
+        state,
+        link,
+        bot,
+        *,
+        callback=False,
+        review_version=None,
+    ):
         if not link.is_tech:
             raise ApprovalUnavailable(texts.TECH_ONLY)
+        cached = await repo.get_ticket_intake(ticket_id)
+        if review_version is not None and (cached is None or cached["version"] != review_version):
+            if service.cards:
+                await service.cards.record_event(bot, ticket_id, None)
+            raise ApprovalUnavailable(texts.INTAKE_REVIEW_STALE)
+        async with repo.ticket_action_lock(ticket_id):
+            live = await service.client.get_ticket(ticket_id)
+            intake = await refresh_intake_snapshot(repo, live) if live else None
+        if review_version is not None and (intake is None or intake["version"] != review_version):
+            if service.cards:
+                await service.cards.record_event(bot, ticket_id, None)
+            raise ApprovalUnavailable(texts.INTAKE_REVIEW_STALE)
         data = await service.prepare(ticket_id)
+        if intake is not None:
+            data["intake_review_version"] = intake["version"]
         data.update(nonce=secrets.token_hex(6))
         # Retarget group callbacks to the tech's personal dialog. Never erase an
         # unrelated comment/rejection draft to start another action.
@@ -143,10 +167,24 @@ def build_tech_approval_router(service, lead_directory):
         if callback:
             await target.answer(texts.TECH_APPROVAL_DM)
 
-    @router.callback_query(F.data.startswith("ta:approval:"))
+    @router.callback_query(F.data.startswith("ta:approval:") | F.data.startswith("ir:approval:"))
     async def start(cb: CallbackQuery, state: FSMContext, link, bot):
         try:
-            await begin(int(cb.data.rsplit(":", 1)[1]), cb, state, link, bot, callback=True)
+            parts = cb.data.split(":")
+            intake_action = parts[0] == "ir"
+            if len(parts) != (4 if intake_action else 3):
+                raise ApprovalUnavailable(texts.INTAKE_REVIEW_STALE)
+            await begin(
+                int(parts[2]),
+                cb,
+                state,
+                link,
+                bot,
+                callback=True,
+                review_version=int(parts[3]) if intake_action else None,
+            )
+        except (ValueError, IndexError):
+            await cb.answer(texts.INTAKE_REVIEW_STALE, show_alert=True)
         except (ApprovalUnavailable, GlpiError) as exc:
             await cb.answer(
                 str(exc) if isinstance(exc, ApprovalUnavailable) else texts.GLPI_ACTION_ERROR,

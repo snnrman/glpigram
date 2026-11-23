@@ -11,11 +11,13 @@ import asyncio
 import logging
 import os
 from contextlib import suppress
+from types import SimpleNamespace
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.types import BotCommand
 
 from . import texts
@@ -25,6 +27,7 @@ from .db.repo import Repo
 from .glpi.client import GlpiClient
 from .handlers.access import build_access_router, build_lead_directory
 from .handlers.fallback import build_fallback_router, register_error_handler
+from .handlers.intake_review import build_intake_review_router
 from .handlers.linking import build_linking_router
 from .handlers.my_tickets import build_my_tickets_router
 from .handlers.new_ticket import build_new_ticket_router
@@ -38,6 +41,8 @@ from .schedule import WorkSchedule
 from .services.ai_shadow import OpenAIClassifier, ShadowClassifier
 from .services.cards import CardService
 from .services.claude_approval import ClaudeApprovalService
+from .services.intake import IntakeService
+from .services.intake_ui import IntakeUIMiddleware
 from .services.profile_links import ProfileLinksMiddleware
 from .services.sync import SyncService
 from .services.tech_approval import TechApprovalService
@@ -62,9 +67,20 @@ def _work_schedule(settings: Settings) -> WorkSchedule:
 
 
 def build_dispatcher(
-    client: GlpiClient, repo: Repo, settings: Settings, *, shadow: ShadowClassifier | None = None
+    client: GlpiClient,
+    repo: Repo,
+    settings: Settings,
+    *,
+    shadow: ShadowClassifier | None = None,
+    intake: IntakeService | None = None,
 ) -> Dispatcher:
-    dp = Dispatcher()
+    if settings.ai_intake_enabled and intake is None:
+        raise ValueError("Enabled intake requires an IntakeService")
+    active_intake = intake if settings.ai_intake_enabled else None
+    repo.intake_category_ids = dict(settings.ai_intake_category_ids)
+    # A second click or /new must not replace the FSM while AI/GLPI is awaiting I/O.
+    dp = Dispatcher(events_isolation=SimpleEventIsolation())
+    dp.update.outer_middleware(IntakeUIMiddleware(active_intake is not None))
     category_cache: TTLValue = TTLValue(client.list_categories, settings.category_cache_ttl)
     schedule = _work_schedule(settings)
 
@@ -143,8 +159,21 @@ def build_dispatcher(
         ticket_front_base=settings.glpi_front_base,
         schedule=schedule,
         shadow=shadow,
+        intake=active_intake,
     )
-    for router in (tech_approval, tech, tech_tickets, my_tickets, stats, access, business):
+    routers = [tech_approval, tech, tech_tickets, my_tickets, stats]
+    # Keep old review buttons usable when new intake is disabled for rollback.
+    if settings.ai_intake_category_ids:
+        review_categories = active_intake or SimpleNamespace(
+            category_id=settings.ai_intake_category_ids.__getitem__
+        )
+        routers.append(
+            build_intake_review_router(client, repo, intake=review_categories, cards=cards)
+        )
+    # The new router redirects old /access/menu entry points; access still owns
+    # existing lead-approval callbacks and in-progress legacy conversations.
+    routers.extend((business, access) if active_intake is not None else (access, business))
+    for router in routers:
         router.message.middleware(auth)
         router.callback_query.middleware(auth)
         dp.include_router(router)
@@ -182,10 +211,13 @@ async def _run(settings: Settings) -> None:
     sync_task: asyncio.Task | None = None
     shadow_task: asyncio.Task | None = None
     ai_client: OpenAIClassifier | None = None
+    intake: IntakeService | None = None
     # Everything after resource creation runs under the finally so a startup
     # failure (DB perms, bad schedule config) still closes the HTTP sessions.
     try:
         await repo.connect()
+        if settings.ai_intake_enabled:
+            intake = IntakeService(settings, reserve_call=repo.reserve_intake_call)
         bot.session.middleware(ProfileLinksMiddleware(repo, front_base=settings.glpi_front_base))
         shadow = None
         if settings.ai_shadow_enabled:
@@ -204,7 +236,7 @@ async def _run(settings: Settings) -> None:
                 log.info("ai_shadow_enabled daily_limit=%s", settings.ai_shadow_daily_limit)
             else:
                 log.warning("ai_shadow_disabled reason=missing_key")
-        dp = build_dispatcher(client, repo, settings, shadow=shadow)
+        dp = build_dispatcher(client, repo, settings, shadow=shadow, intake=intake)
         sync = SyncService(
             bot,
             client,
@@ -232,6 +264,8 @@ async def _run(settings: Settings) -> None:
                 await shadow_task
         if ai_client is not None:
             await ai_client.close()
+        if intake is not None:
+            await intake.aclose()
         if sync_task is not None:
             sync_task.cancel()
             with suppress(asyncio.CancelledError):

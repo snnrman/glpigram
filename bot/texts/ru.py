@@ -7,6 +7,19 @@ import re
 
 # Technician-initiated approval of an existing ticket.
 BTN_TECH_APPROVAL = "📨 На согласование"
+INTAKE_APPROVAL_BUTTON = "👨‍💼 На согласование"
+INTAKE_ROUTINE_BUTTON = "🛠 Обычная заявка"
+INTAKE_CATEGORY_BUTTON = "📁 Изменить категорию"
+INTAKE_REVIEW_STALE = "Карточка изменилась. Откройте актуальную карточку заявки."
+INTAKE_REVIEW_CLOSED = "По решённой или закрытой заявке ревью недоступно."
+INTAKE_REVIEW_APPROVAL_EXISTS = "Согласование уже запрошено; обычной заявкой его отменить нельзя."
+INTAKE_REVIEW_SAVED = "Решение сохранено."
+INTAKE_CATEGORY_PICK = "Выберите категорию заявки."
+INTAKE_CATEGORY_CHANGED_EXTERNALLY = (
+    "Категория изменена в GLPI. Карточка обновлена; выберите снова."
+)
+INTAKE_CATEGORY_UNAVAILABLE = "Категория недоступна в GLPI. Настройки требуют проверки."
+INTAKE_CATEGORY_UNCERTAIN = "Результат изменения пока не подтверждён. Откройте карточку заново."
 TECH_APPROVAL_EXISTS = "У заявки уже есть согласование. Повторная отправка не нужна."
 TECH_APPROVAL_CLOSED = "Согласование доступно только для открытой нерешённой заявки."
 TECH_APPROVAL_NO_REQUESTER = "В заявке не указан заявитель. Сначала укажите его в GLPI."
@@ -675,12 +688,35 @@ def notify_new_ticket(
     description: str | None = None,
     awaiting_approval: bool = False,
     approval_label: str | None = None,
+    intake: dict | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title, the description snippet, author, then a named link instead
     of a bare URL. The "New" status is implied by 🆕 and shown only when it is
     something else (e.g. a deferred card flushed after the ticket was taken
     overnight)."""
+    if intake is not None:
+        from .intake_render import render
+
+        return render(
+            lang="ru",
+            ticket_id=ticket_id,
+            title=title,
+            description=description,
+            status_label=ticket_status_label(status),
+            status=status,
+            urgency=urgency,
+            urgency_label=urgency_card_line(urgency) if urgency is not None else "",
+            requester_name=requester_name,
+            requester_tg_id=requester_tg_id,
+            assignee=assignee,
+            url=url,
+            intake=intake,
+            approval_label=approval_label
+            or (CARD_AWAITING_APPROVAL if awaiting_approval else None),
+            history=history,
+            attachments_count=attachments_count,
+        )
     head = f"🆕 <b>Заявка №{ticket_id}</b>"
     if awaiting_approval:
         head += f"\n{CARD_AWAITING_APPROVAL}"
@@ -816,7 +852,27 @@ def ticket_detail(
     description: str | None = None,
     requester: str | None = None,
     requester_tg_id: int | None = None,
+    intake: dict | None = None,
 ) -> str:
+    if intake is not None:
+        from .intake_render import render
+
+        return render(
+            lang="ru",
+            ticket_id=ticket_id,
+            title=title,
+            description=description,
+            status_label=ticket_status_label(status),
+            status=status,
+            urgency=urgency,
+            urgency_label=urgency_line(urgency) if urgency is not None else "",
+            requester_name=requester,
+            requester_tg_id=requester_tg_id,
+            assignee=assignee,
+            url=url,
+            intake=intake,
+            followups=followups,
+        )
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
     desc = description_block(description)

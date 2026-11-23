@@ -42,6 +42,7 @@ from ..schedule import WorkSchedule
 from . import notify
 from .cards import CardService
 from .claude_approval import ClaudeApprovalService
+from .intake_snapshot import refresh_intake_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -224,6 +225,19 @@ class SyncService:
     async def _send_new_card(self, ticket) -> bool:
         if self._tech_chat is None:
             return True  # nowhere to send is not a delivery failure
+        async with self._repo.ticket_action_lock(ticket.id):
+            intake = await self._repo.get_ticket_intake(ticket.id)
+            if (
+                intake is not None
+                or ticket.itilcategories_id in self._repo.intake_category_ids.values()
+            ):
+                # list_recent_tickets may predate a technician action. Re-read
+                # under the action lock before updating the displayed snapshot.
+                current = await self._client.get_ticket(ticket.id)
+                if current is None:
+                    return True
+                ticket = current
+                intake = await refresh_intake_snapshot(self._repo, ticket)
         name, tg_id = await self._requester_card_info(ticket.id)
         docs = await self._ticket_documents(ticket.id)
         workflow = await self._repo.get_claude_approval(ticket.id)
@@ -242,6 +256,7 @@ class SyncService:
             requester_tg_id=tg_id,
             attachments_count=len(docs),
             approval_label=approval_label,
+            intake=intake,
         )
         sent = msg is not None
         if sent:
@@ -610,11 +625,18 @@ class SyncService:
             log.info("solution_reminder_sent ticket=%s", ticket_id)
 
     async def _sync_ticket(self, row: TrackedTicket) -> None:
-        ticket = await self._client.get_ticket(row.ticket_id)
-        if ticket is None:
-            # Deleted in GLPI -> stop watching it.
-            await self._repo.set_ticket_status(row.ticket_id, status=row.last_status, active=False)
-            return
+        async with self._repo.ticket_action_lock(row.ticket_id):
+            ticket = await self._client.get_ticket(row.ticket_id)
+            if ticket is None:
+                # Deleted in GLPI -> stop watching it.
+                await self._repo.set_ticket_status(
+                    row.ticket_id, status=row.last_status, active=False
+                )
+                return
+            previous = await self._repo.get_ticket_intake(ticket.id)
+            intake = await refresh_intake_snapshot(self._repo, ticket)
+        if intake is not None and (previous is None or intake["version"] != previous["version"]):
+            await self._cards.record_event(self._bot, ticket.id, None)
 
         if ticket.status != row.last_status:
             done = (TICKET_STATUS_SOLVED, TICKET_STATUS_CLOSED)

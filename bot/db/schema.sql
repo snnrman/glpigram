@@ -1,6 +1,36 @@
 -- SQLite schema for the GLPI Telegram bot.
 -- Applied idempotently on startup (CREATE ... IF NOT EXISTS).
 
+-- Intake decisions and technician corrections are durable business records,
+-- independent of the short-lived observation-only ai_shadow table.
+CREATE TABLE IF NOT EXISTS ticket_intake (
+    ticket_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL,
+    display_data TEXT NOT NULL DEFAULT '{}',
+    ai_stale INTEGER NOT NULL DEFAULT 0,
+    category TEXT NOT NULL,
+    category_id INTEGER NOT NULL,
+    review_state TEXT NOT NULL DEFAULT 'pending'
+        CHECK(review_state IN ('pending', 'routine', 'approval')),
+    version INTEGER NOT NULL DEFAULT 1,
+    reviewed_by INTEGER,
+    reviewed_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ticket_intake_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL,
+    event TEXT NOT NULL,
+    data TEXT NOT NULL,
+    actor_tg_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intake_events_ticket ON ticket_intake_events(ticket_id, id);
+CREATE TABLE IF NOT EXISTS intake_api_days (
+    utc_day INTEGER PRIMARY KEY,
+    attempts INTEGER NOT NULL
+);
+
 -- Observation only. No foreign keys or writes to ticket/approval state.
 -- Sanitised input is erased after processing; terminal results expire after 30 days.
 CREATE TABLE IF NOT EXISTS ai_shadow (

@@ -16,6 +16,7 @@ from .. import texts
 from ..glpi.client import GlpiError
 from . import notify
 from .access_target import classify_access_target
+from .intake_snapshot import refresh_intake_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class TechApprovalService:
     async def prepare(self, ticket_id):
         previous = await self.repo.get_tech_approval(ticket_id)
         if await self.repo.get_approval(ticket_id) or (
-            previous is not None and previous["phase"] != "failed"
+            previous is not None and previous["phase"] not in ("failed", "cancelled")
         ):
             raise ApprovalUnavailable(texts.TECH_APPROVAL_EXISTS)
         ticket = await self.client.get_ticket(ticket_id)
@@ -82,6 +83,18 @@ class TechApprovalService:
         if not tech.is_tech:
             raise ApprovalUnavailable(texts.TECH_ONLY)
         async with self.repo.ticket_action_lock(tid):
+            expected = data.get("intake_review_version")
+            cached = await self.repo.get_ticket_intake(tid)
+            if expected is not None and (cached is None or cached["version"] != expected):
+                if self.cards:
+                    await self.cards.record_event(bot, tid, None)
+                raise ApprovalUnavailable(texts.INTAKE_REVIEW_STALE)
+            live = await self.client.get_ticket(tid)
+            intake = await refresh_intake_snapshot(self.repo, live) if live else None
+            if expected is not None and (intake is None or intake["version"] != expected):
+                if self.cards:
+                    await self.cards.record_event(bot, tid, None)
+                raise ApprovalUnavailable(texts.INTAKE_REVIEW_STALE)
             # Re-check the original ticket, requester and recipient at confirmation time.
             current = await self.prepare(tid)
             if any(
@@ -113,18 +126,71 @@ class TechApprovalService:
                 json.dumps(payload, ensure_ascii=False),
                 int(time.time()),
             )
+            if intake is not None:
+                changed = await self.repo.update_ticket_intake(
+                    tid,
+                    expected_version=intake["version"],
+                    actor_tg_id=tech.tg_id,
+                    now=int(time.time()),
+                    event="approval_requested",
+                    review_state="approval",
+                    details={"lead_glpi_id": data["lead_glpi_id"]},
+                )
+                if not changed:
+                    await self.repo.update_tech_approval(tid, "cancelled")
+                    raise ApprovalUnavailable(texts.INTAKE_REVIEW_STALE)
+                if self.cards:
+                    await self.cards.record_event(bot, tid, None)
             try:
                 return await self._advance(bot, tid)
             except Exception:
                 log.warning("tech_approval_registration_pending ticket=%s", tid, exc_info=True)
                 return "uncertain"
 
+    async def _reset_intake_review(self, bot, tid, data):
+        """A known failed/cancelled POST permits a fresh review; ambiguity does not."""
+        intake = await self.repo.get_ticket_intake(tid)
+        if intake is None or intake["review_state"] != "approval":
+            return
+        if await self.repo.get_approval(tid):
+            return
+        # The registration result is already known. Do not depend on another
+        # GLPI read to unlock review after a definite failed/cancelled POST.
+        # A future ordinary decision always checks live validation separately.
+        await self.repo.update_ticket_intake(
+            tid,
+            expected_version=intake["version"],
+            actor_tg_id=data.get("tech_tg_id"),
+            now=int(time.time()),
+            event="approval_not_created",
+            review_state="pending",
+        )
+        if self.cards:
+            await self.cards.record_event(bot, tid, None)
+
     async def _advance(self, bot, tid):
         row = await self.repo.get_tech_approval(tid)
         data = json.loads(row["payload"])
+        # Recovery after a crash between reservation and review persistence.
+        intake = await self.repo.get_ticket_intake(tid)
+        if (
+            intake is not None
+            and intake["review_state"] != "approval"
+            and not intake.get("approval_recheck")
+        ):
+            await self.repo.update_ticket_intake(
+                tid,
+                expected_version=intake["version"],
+                actor_tg_id=data.get("tech_tg_id"),
+                now=int(time.time()),
+                event="approval_requested",
+                review_state="approval",
+                details={"recovered": True, "lead_glpi_id": data["lead_glpi_id"]},
+            )
         ticket = await self.client.get_ticket(tid)
         if ticket is None or ticket.status in (5, 6):
             await self.repo.update_tech_approval(tid, "cancelled")
+            await self._reset_intake_review(bot, tid, data)
             return "cancelled"
         marker = f"[TG tech approval:{row['token']}]"
         validation_id = row["validation_id"]
@@ -138,6 +204,7 @@ class TechApprovalService:
                     or requester[0] != data["requester_glpi_id"]
                 ):
                     await self.repo.update_tech_approval(tid, "cancelled")
+                    await self._reset_intake_review(bot, tid, data)
                     return "cancelled"
                 # Persist BEFORE the non-idempotent request. On a timeout or restart
                 # only a matching existing validation may be recovered.
@@ -157,6 +224,7 @@ class TechApprovalService:
                         422,
                     ):
                         await self.repo.update_tech_approval(tid, "failed")
+                        await self._reset_intake_review(bot, tid, data)
                         return "failed"
                     log.warning("tech_approval_post_uncertain ticket=%s", tid)
                     return "uncertain"

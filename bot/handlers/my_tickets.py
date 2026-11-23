@@ -44,6 +44,7 @@ from ..glpi.models import TicketSummary
 from ..schedule import WorkSchedule
 from ..services import attachments, notify
 from ..services.cards import CardService
+from ..services.intake_snapshot import refresh_intake_snapshot
 from .new_ticket import main_menu_keyboard
 
 log = logging.getLogger(__name__)
@@ -151,9 +152,11 @@ def build_my_tickets_router(
 
     async def _render_detail(ticket_id: int) -> tuple[str, bool, bool]:
         """Return (detail text, closable, remindable) for the requester's view."""
-        ticket = await client.get_ticket(ticket_id)
-        if ticket is None:
-            return texts.GLPI_ERROR, False, False
+        async with repo.ticket_action_lock(ticket_id):
+            ticket = await client.get_ticket(ticket_id)
+            if ticket is None:
+                return texts.GLPI_ERROR, False, False
+            intake = await refresh_intake_snapshot(repo, ticket)
         assignees = await client.get_ticket_assignees(ticket_id)
         followups = await client.list_followups(ticket_id)
         # Last N public followups, chronological, with resolved author names.
@@ -174,6 +177,7 @@ def build_my_tickets_router(
             followups=lines,
             url=_ticket_url(ticket_id),
             urgency=ticket.urgency or None,  # 0 = not provided by GLPI
+            intake=intake,
         )
         # Remind only while New (no technician has taken it yet).
         return text, ticket.status in OPEN_TICKET_STATUSES, ticket.status == TICKET_STATUS_NEW

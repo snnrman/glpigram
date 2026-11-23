@@ -14,6 +14,7 @@ class ITILCategory:
     id: int
     name: str
     completename: str
+    is_deleted: bool = False
 
     @classmethod
     def from_api(cls, raw: dict) -> ITILCategory:
@@ -22,6 +23,7 @@ class ITILCategory:
             name=str(raw.get("name", "")),
             # completename holds the full "Parent > Child" path when present.
             completename=str(raw.get("completename") or raw.get("name", "")),
+            is_deleted=_as_bool(raw.get("is_deleted"), default=False),
         )
 
 

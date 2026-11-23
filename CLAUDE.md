@@ -88,6 +88,66 @@ deploy/
 
 ## Features (build in this order)
 
+### Optional single-text intake
+
+`AI_INTAKE_ENABLED` defaults to false. The legacy feature descriptions below still
+apply when it is off. Enabling the new form requires `AI_INTAKE_CATEGORY_IDS`, a
+JSON object mapping `accounts`, `network`, `hardware`, `software`, `infrastructure`,
+`purchases`, `other` to seven distinct positive GLPI category IDs. Prepare new
+categories matching `services/intake.py:CATEGORY_NAMES`; do not rename historical
+categories or reclassify existing tickets. IDs are installation-specific and are
+never created automatically by starting the bot. Submission and correction verify
+the current ID and normalized leaf name, rejecting deleted/mismatched categories.
+
+The new flow is description -> urgency -> attachments -> send. Free-text entry
+reuses the original message. The separate paid-services menu is hidden in this
+mode; old /access and menu entry points start the new form. Existing lead approval
+callbacks remain routed. There is no additional requester confirmation screen.
+One AI response supplies a short factual title, work category, environment and
+approval recommendation. Full original text remains GLPI content; the generated
+title is used in GLPI/lists. New Telegram cards show the description once.
+
+`AI_INTAKE_MODEL` inherits `OPENAI_MODEL` when empty. Timeout, input limit and daily
+limit are bounded; calls reserve a durable UTC-day budget before a single POST.
+No retries, tools, URL fetching or retained provider response storage are used.
+Missing credentials, exhausted budget, oversized input, invalid JSON and network
+failure produce an explicit fallback with an excerpt title and the Other category.
+AI fallback is NOT an ordinary/approved decision; every new ticket awaits a tech.
+The new flow does not enqueue a second shadow-classification call.
+
+Category, environment, urgency and approval are independent. Production covers
+the agreed running game services, delivery/API dependencies, public websites,
+production data systems and operational monitoring. Jenkins/build/repository and
+explicit dev/test contexts are development. Undecided internal scope stays unknown.
+Urgency is always requester-selected. New intake urgency 5 displays as Urgent,
+including development; it keeps the existing immediate off-hours delivery rule.
+No workload-scoring change is included in this feature.
+
+Every new intake ticket has durable metadata and technician review history separate
+from the 30-day shadow table. Pending review blocks take, resolve and handoff;
+comments remain available. The technician chooses Ordinary or Lead approval and
+may independently correct the category. Lead approval invokes the existing
+technician approval dialog and validation recovery, not an AI-triggered message.
+Version checks, per-ticket locks and fresh GLPI reads protect stale buttons.
+Read GLPI and refresh its intake snapshot under the SAME ticket action lock;
+locking only after an earlier read can undo a newer technician category decision.
+Text changes invalidate review and retain the original/model output in the audit.
+When a granted approval already exists, an explicit technician recheck may confirm
+that it still covers the edited text; pending/refused approvals cannot be bypassed.
+The existing one-approval-cycle constraint remains: a new purchase requiring a new
+approval after a completed cycle needs a separate request. No validation is revoked
+or replaced automatically by an AI or snapshot change.
+Legacy GLPI category PUT has no conditional-write/CAS support: a GET before and
+after PUT detects most conflicts but cannot eliminate the final external race.
+
+Prepare and test changes in an isolated checkout. Rollout requires a separate
+operator action: back up code/config/SQLite, create and inspect the new category
+IDs, configure the complete mapping, then enable the flag. Disabling the flag
+returns new submissions to the legacy form; retain the mapping and additive
+tables so existing intake review buttons and records remain usable. Do not restore
+an old SQLite snapshot over newer tickets or decisions. Merely installing this
+code does not create GLPI categories, rewrite old tickets or turn on AI intake.
+
 1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,
    cached 10 min) -> urgency -> title -> description -> optional photos/files ->
    «📨 Отправить заявку» -> create ticket. Reply with ticket number and link.

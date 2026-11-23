@@ -13,6 +13,7 @@ re-check ``link.is_tech`` themselves (hiding is not access control).
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -22,6 +23,8 @@ from .. import texts
 from ..db.repo import LinkedUser, Repo
 from ..glpi.client import TICKET_STATUS_NEW, TICKET_STATUS_SOLVED, GlpiClient, GlpiError
 from ..glpi.models import TicketSummary
+from ..services import notify
+from ..services.intake_snapshot import refresh_intake_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -186,16 +189,22 @@ def build_tech_tickets_router(
             log.warning("tech_ticket_detail_failed ticket=%s error=%s", ticket_id, exc)
             await cb.answer(texts.GLPI_ERROR, show_alert=True)
             return
-        await cb.message.edit_text(
-            text, reply_markup=_detail_keyboard(ticket_id, status=status, back_data=back_data)
-        )
+        keyboard = _detail_keyboard(ticket_id, status=status, back_data=back_data)
+        intake = await repo.get_ticket_intake(ticket_id) if repo is not None else None
+        if isinstance(intake, dict):
+            keyboard = notify.intake_ticket_keyboard(
+                ticket_id, intake, status=status, base=keyboard
+            )
+        await cb.message.edit_text(text, reply_markup=keyboard)
         await cb.answer()
 
     async def _render_detail(ticket_id: int) -> tuple[str, int]:
         """Detail text + status; raises GlpiError upstream on failure."""
-        ticket = await client.get_ticket(ticket_id)
-        if ticket is None:
-            raise GlpiError(f"ticket {ticket_id} not found")
+        async with repo.ticket_action_lock(ticket_id) if repo is not None else nullcontext():
+            ticket = await client.get_ticket(ticket_id)
+            if ticket is None:
+                raise GlpiError(f"ticket {ticket_id} not found")
+            intake = await refresh_intake_snapshot(repo, ticket) if repo is not None else None
         followups = await client.list_followups(ticket_id)
         recent = sorted((f for f in followups if not f.is_private), key=lambda f: f.id)
         recent = recent[-_MAX_FOLLOWUPS:]
@@ -229,6 +238,7 @@ def build_tech_tickets_router(
             urgency=ticket.urgency or None,
             requester=req[1] if req else None,
             requester_tg_id=req_tg,
+            intake=intake,
         )
         return text, ticket.status
 

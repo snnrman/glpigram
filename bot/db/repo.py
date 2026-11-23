@@ -7,6 +7,7 @@ their cursor/sync state alongside (same connection, same ``Repo``).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -129,10 +130,165 @@ class Repo:
         self._db: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
         self._ticket_locks: dict[int, asyncio.Lock] = {}
+        self.intake_category_ids: dict[str, int] = {}
 
     def ticket_action_lock(self, ticket_id: int) -> asyncio.Lock:
         """Serialize approval registration and technician mutations in this process."""
         return self._ticket_locks.setdefault(ticket_id, asyncio.Lock())
+
+    async def reserve_intake_call(self, now: int, limit: int) -> bool:
+        """Reserve a paid API attempt before POST; UTC daily limit survives restarts."""
+        if limit <= 0:
+            return False
+        async with self._tx() as db:
+            cur = await db.execute(
+                "INSERT INTO intake_api_days(utc_day,attempts) VALUES (?,1) "
+                "ON CONFLICT(utc_day) DO UPDATE SET attempts=attempts+1 WHERE attempts<?",
+                (now // 86400, limit),
+            )
+            return cur.rowcount == 1
+
+    async def save_ticket_intake(self, ticket_id: int, data: dict, now: int) -> None:
+        """Keep the original AI result immutable; retries cannot reset technician review."""
+        payload = json.dumps(data, ensure_ascii=False)
+        async with self._tx() as db:
+            cur = await db.execute(
+                "INSERT INTO ticket_intake"
+                "(ticket_id,data,category,category_id,created_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(ticket_id) DO UPDATE SET data=excluded.data,"
+                "category=excluded.category,category_id=excluded.category_id,"
+                "display_data='{}',ai_stale=0,version=version+1 "
+                "WHERE json_extract(ticket_intake.data,'$.metadata_recovered')=1 "
+                "AND COALESCE(json_extract(excluded.data,'$.metadata_recovered'),0)<>1 "
+                "AND ticket_intake.review_state='pending' AND ticket_intake.version=1",
+                (ticket_id, payload, data["category"], data["category_id"], now),
+            )
+            if cur.rowcount:
+                await db.execute(
+                    "INSERT INTO ticket_intake_events(ticket_id,event,data,created_at) "
+                    "VALUES (?,'classified',?,?)",
+                    (ticket_id, payload, now),
+                )
+            else:
+                # A recovery decision already reviewed by a human must not be
+                # overwritten by a late AI result; retain that result as evidence.
+                await db.execute(
+                    "INSERT INTO ticket_intake_events(ticket_id,event,data,created_at) "
+                    "SELECT ?,'late_classification',?,? WHERE EXISTS "
+                    "(SELECT 1 FROM ticket_intake WHERE ticket_id=? AND data<>?) "
+                    "AND NOT EXISTS (SELECT 1 FROM ticket_intake_events "
+                    "WHERE ticket_id=? AND event='late_classification' AND data=?)",
+                    (ticket_id, payload, now, ticket_id, payload, ticket_id, payload),
+                )
+
+    async def get_ticket_intake(self, ticket_id: int) -> dict | None:
+        async with self._conn.execute(
+            "SELECT * FROM ticket_intake WHERE ticket_id=?", (ticket_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        data = json.loads(row["data"])
+        data["initial_category"] = data["category"]
+        data["initial_category_id"] = data["category_id"]
+        snapshot = json.loads(row["display_data"])
+        data["display_title"] = snapshot.get("title", data.get("title", ""))
+        data["display_description"] = snapshot.get(
+            "description", data.get("original_description", "")
+        )
+        data["ai_stale"] = bool(row["ai_stale"])
+        data["approval_recheck"] = bool(snapshot.get("approval_recheck", False))
+        data.update(
+            {
+                k: row[k]
+                for k in (
+                    "ticket_id",
+                    "category",
+                    "category_id",
+                    "review_state",
+                    "version",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "created_at",
+                )
+            }
+        )
+        return data
+
+    async def refresh_ticket_intake_snapshot(
+        self,
+        ticket_id: int,
+        *,
+        expected_version: int,
+        snapshot: dict,
+        now: int,
+    ) -> bool:
+        """Invalidate a decision when the live ticket text changes, retaining original evidence."""
+        async with self._tx() as db:
+            cur = await db.execute(
+                "UPDATE ticket_intake SET display_data=?,ai_stale=1,"
+                "review_state='pending',"
+                "version=version+1,reviewed_by=NULL,reviewed_at=NULL "
+                "WHERE ticket_id=? AND version=?",
+                (json.dumps(snapshot, ensure_ascii=False), ticket_id, expected_version),
+            )
+            if cur.rowcount != 1:
+                return False
+            await db.execute(
+                "INSERT INTO ticket_intake_events(ticket_id,event,data,created_at) "
+                "VALUES (?,'external_text',?,?)",
+                (ticket_id, json.dumps(snapshot, ensure_ascii=False), now),
+            )
+            return True
+
+    async def update_ticket_intake(
+        self,
+        ticket_id: int,
+        *,
+        expected_version: int,
+        actor_tg_id: int | None,
+        now: int,
+        event: str,
+        review_state: str | None = None,
+        category: str | None = None,
+        category_id: int | None = None,
+        details: dict | None = None,
+    ) -> bool:
+        """Compare-and-set metadata and append an audit event in one transaction."""
+        if review_state not in (None, "pending", "routine", "approval"):
+            raise ValueError("Invalid intake review state")
+        if (category is None) != (category_id is None):
+            raise ValueError("Category key and id must change together")
+        async with self._tx() as db:
+            cur = await db.execute(
+                "UPDATE ticket_intake SET category=COALESCE(?,category),"
+                "category_id=COALESCE(?,category_id),review_state=COALESCE(?,review_state),"
+                "version=version+1,reviewed_by=?,reviewed_at=? "
+                "WHERE ticket_id=? AND version=?",
+                (
+                    category,
+                    category_id,
+                    review_state,
+                    actor_tg_id,
+                    now,
+                    ticket_id,
+                    expected_version,
+                ),
+            )
+            if cur.rowcount != 1:
+                return False
+            await db.execute(
+                "INSERT INTO ticket_intake_events"
+                "(ticket_id,event,data,actor_tg_id,created_at) VALUES (?,?,?,?,?)",
+                (ticket_id, event, json.dumps(details or {}, ensure_ascii=False), actor_tg_id, now),
+            )
+            return True
+
+    async def list_ticket_intake_events(self, ticket_id: int) -> list[dict]:
+        async with self._conn.execute(
+            "SELECT * FROM ticket_intake_events WHERE ticket_id=? ORDER BY id", (ticket_id,)
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
 
     async def get_tech_approval(self, ticket_id: int):
         async with self._conn.execute(
@@ -153,7 +309,8 @@ class Repo:
                 "INSERT INTO tech_approval_requests(ticket_id,token,payload,created_at) "
                 "VALUES (?,?,?,?) ON CONFLICT(ticket_id) DO UPDATE SET "
                 "token=excluded.token,payload=excluded.payload,created_at=excluded.created_at,"
-                "phase='prepared',validation_id=NULL WHERE tech_approval_requests.phase='failed'",
+                "phase='prepared',validation_id=NULL "
+                "WHERE tech_approval_requests.phase IN ('failed','cancelled')",
                 (ticket_id, token, payload, now),
             )
             if cur.rowcount != 1:
@@ -178,6 +335,8 @@ class Repo:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=3000")
         await self._db.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        await self._ensure_column("ticket_intake", "display_data", "TEXT NOT NULL DEFAULT '{}'")
+        await self._ensure_column("ticket_intake", "ai_stale", "INTEGER NOT NULL DEFAULT 0")
         # Idempotent column additions for DBs created before the column existed
         # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         await self._ensure_column("ticket_cards", "description", "TEXT NOT NULL DEFAULT ''")

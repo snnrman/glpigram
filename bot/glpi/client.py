@@ -499,13 +499,16 @@ class GlpiClient:
 
         # POST has side effects: idempotent=False -> only pre-execution retries.
         resp = await self._request("POST", "/Ticket", json={"input": payload}, idempotent=False)
-        data = resp.json()
-        # GLPI may return a single object or a list of {id, message}.
-        if isinstance(data, list):
-            data = data[0]
         try:
-            return int(data["id"])
-        except (KeyError, TypeError, ValueError) as exc:
+            data = resp.json()
+            # GLPI may return a single object or a list of {id, message}.
+            if isinstance(data, list):
+                data = data[0]
+            ticket_id = int(data["id"])
+            if ticket_id <= 0:
+                raise ValueError("Invalid ticket id")
+            return ticket_id
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
             raise GlpiHTTPError("ticket created but no id returned", response=resp) from exc
 
     # -- users / groups (feature 2: account linking) -----------------------
@@ -656,6 +659,17 @@ class GlpiClient:
         return [Followup.from_api(r) for r in rows]
 
     # -- ticket mutations (feature 5: tech actions) ------------------------
+    async def set_ticket_category(self, ticket_id: int, category_id: int) -> None:
+        """Change only category; never modify urgency, title, status or approvals."""
+        if category_id <= 0:
+            raise ValueError("A positive category id is required")
+        await self._request(
+            "PUT",
+            f"/Ticket/{ticket_id}",
+            json={"input": {"id": ticket_id, "itilcategories_id": category_id}},
+            idempotent=False,
+        )
+
     async def set_ticket_status(self, ticket_id: int, status: int) -> None:
         """Update a ticket's status (PUT /Ticket/{id})."""
         await self._request(

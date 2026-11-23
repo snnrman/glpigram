@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in single-text ticket intake (`AI_INTAKE_ENABLED=false` by default): one
+  description, requester-selected urgency and attachments. One bounded AI request
+  generates the GLPI title, assigns one of seven configured categories and records
+  independent environment and approval recommendations. The original text stays intact.
+- Technician review for every intake ticket, with explicit ordinary/lead-approval
+  decisions and category corrections. Versioned actions preserve manual changes and
+  reuse the existing lead approval workflow. New Telegram cards show the request
+  once, retain requester links and keep durable decision history.
+- AI failure fallback, persistent daily request budget, fresh category validation,
+  duplicate-submit protection and recovery of missing intake metadata. Existing
+  workflows remain available while the new form is disabled.
+
 - Requesters receive solution-confirmation reminders every 30 working minutes while a ticket is solved and awaiting their decision. Timers persist across restarts; confirmation/return stops reminders. Messages carry confirm/return buttons bound to the solution timestamp, and stale actions recheck ownership and live status. Configure `SOLUTION_REMIND_MINUTES` (0 disables).
 
 - Technicians can request lead approval for an existing open ticket from its card or `/approval ID`. The private dialog suggests the requester's lead, confirms the action and preserves the original ticket and assignee. Existing Claude approvals retain their second stage. Durable registration prevents duplicate GLPI validations and retries notification delivery after failures. Pending approvals block take, handoff and resolve actions, including stale buttons and already-open solution dialogs.

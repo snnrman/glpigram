@@ -7,6 +7,21 @@ import re
 
 # Technician-initiated approval of an existing ticket.
 BTN_TECH_APPROVAL = "📨 Request approval"
+INTAKE_APPROVAL_BUTTON = "👨‍💼 Request approval"
+INTAKE_ROUTINE_BUTTON = "🛠 Routine request"
+INTAKE_CATEGORY_BUTTON = "📁 Change category"
+INTAKE_REVIEW_STALE = "This card has changed. Open the current ticket card."
+INTAKE_REVIEW_CLOSED = "Solved or closed tickets cannot be reviewed."
+INTAKE_REVIEW_APPROVAL_EXISTS = (
+    "Approval has already been requested; routine review cannot cancel it."
+)
+INTAKE_REVIEW_SAVED = "Decision saved."
+INTAKE_CATEGORY_PICK = "Choose the ticket category."
+INTAKE_CATEGORY_CHANGED_EXTERNALLY = (
+    "The category changed in GLPI. The card was refreshed; choose again."
+)
+INTAKE_CATEGORY_UNAVAILABLE = "This category is unavailable in GLPI. Check configuration."
+INTAKE_CATEGORY_UNCERTAIN = "The change is not confirmed yet. Open the card again."
 TECH_APPROVAL_EXISTS = "This ticket already has an approval. Do not submit it again."
 TECH_APPROVAL_CLOSED = "Approval is available only for open, unsolved tickets."
 TECH_APPROVAL_NO_REQUESTER = "This ticket has no requester. Set the requester in GLPI first."
@@ -654,12 +669,35 @@ def notify_new_ticket(
     description: str | None = None,
     awaiting_approval: bool = False,
     approval_label: str | None = None,
+    intake: dict | None = None,
 ) -> str:
     """Tech-group card: number + urgency on top (the tech's priority signal),
     then bold title, the description snippet, author, then a named link instead
     of a bare URL. The "New" status is implied by 🆕 and shown only when it is
     something else (e.g. a deferred card flushed after the ticket was taken
     overnight)."""
+    if intake is not None:
+        from .intake_render import render
+
+        return render(
+            lang="en",
+            ticket_id=ticket_id,
+            title=title,
+            description=description,
+            status_label=ticket_status_label(status),
+            status=status,
+            urgency=urgency,
+            urgency_label=urgency_card_line(urgency) if urgency is not None else "",
+            requester_name=requester_name,
+            requester_tg_id=requester_tg_id,
+            assignee=assignee,
+            url=url,
+            intake=intake,
+            approval_label=approval_label
+            or (CARD_AWAITING_APPROVAL if awaiting_approval else None),
+            history=history,
+            attachments_count=attachments_count,
+        )
     head = f"🆕 <b>Ticket #{ticket_id}</b>"
     if awaiting_approval:
         head += f"\n{CARD_AWAITING_APPROVAL}"
@@ -796,7 +834,27 @@ def ticket_detail(
     description: str | None = None,
     requester: str | None = None,
     requester_tg_id: int | None = None,
+    intake: dict | None = None,
 ) -> str:
+    if intake is not None:
+        from .intake_render import render
+
+        return render(
+            lang="en",
+            ticket_id=ticket_id,
+            title=title,
+            description=description,
+            status_label=ticket_status_label(status),
+            status=status,
+            urgency=urgency,
+            urgency_label=urgency_line(urgency) if urgency is not None else "",
+            requester_name=requester,
+            requester_tg_id=requester_tg_id,
+            assignee=assignee,
+            url=url,
+            intake=intake,
+            followups=followups,
+        )
     body = "\n".join(followups) if followups else MYT_NO_FOLLOWUPS
     urgency_row = f"{urgency_line(urgency)}\n" if urgency is not None else ""
     desc = description_block(description)

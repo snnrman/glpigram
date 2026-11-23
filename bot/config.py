@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, StrictInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -104,6 +104,40 @@ class Settings(BaseSettings):
         max_length=1000,
         description="Comma-separated existing internal systems exempt from SaaS access approval.",
     )
+
+    # Optional new intake workflow. Never enabled by merely configuring an API key.
+    ai_intake_enabled: bool = False
+    ai_intake_model: str = Field(
+        default="", description="Blank inherits OPENAI_MODEL; does not change shadow settings."
+    )
+    ai_intake_timeout: float = Field(default=15, ge=1, le=60)
+    ai_intake_daily_limit: int = Field(default=100, ge=1, le=1000)
+    ai_intake_max_input_chars: int = Field(default=6000, ge=100, le=12000)
+    ai_intake_category_ids: dict[str, StrictInt] = Field(
+        default_factory=dict,
+        description="JSON mapping of all seven intake category keys to distinct GLPI IDs.",
+    )
+
+    @model_validator(mode="after")
+    def validate_intake_categories(self) -> Settings:
+        expected = {
+            "accounts",
+            "network",
+            "hardware",
+            "software",
+            "infrastructure",
+            "purchases",
+            "other",
+        }
+        mapping = self.ai_intake_category_ids
+        if self.ai_intake_enabled or mapping:
+            if set(mapping) != expected:
+                raise ValueError("AI_INTAKE_CATEGORY_IDS must map all seven intake category keys")
+            if any(value <= 0 for value in mapping.values()):
+                raise ValueError("AI_INTAKE_CATEGORY_IDS values must be positive GLPI IDs")
+            if len(set(mapping.values())) != len(mapping):
+                raise ValueError("AI_INTAKE_CATEGORY_IDS values must be distinct GLPI IDs")
+        return self
 
     # --- GLPI legacy REST API (v1) ---
     glpi_api_url: str = Field(
