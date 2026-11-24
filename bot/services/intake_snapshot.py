@@ -100,6 +100,12 @@ async def refresh_intake_snapshot(repo, ticket) -> dict | None:
         )
         if category is None:
             return None
+        # Scope recovery to the active pilot, but never stop the lifecycle of
+        # metadata already saved. Verification failures must abort the caller's
+        # action rather than silently authorizing a legacy mutation.
+        if repo.intake_recovery_filter is not None:
+            if not await repo.intake_recovery_filter(ticket.id):
+                return None
         await repo.save_ticket_intake(
             ticket.id,
             {

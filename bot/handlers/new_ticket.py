@@ -51,7 +51,7 @@ from ..schedule import WorkSchedule
 from ..services import attachments, notify
 from ..services.ai_shadow import ShadowClassifier
 from ..services.intake import IntakeService, category_matches, fallback_result
-from ..services.intake_ui import single_text_mode
+from ..services.intake_ui import use_single_text_mode
 from ..texts import intake as intake_texts
 
 log = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ def _cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
+def main_menu_keyboard(*, is_tech: bool = False, tg_id: int | None = None) -> ReplyKeyboardMarkup:
     """Persistent reply keyboard shown after /start and every finished dialog.
 
     The role is evaluated at render time (``link.is_tech`` is refreshed by the
@@ -183,7 +183,7 @@ def main_menu_keyboard(*, is_tech: bool = False) -> ReplyKeyboardMarkup:
             ]
         )
     # Access requests (lead-approved) — everyone, full-width last row.
-    if not single_text_mode.get():
+    if not use_single_text_mode(tg_id):
         rows.append([KeyboardButton(text=texts.BTN_ACCESS)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
@@ -197,8 +197,17 @@ def build_new_ticket_router(
     schedule: WorkSchedule | None = None,
     shadow: ShadowClassifier | None = None,
     intake: IntakeService | None = None,
+    allowed_category_ids: set[int] | None = None,
+    excluded_category_ids: set[int] | None = None,
 ) -> Router:
-    """Wire the /new dialog with its GLPI dependencies (closure-injected)."""
+    """Wire the /new dialog with its GLPI dependencies (closure-injected).
+
+    A legacy router can restrict category IDs during a parallel intake pilot.
+    ``None`` leaves that bound unrestricted; an empty allowlist permits none.
+    Exclusions always win. Restricted legacy submissions revalidate against
+    fresh GLPI categories before creating a ticket, without discarding a draft
+    when that lookup fails. Intake routers use their own mapped-category check.
+    """
     router = Router(name="new_ticket")
     # Dialogs and menu buttons are private-chat only: in groups the bot
     # must not react to free text (callbacks are not affected).
@@ -206,6 +215,24 @@ def build_new_ticket_router(
     # A weak map avoids keeping one permanent lock for every employee. The
     # local reference held by a submitter keeps its lock alive until done.
     submission_locks: WeakValueDictionary = WeakValueDictionary()
+    legacy_restricted = intake is None and (
+        allowed_category_ids is not None or excluded_category_ids is not None
+    )
+    allowed_ids = None if allowed_category_ids is None else frozenset(allowed_category_ids)
+    excluded_ids = frozenset(excluded_category_ids or ())
+
+    def _category_allowed(category_id: object) -> bool:
+        return (
+            type(category_id) is int
+            and category_id > 0
+            and (allowed_ids is None or category_id in allowed_ids)
+            and category_id not in excluded_ids
+        )
+
+    def _visible_categories(categories: list[ITILCategory]) -> list[ITILCategory]:
+        if not legacy_restricted:
+            return categories
+        return [c for c in categories if not c.is_deleted and _category_allowed(c.id)]
 
     def _quiet_notice(urgency: int) -> str | None:
         """Off-hours note for the requester after creation (None in work hours).
@@ -235,16 +262,18 @@ def build_new_ticket_router(
         free-text flow can pre-fill it before this step.
         """
         try:
-            categories = await category_cache.get()
+            categories = _visible_categories(await category_cache.get())
         except GlpiError as exc:
             log.warning("new_ticket_categories_failed error=%s", exc)
-            await state.clear()
+            if not legacy_restricted:
+                await state.clear()
             await message.answer(
                 texts.NEW_NO_CATEGORIES, reply_markup=main_menu_keyboard(is_tech=is_tech)
             )
             return
         if not categories:
-            await state.clear()
+            if not legacy_restricted:
+                await state.clear()
             await message.answer(
                 texts.NEW_NO_CATEGORIES, reply_markup=main_menu_keyboard(is_tech=is_tech)
             )
@@ -296,17 +325,26 @@ def build_new_ticket_router(
 
     @router.callback_query(NewTicket.choosing_category, F.data.startswith("nt:cat:"))
     async def on_category(cb: CallbackQuery, state: FSMContext) -> None:
-        cat_id = int(cb.data.rsplit(":", 1)[1])
-        # The cache may have expired since the keyboard was shown; the id is
-        # already in the callback data, the name is display-only -> fall back
-        # instead of letting GlpiError kill the dialog mid-step.
         try:
-            categories = await category_cache.get()
+            cat_id = int(cb.data.rsplit(":", 1)[1])
+        except ValueError:
+            await cb.answer(texts.USE_BUTTONS, show_alert=True)
+            return
+        # A callback can outlive its category or be forged. Never accept its ID
+        # as proof that the category remains available to this router.
+        try:
+            categories = _visible_categories(await category_cache.get())
         except GlpiError as exc:
-            log.warning("new_ticket_category_name_failed error=%s", exc)
-            categories = []
-        name = next((c.completename for c in categories if c.id == cat_id), str(cat_id))
-        await state.update_data(category_id=cat_id, category_name=name)
+            log.warning("new_ticket_category_lookup_failed error=%s", exc)
+            await cb.answer(texts.NEW_NO_CATEGORIES, show_alert=True)
+            return
+        selected = next(
+            (c for c in categories if c.id == cat_id and c.id > 0 and not c.is_deleted), None
+        )
+        if selected is None:
+            await cb.answer(texts.INTAKE_CATEGORY_UNAVAILABLE, show_alert=True)
+            return
+        await state.update_data(category_id=cat_id, category_name=selected.completename)
         await state.set_state(NewTicket.choosing_urgency)
         await cb.message.edit_text(texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard())
         await cb.answer()
@@ -544,6 +582,26 @@ def build_new_ticket_router(
     ) -> None:
         """Create the ticket from the FSM data and report to ``message.chat``."""
         data = await state.get_data()
+        if legacy_restricted:
+            # Cache/FSM contents are not authorization. This also blocks old
+            # drafts from creating tickets in a newly reserved intake category.
+            try:
+                category_id = data.get("category_id")
+                if not _category_allowed(category_id):
+                    raise ValueError("legacy category not permitted")
+                categories = _visible_categories(await client.list_categories())
+                if not any(c.id == category_id for c in categories):
+                    raise ValueError("legacy category unavailable")
+            except (GlpiError, TypeError, ValueError) as exc:
+                log.warning("legacy_category_unavailable error_type=%s", type(exc).__name__)
+                # No POST was attempted: keep text and attachments for retry.
+                await message.answer(
+                    intake_texts.category_unavailable(), reply_markup=_attach_keyboard()
+                )
+                return
+            if await state.get_state() != NewTicket.attaching or await state.get_data() != data:
+                # A cancel/new dialog may have arrived during the GLPI lookup.
+                return
         try:
             ticket_id = await client.create_ticket(
                 name=data["title"],
@@ -683,11 +741,14 @@ def build_new_ticket_router(
             await cb.answer()
             return
         try:
-            categories = await category_cache.get()
+            categories = _visible_categories(await category_cache.get())
         except GlpiError as exc:
             log.warning("new_ticket_categories_failed error=%s", exc)
             categories = None
         if not categories:
+            if legacy_restricted:
+                await cb.answer(texts.NEW_NO_CATEGORIES, show_alert=True)
+                return
             await state.clear()
             await cb.message.edit_text(texts.NEW_NO_CATEGORIES)
             await cb.answer()

@@ -107,6 +107,23 @@ One AI response supplies a short factual title, work category, environment and
 approval recommendation. Full original text remains GLPI content; the generated
 title is used in GLPI/lists. New Telegram cards show the description once.
 
+For a limited pilot, set `AI_INTAKE_PILOT_TG_IDS` to a JSON array of trusted numeric
+Telegram IDs and `AI_INTAKE_LEGACY_CATEGORY_IDS` to the existing category IDs.
+An empty pilot set preserves the all-user meaning of `AI_INTAKE_ENABLED=true`;
+always verify the configured set before a limited rollout. Separate message and
+callback router filters enforce membership using Telegram's sender identity.
+The same eligibility rule controls menus, including menus sent to another user.
+The legacy flow excludes reserved intake categories and validates fresh allowed
+IDs again before creation. The explicit legacy list also hides a new taxonomy
+parent without changing existing GLPI category names or defaults.
+
+Keep new pilot categories hidden from GLPI self-service. Missing metadata in a
+reserved category is recovered only when its live requester is a linked pilot
+user; an unavailable identity check must stop the action, not allow a bypass.
+Existing metadata is never discarded because pilot membership or the form flag
+changed. Keep the category map and pilot settings when disabling new submissions
+so existing intake tickets can finish their review and approval lifecycle.
+
 `AI_INTAKE_MODEL` inherits `OPENAI_MODEL` when empty. Timeout, input limit and daily
 limit are bounded; calls reserve a durable UTC-day budget before a single POST.
 No retries, tools, URL fetching or retained provider response storage are used.

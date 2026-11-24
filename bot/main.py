@@ -13,7 +13,7 @@ import os
 from contextlib import suppress
 from types import SimpleNamespace
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
@@ -24,7 +24,7 @@ from . import texts
 from .cache import TTLValue
 from .config import Settings, load_settings
 from .db.repo import Repo
-from .glpi.client import GlpiClient
+from .glpi.client import GlpiClient, GlpiError
 from .handlers.access import build_access_router, build_lead_directory
 from .handlers.fallback import build_fallback_router, register_error_handler
 from .handlers.intake_review import build_intake_review_router
@@ -78,10 +78,34 @@ def build_dispatcher(
         raise ValueError("Enabled intake requires an IntakeService")
     active_intake = intake if settings.ai_intake_enabled else None
     repo.intake_category_ids = dict(settings.ai_intake_category_ids)
+    pilot_tg_ids = frozenset(settings.ai_intake_pilot_tg_ids)
+    repo.intake_recovery_filter = None
+    if pilot_tg_ids:
+
+        async def may_recover_intake(ticket_id: int) -> bool:
+            requester = await client.get_ticket_requester(ticket_id)
+            if requester is None:
+                raise GlpiError("Cannot verify intake recovery requester")
+            link = await repo.get_by_glpi(requester[0])
+            return link is not None and link.tg_id in pilot_tg_ids
+
+        repo.intake_recovery_filter = may_recover_intake
     # A second click or /new must not replace the FSM while AI/GLPI is awaiting I/O.
     dp = Dispatcher(events_isolation=SimpleEventIsolation())
-    dp.update.outer_middleware(IntakeUIMiddleware(active_intake is not None))
-    category_cache: TTLValue = TTLValue(client.list_categories, settings.category_cache_ttl)
+    intake_ui = IntakeUIMiddleware(active_intake is not None, pilot_tg_ids)
+    dp.update.outer_middleware(intake_ui)
+    reserved_category_ids = set(settings.ai_intake_category_ids.values())
+    allowed_legacy_ids = set(settings.ai_intake_legacy_category_ids)
+
+    async def legacy_categories():
+        return [
+            category
+            for category in await client.list_categories()
+            if category.id not in reserved_category_ids
+            and (not allowed_legacy_ids or category.id in allowed_legacy_ids)
+        ]
+
+    category_cache: TTLValue = TTLValue(legacy_categories, settings.category_cache_ttl)
     schedule = _work_schedule(settings)
 
     # Linking router first and un-gated: unlinked users must reach /start.
@@ -152,15 +176,26 @@ def build_dispatcher(
         cards=cards,
         shadow=shadow,
     )
-    business = build_new_ticket_router(
+    legacy = build_new_ticket_router(
         client,
         category_cache,
         repo,
         ticket_front_base=settings.glpi_front_base,
         schedule=schedule,
         shadow=shadow,
-        intake=active_intake,
+        allowed_category_ids=allowed_legacy_ids or None,
+        excluded_category_ids=reserved_category_ids or None,
     )
+    legacy.name = "new_ticket_legacy"
+
+    def pilot_user(event) -> bool:
+        return intake_ui.eligibility.allows(getattr(getattr(event, "from_user", None), "id", None))
+
+    def legacy_user(event) -> bool:
+        return not pilot_user(event)
+
+    legacy.message.filter(legacy_user)
+    legacy.callback_query.filter(legacy_user, F.message.chat.type == "private")
     routers = [tech_approval, tech, tech_tickets, my_tickets, stats]
     # Keep old review buttons usable when new intake is disabled for rollback.
     if settings.ai_intake_category_ids:
@@ -170,9 +205,24 @@ def build_dispatcher(
         routers.append(
             build_intake_review_router(client, repo, intake=review_categories, cards=cards)
         )
-    # The new router redirects old /access/menu entry points; access still owns
-    # existing lead-approval callbacks and in-progress legacy conversations.
-    routers.extend((business, access) if active_intake is not None else (access, business))
+    # Gate both event types before their state handlers: a forged/stale callback
+    # cannot opt a legacy user into the pilot. Static closures keep the two
+    # creation paths separate, while /access still owns existing lead callbacks.
+    if active_intake is not None:
+        pilot = build_new_ticket_router(
+            client,
+            category_cache,
+            repo,
+            ticket_front_base=settings.glpi_front_base,
+            schedule=schedule,
+            shadow=shadow,
+            intake=active_intake,
+        )
+        pilot.name = "new_ticket_pilot"
+        pilot.message.filter(pilot_user)
+        pilot.callback_query.filter(pilot_user, F.message.chat.type == "private")
+        routers.append(pilot)
+    routers.extend((access, legacy))
     for router in routers:
         router.message.middleware(auth)
         router.callback_query.middleware(auth)

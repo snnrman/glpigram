@@ -409,7 +409,11 @@ def build_linking_router(
         ``menu_is_tech``: None -> no menu keyboard, else the role for it.
         """
         try:
-            markup = None if menu_is_tech is None else main_menu_keyboard(is_tech=menu_is_tech)
+            markup = (
+                None
+                if menu_is_tech is None
+                else main_menu_keyboard(is_tech=menu_is_tech, tg_id=tg_id)
+            )
             await bot.send_message(tg_id, text, reply_markup=markup)
         except Exception as exc:  # noqa: BLE001 - aiogram raises many send errors
             log.warning("notify_user_failed tg_id=%s error=%s", tg_id, exc)

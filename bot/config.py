@@ -107,6 +107,14 @@ class Settings(BaseSettings):
 
     # Optional new intake workflow. Never enabled by merely configuring an API key.
     ai_intake_enabled: bool = False
+    ai_intake_pilot_tg_ids: set[StrictInt] = Field(
+        default_factory=set,
+        description="JSON array of Telegram user IDs allowed new intake; empty means all users.",
+    )
+    ai_intake_legacy_category_ids: set[StrictInt] = Field(
+        default_factory=set,
+        description="Optional JSON array of category IDs visible in the legacy bot form.",
+    )
     ai_intake_model: str = Field(
         default="", description="Blank inherits OPENAI_MODEL; does not change shadow settings."
     )
@@ -130,6 +138,12 @@ class Settings(BaseSettings):
             "other",
         }
         mapping = self.ai_intake_category_ids
+        for name, values in (
+            ("AI_INTAKE_PILOT_TG_IDS", self.ai_intake_pilot_tg_ids),
+            ("AI_INTAKE_LEGACY_CATEGORY_IDS", self.ai_intake_legacy_category_ids),
+        ):
+            if any(value <= 0 for value in values):
+                raise ValueError(f"{name} must contain positive IDs")
         if self.ai_intake_enabled or mapping:
             if set(mapping) != expected:
                 raise ValueError("AI_INTAKE_CATEGORY_IDS must map all seven intake category keys")

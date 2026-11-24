@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -131,6 +131,7 @@ class Repo:
         self._write_lock = asyncio.Lock()
         self._ticket_locks: dict[int, asyncio.Lock] = {}
         self.intake_category_ids: dict[str, int] = {}
+        self.intake_recovery_filter: Callable[[int], Awaitable[bool]] | None = None
 
     def ticket_action_lock(self, ticket_id: int) -> asyncio.Lock:
         """Serialize approval registration and technician mutations in this process."""

@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A Telegram user allowlist for staged intake rollout. Pilot users get the new
+  form while everyone else keeps legacy entry points and category choices. Menu
+  rendering follows the recipient, and missing intake metadata is recovered only
+  after verifying the pilot requester.
+
 - Opt-in single-text ticket intake (`AI_INTAKE_ENABLED=false` by default): one
   description, requester-selected urgency and attachments. One bounded AI request
   generates the GLPI title, assigns one of seven configured categories and records
