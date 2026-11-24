@@ -52,6 +52,7 @@ from ..services import attachments, notify
 from ..services.ai_shadow import ShadowClassifier
 from ..services.intake import IntakeService, category_matches, fallback_result
 from ..services.intake_ui import use_single_text_mode
+from ..services.workload import WorkloadService
 from ..texts import intake as intake_texts
 
 log = logging.getLogger(__name__)
@@ -223,6 +224,7 @@ def build_new_ticket_router(
     schedule: WorkSchedule | None = None,
     shadow: ShadowClassifier | None = None,
     intake: IntakeService | None = None,
+    workload: WorkloadService | None = None,
     allowed_category_ids: set[int] | None = None,
     excluded_category_ids: set[int] | None = None,
 ) -> Router:
@@ -708,6 +710,18 @@ def build_new_ticket_router(
         notice = _quiet_notice(data["urgency"])
         if notice:
             await message.answer(notice)
+        if workload is not None:
+            # The ticket number is already delivered. An optional queue lookup
+            # or Telegram notice must never turn success into a creation error.
+            try:
+                async with asyncio.timeout(5):
+                    workload_notice = await workload.notice_for(
+                        ticket_id=ticket_id, requester_tg_id=link.tg_id
+                    )
+                    if workload_notice:
+                        await message.answer(workload_notice)
+            except Exception as exc:  # noqa: BLE001 - optional post-creation information
+                log.warning("workload_notice_failed error_type=%s", type(exc).__name__)
         if shadow is not None and intake is None:
             await shadow.observe(ticket_id, "new", data["title"], data["description"])
 

@@ -46,6 +46,7 @@ from .services.intake_ui import IntakeUIMiddleware
 from .services.profile_links import ProfileLinksMiddleware
 from .services.sync import SyncService
 from .services.tech_approval import TechApprovalService
+from .services.workload import WorkloadService
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ def build_dispatcher(
     *,
     shadow: ShadowClassifier | None = None,
     intake: IntakeService | None = None,
+    workload: WorkloadService | None = None,
 ) -> Dispatcher:
     if settings.ai_intake_enabled and intake is None:
         raise ValueError("Enabled intake requires an IntakeService")
@@ -107,6 +109,9 @@ def build_dispatcher(
 
     category_cache: TTLValue = TTLValue(legacy_categories, settings.category_cache_ttl)
     schedule = _work_schedule(settings)
+    active_workload = None
+    if settings.workload_notice_enabled:
+        active_workload = workload or WorkloadService(client, repo, settings, schedule=schedule)
 
     # Linking router first and un-gated: unlinked users must reach /start.
     dp.include_router(
@@ -217,6 +222,7 @@ def build_dispatcher(
             schedule=schedule,
             shadow=shadow,
             intake=active_intake,
+            workload=active_workload,
         )
         pilot.name = "new_ticket_pilot"
         pilot.message.filter(pilot_user)

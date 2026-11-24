@@ -145,7 +145,7 @@ pending selection marker rejects stale/direct confirmation callbacks. Declining
 returns to the same choices. Cards, details and handoff share the impact labels.
 The selection does not override the independently classified AI environment.
 Legacy urgency labels and behavior remain unchanged for employees outside the pilot.
-No workload-scoring change is included in this feature.
+Queue notices are a separate optional feature described below.
 
 Every new intake ticket has durable metadata and technician review history separate
 from the 30-day shadow table. Pending review blocks take, resolve and handoff;
@@ -171,6 +171,45 @@ returns new submissions to the legacy form; retain the mapping and additive
 tables so existing intake review buttons and records remain usable. Do not restore
 an old SQLite snapshot over newer tickets or decisions. Merely installing this
 code does not create GLPI categories, rewrite old tickets or turn on AI intake.
+
+### Optional queue notice pilot
+
+`WORKLOAD_NOTICE_ENABLED=false` by default. When enabled it requires a nonempty
+`WORKLOAD_NOTICE_PILOT_TG_IDS`; the dispatcher attaches it only to the new intake
+router and the service checks the authenticated requester again. An empty list
+never enables all users. Other employees keep their previous confirmations.
+
+After the real ticket number has been delivered, a bounded best-effort lookup may
+send one queue notice. Three to five other unassigned tickets produce the yellow
+warning; six or more produce orange. No green availability claim, ETA or FIFO
+position is shown. Urgency 5 alone produces the separate production-incident
+paragraph, distinguishing assigned and unassigned tickets. Category and AI
+environment never add weight. This reports queue state, not measured labour.
+
+All GLPI intake channels in `WORKLOAD_NOTICE_ENTITY_IDS` (default `[0]`) are read
+through a complete, sorted, paginated search with assignment IDs and validation
+status. Only statuses 1/2 are actionable; 3 planned, 4 waiting, 5 solved, 6 closed
+and deleted tickets are omitted. Pending/refused GLPI or local bot approvals are
+excluded. Technician review still counts. Multiple assignees never multiply a
+ticket; active work without an assignee joins the queue. The just-created ticket
+and explicit `WORKLOAD_EXCLUDED_TICKET_IDS` are excluded; never infer a test from
+its requester or title, and never silently discard old assignments based on age.
+
+Outside configured working hours, skip the lookup/notice; the existing work-hours
+message remains. Fresh complete GLPI snapshots can be cached for up to 30 seconds
+(`WORKLOAD_NOTICE_CACHE_TTL`, at most 60); local approval exclusions are read fresh.
+Incomplete pages, changing totals, over 2,000 tickets, invalid data, or request
+failure suppress the notice without using an expired snapshot. The service's
+single deadline is `WORKLOAD_NOTICE_TIMEOUT` (default 3 seconds, at most 5); the
+handler also bounds optional lookup/delivery and cannot report creation failure
+after its confirmation. No second GLPI POST or OpenAI call is involved.
+
+`workload_observations` keeps IDs/counts and snapshot metadata for 30 days, without
+ticket text or staff names. `notice_prepared` records the calculation, not proof
+of Telegram delivery. Disabling only `WORKLOAD_NOTICE_ENABLED` stops the notices;
+no business data or SQLite restoration is needed.
+
+### Existing workflows
 
 1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,
    cached 10 min) -> urgency -> title -> description -> optional photos/files ->

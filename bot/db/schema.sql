@@ -31,6 +31,16 @@ CREATE TABLE IF NOT EXISTS intake_api_days (
     attempts INTEGER NOT NULL
 );
 
+-- Short-lived workload snapshots for auditing requester notices only.
+-- No foreign keys or changes to ticket, account-linking, or approval state.
+CREATE TABLE IF NOT EXISTS workload_observations (
+    ticket_id INTEGER PRIMARY KEY,
+    requester_tg_id INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workload_observed ON workload_observations(observed_at);
+
 -- Observation only. No foreign keys or writes to ticket/approval state.
 -- Sanitised input is erased after processing; terminal results expire after 30 days.
 CREATE TABLE IF NOT EXISTS ai_shadow (

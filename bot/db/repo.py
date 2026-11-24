@@ -137,6 +137,32 @@ class Repo:
         """Serialize approval registration and technician mutations in this process."""
         return self._ticket_locks.setdefault(ticket_id, asyncio.Lock())
 
+    async def get_workload_waiting_ticket_ids(self) -> set[int]:
+        """Bulk approval exclusions, including rejections still being closed in GLPI."""
+        async with self._conn.execute(
+            "SELECT ticket_id FROM access_approvals WHERE status<=0 "
+            "UNION SELECT ticket_id FROM tech_approval_requests "
+            "WHERE phase NOT IN ('done','failed','cancelled') "
+            "UNION SELECT ticket_id FROM claude_approvals WHERE stage<>'approved'"
+        ) as cur:
+            return {row[0] for row in await cur.fetchall()}
+
+    async def save_workload_observation(
+        self, ticket_id: int, requester_tg_id: int, now: int, data: dict
+    ) -> None:
+        """Audit a notice for 30 days; retries preserve its original requester."""
+        payload = json.dumps(data, ensure_ascii=False)
+        async with self._tx() as db:
+            await db.execute(
+                "INSERT INTO workload_observations(ticket_id,requester_tg_id,observed_at,data) "
+                "VALUES (?,?,?,?) ON CONFLICT(ticket_id) DO UPDATE SET "
+                "observed_at=excluded.observed_at,data=excluded.data",
+                (ticket_id, requester_tg_id, now, payload),
+            )
+            await db.execute(
+                "DELETE FROM workload_observations WHERE observed_at<?", (now - 30 * 86400,)
+            )
+
     async def reserve_intake_call(self, now: int, limit: int) -> bool:
         """Reserve a paid API attempt before POST; UTC daily limit survives restarts."""
         if limit <= 0:

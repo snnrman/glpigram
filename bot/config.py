@@ -126,6 +126,39 @@ class Settings(BaseSettings):
         description="JSON mapping of all seven intake category keys to distinct GLPI IDs.",
     )
 
+    # Requester workload notice is an independent, explicitly scoped pilot.
+    workload_notice_enabled: bool = False
+    workload_notice_pilot_tg_ids: set[StrictInt] = Field(
+        default_factory=set,
+        description="JSON array of Telegram IDs; must be nonempty when workload notice is enabled.",
+    )
+    workload_excluded_ticket_ids: set[StrictInt] = Field(
+        default_factory=set,
+        description="JSON array of ticket IDs excluded from workload calculations.",
+    )
+    workload_notice_timeout: float = Field(default=3.0, ge=1, le=5)
+    workload_notice_entity_ids: set[StrictInt] = Field(
+        default_factory=lambda: {0},
+        description="Nonempty JSON array of GLPI entity IDs included in workload; 0 is valid.",
+    )
+    workload_notice_cache_ttl: float = Field(default=30.0, ge=0, le=60)
+
+    @model_validator(mode="after")
+    def validate_workload_notice(self) -> Settings:
+        for name, values in (
+            ("WORKLOAD_NOTICE_PILOT_TG_IDS", self.workload_notice_pilot_tg_ids),
+            ("WORKLOAD_EXCLUDED_TICKET_IDS", self.workload_excluded_ticket_ids),
+        ):
+            if any(value <= 0 for value in values):
+                raise ValueError(f"{name} must contain positive IDs")
+        if self.workload_notice_enabled and not self.workload_notice_pilot_tg_ids:
+            raise ValueError("Enabled workload notice requires WORKLOAD_NOTICE_PILOT_TG_IDS")
+        if not self.workload_notice_entity_ids or any(
+            value < 0 for value in self.workload_notice_entity_ids
+        ):
+            raise ValueError("WORKLOAD_NOTICE_ENTITY_IDS must contain nonnegative entity IDs")
+        return self
+
     @model_validator(mode="after")
     def validate_intake_categories(self) -> Settings:
         expected = {

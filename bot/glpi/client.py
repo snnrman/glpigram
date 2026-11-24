@@ -21,12 +21,13 @@ from __future__ import annotations
 import asyncio
 import json as jsonlib
 import logging
+import re
 import time
 from typing import Any
 
 import httpx
 
-from .models import Document, Followup, ITILCategory, Ticket, TicketSummary, User
+from .models import Document, Followup, ITILCategory, Ticket, TicketSummary, User, WorkloadTicket
 
 log = logging.getLogger(__name__)
 
@@ -199,6 +200,39 @@ def _parse_user_refs(raw: Any) -> tuple[list[int], str | None]:
         else:
             names.append(text)
     return ids, (", ".join(names) if names else None)
+
+
+def _workload_integer(value: Any, *, minimum: int, maximum: int = 2**63 - 1) -> int:
+    """Accept GLPI integer columns, without coercing booleans/floats/names."""
+    if type(value) is int:
+        result = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 19:
+        result = int(value)
+    else:
+        raise ValueError("invalid workload integer")
+    if not minimum <= result <= maximum:
+        raise ValueError("workload integer outside range")
+    return result
+
+
+def _workload_row(row: Any, *, entity_id: int) -> WorkloadTicket:
+    if not isinstance(row, dict):
+        raise ValueError("invalid workload row")
+    # Missing actor data must never be mistaken for an unassigned ticket.
+    actors = row["5"]
+    if actors is None:
+        assignee_ids: tuple[int, ...] = ()
+    else:
+        values = actors if isinstance(actors, list) else [actors]
+        assignee_ids = tuple(sorted({_workload_integer(v, minimum=1) for v in values}))
+    return WorkloadTicket(
+        id=_workload_integer(row["2"], minimum=1),
+        status=_workload_integer(row["12"], minimum=1, maximum=5),
+        urgency=_workload_integer(row["10"], minimum=1, maximum=5),
+        global_validation=_workload_integer(row["52"], minimum=0, maximum=4),
+        assignee_ids=assignee_ids,
+        entity_id=entity_id,
+    )
 
 
 class GlpiClient:
@@ -1033,6 +1067,96 @@ class GlpiClient:
             total = int(payload.get("totalcount") or 0)
             if start >= total:
                 return counts
+
+    async def list_workload_tickets(self, *, entity_ids: set[int]) -> list[WorkloadTicket]:
+        """Read all non-deleted, not-closed tickets in the exact entity scope.
+
+        GLPI search returns entity *names* even without dropdown expansion, so
+        query each configured entity separately and retain that numeric scope.
+        Never return a partial snapshot: inconsistent/malformed pages or more
+        than 2,000 tickets raise GlpiError for the caller to omit its notice.
+        Assignment IDs come from the search rows; no per-ticket/user lookups.
+        """
+        if (
+            not isinstance(entity_ids, (set, frozenset))
+            or not 1 <= len(entity_ids) <= 20
+            or any(type(e) is not int or not 0 <= e <= 2**63 - 1 for e in entity_ids)
+        ):
+            raise GlpiError("Invalid workload entity scope")
+        result: list[WorkloadTicket] = []
+        seen: set[int] = set()
+        page_size, maximum = 200, 2000
+        for entity_id in sorted(entity_ids):
+            start, previous_id = 0, 0
+            expected_total: int | None = None
+            while True:
+                params = {
+                    "criteria[0][field]": SO_TICKET_STATUS,
+                    "criteria[0][searchtype]": "equals",
+                    "criteria[0][value]": "notclosed",
+                    "criteria[1][link]": "AND",
+                    "criteria[1][field]": 80,
+                    "criteria[1][searchtype]": "equals",
+                    "criteria[1][value]": entity_id,
+                    "is_deleted": 0,
+                    "sort": SEARCHOPTION_ID,
+                    "order": "ASC",
+                    "range": f"{start}-{start + page_size - 1}",
+                    "expand_dropdowns": "false",
+                }
+                for index, field in enumerate((SEARCHOPTION_ID, SO_TICKET_STATUS, 10, 52, 5)):
+                    params[f"forcedisplay[{index}]"] = field
+                response = await self._request(
+                    "GET", "/search/Ticket", params=params, idempotent=True
+                )
+                try:
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise ValueError("invalid workload payload")
+                    total, count = payload["totalcount"], payload["count"]
+                    if type(total) is not int or type(count) is not int or total < 0 or count < 0:
+                        raise ValueError("invalid workload counts")
+                    if expected_total is None:
+                        if len(result) + total > maximum:
+                            raise ValueError("workload snapshot exceeds limit")
+                        expected_total = total
+                    if total != expected_total:
+                        raise ValueError("workload total changed between pages")
+                    rows = payload.get("data") if total == 0 else payload["data"]
+                    if total == 0 and rows is None:
+                        rows = []
+                    if not isinstance(rows, list) or len(rows) != count:
+                        raise ValueError("invalid workload page rows")
+                    if count != min(page_size, total - start):
+                        raise ValueError("incomplete workload page")
+                    content_range = payload.get("content-range")
+                    if content_range is not None:
+                        if total == 0:
+                            if content_range not in ("0--1/0", "0-0/0", "*/0"):
+                                raise ValueError("invalid empty workload range")
+                        else:
+                            match = re.fullmatch(r"([0-9]+)-([0-9]+)/([0-9]+)", content_range)
+                            if match is None or tuple(map(int, match.groups())) != (
+                                start,
+                                start + count - 1,
+                                total,
+                            ):
+                                raise ValueError("invalid workload range")
+                    for row in rows:
+                        ticket = _workload_row(row, entity_id=entity_id)
+                        if ticket.id <= previous_id or ticket.id in seen:
+                            raise ValueError("repeated or unordered workload ticket")
+                        previous_id = ticket.id
+                        seen.add(ticket.id)
+                        result.append(ticket)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise GlpiHTTPError(
+                        "GLPI workload snapshot is incomplete or invalid", response=response
+                    ) from exc
+                start += count
+                if start == expected_total:
+                    break
+        return result
 
     # -- attachments (feature 6) ------------------------------------------
     async def upload_document(

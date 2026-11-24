@@ -51,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional personal-pilot queue notices after successful ticket creation: warn at
+  three unassigned tickets and report production incidents separately. The bounded
+  GLPI snapshot covers all intake channels in explicit entities, excludes the new
+  ticket, configured tests and waiting/planned/completed work, and retains a
+  30-day calculation audit. Lookup failures never invalidate ticket creation;
+  small queues do not imply that technicians are available.
+
 - A Telegram user allowlist for staged intake rollout. Pilot users get the new
   form while everyone else keeps legacy entry points and category choices. Menu
   rendering follows the recipient, and missing intake metadata is recovered only

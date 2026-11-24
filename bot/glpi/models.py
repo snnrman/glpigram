@@ -56,6 +56,19 @@ class Ticket:
 
 
 @dataclass(slots=True)
+class WorkloadTicket:
+    """Validated search snapshot; actor IDs remain numeric and unresolved."""
+
+    id: int
+    status: int
+    urgency: int
+    global_validation: int
+    assignee_ids: tuple[int, ...]
+    entity_id: int
+    is_deleted: bool = False
+
+
+@dataclass(slots=True)
 class TicketSummary:
     """Compact ticket view for the /tickets list (feature 3)."""
 
