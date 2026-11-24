@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pilot intake now asks how the issue affects work: can continue, disrupted, blocked,
+  or a production incident. Cards and handoff messages share these labels; the incident
+  choice requires confirmation before it can bypass quiet hours.
+
 - Closed and solved access requests stop lead approval reminders. Stale approval actions validate live ticket state, and repeat technician closes report an already-closed ticket without submitting another solution. Action errors no longer claim ticket creation failed.
 
 - **Ticket numbers and titles in the unassigned-ticket digest link to their

@@ -137,8 +137,14 @@ Category, environment, urgency and approval are independent. Production covers
 the agreed running game services, delivery/API dependencies, public websites,
 production data systems and operational monitoring. Jenkins/build/repository and
 explicit dev/test contexts are development. Undecided internal scope stays unknown.
-Urgency is always requester-selected. New intake urgency 5 displays as Urgent,
-including development; it keeps the existing immediate off-hours delivery rule.
+Urgency is always requester-selected. The pilot asks how the problem affects work:
+2 Can continue working, 3 Work is disrupted, 4 Work is blocked, 5 Production incident.
+The four buttons run from low to high, with explanations separated by blank lines.
+Only 5 bypasses quiet hours, after an explicit live-production confirmation; a
+pending selection marker rejects stale/direct confirmation callbacks. Declining
+returns to the same choices. Cards, details and handoff share the impact labels.
+The selection does not override the independently classified AI environment.
+Legacy urgency labels and behavior remain unchanged for employees outside the pilot.
 No workload-scoring change is included in this feature.
 
 Every new intake ticket has durable metadata and technician review history separate

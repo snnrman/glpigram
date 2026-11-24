@@ -88,7 +88,13 @@ async def test_single_description_to_glpi_without_title_or_category_prompt(monke
     await h.dp.feed_update(h.bot, _text_update(h.bot, 2, DESCRIPTION))
     assert await h.ctx.get_state() == NewTicket.choosing_urgency
     keyboard = h.bot.sent[-1][1]
-    assert keyboard.inline_keyboard[0][0].text == "🔴 Срочно"
+    assert _last_text(h.bot) == intake_texts.urgency_prompt()
+    assert [row[0].text for row in keyboard.inline_keyboard[:-1]] == [
+        "🟢 Могу продолжать работу",
+        "🟡 Работа затруднена",
+        "🟠 Работа заблокирована",
+        "🔴 Авария на проде",
+    ]
     await h.dp.feed_update(h.bot, _cb_update(h.bot, 3, "nt:urg:4"))
     assert await h.ctx.get_state() == NewTicket.attaching
     await h.dp.feed_update(h.bot, _photo_update(h.bot, 4))
@@ -144,7 +150,7 @@ async def test_old_menu_entries_open_single_description(entry):
     assert _last_text(h.bot) == intake_texts.description_prompt()
 
 
-async def test_urgent_is_independent_of_environment_and_keeps_warning_gate():
+async def test_production_incident_keeps_confirmation_and_ai_environment_independent():
     h = _harness()
     h.intake.classify.return_value = IntakeResult(
         title="Сломалась сборка Jenkins",
@@ -157,14 +163,39 @@ async def test_urgent_is_independent_of_environment_and_keeps_warning_gate():
     await h.ctx.set_data({"description": "Сломалась сборка Jenkins"})
     await h.dp.feed_update(h.bot, _cb_update(h.bot, 1, "nt:urg:5"))
     assert _last_text(h.bot) == intake_texts.urgent_warning()
+    keyboard = next(markup for _, markup in reversed(h.bot.sent) if markup is not None)
+    assert [row[0].text for row in keyboard.inline_keyboard] == [
+        "Да, авария на проде",
+        "Изменить выбор",
+    ]
     assert "urgency" not in await h.ctx.get_data()
     await h.dp.feed_update(h.bot, _cb_update(h.bot, 2, "nt:urg_decline"))
     assert "urgency" not in await h.ctx.get_data()
+    assert _last_text(h.bot) == intake_texts.urgency_prompt()
     await h.dp.feed_update(h.bot, _cb_update(h.bot, 3, "nt:urg:5"))
     await h.dp.feed_update(h.bot, _cb_update(h.bot, 4, "nt:urg_confirm"))
     await h.dp.feed_update(h.bot, _cb_update(h.bot, 5, "nt:send"))
     assert h.client.create_ticket.await_args.kwargs["urgency"] == 5
     assert h.repo.save_ticket_intake.await_args.args[1]["environment"] == "development"
+
+
+async def test_pilot_cannot_confirm_an_incident_without_selecting_it_or_after_declining():
+    h = _harness()
+    await h.ctx.set_state(NewTicket.choosing_urgency)
+    await h.ctx.set_data({"description": DESCRIPTION})
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 1, "nt:urg_confirm"))
+    assert await h.ctx.get_state() == NewTicket.choosing_urgency
+    assert "urgency" not in await h.ctx.get_data()
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 2, "nt:urg:5"))
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 3, "nt:urg_decline"))
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 4, "nt:urg_confirm"))
+    assert await h.ctx.get_state() == NewTicket.choosing_urgency
+    assert "urgency" not in await h.ctx.get_data()
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 5, "nt:urg:3"))
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 6, "nt:urg_confirm"))
+    assert await h.ctx.get_state() == NewTicket.attaching
+    assert (await h.ctx.get_data())["urgency"] == 3
+    h.client.create_ticket.assert_not_awaited()
 
 
 async def test_unexpected_classifier_error_uses_fallback_without_losing_original():
@@ -341,5 +372,5 @@ async def test_new_copy_has_english_variant(monkeypatch):
     h = _harness()
     await h.dp.feed_update(h.bot, _text_update(h.bot, 1, "/new"))
     assert _last_text(h.bot).startswith("Describe the problem")
-    assert intake_texts.urgent_label() == "🔴 Urgent"
-    assert "production" not in intake_texts.urgent_warning().lower()
+    assert intake_texts.urgent_label() == "🔴 Production incident"
+    assert "production" in intake_texts.urgent_warning().lower()

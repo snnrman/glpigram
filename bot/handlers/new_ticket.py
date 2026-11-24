@@ -85,12 +85,23 @@ def _categories_keyboard(categories: list[ITILCategory]) -> InlineKeyboardMarkup
 
 
 def _urgency_keyboard(*, unified: bool = False) -> InlineKeyboardMarkup:
+    if unified:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=intake_texts.urgency_label(value), callback_data=f"nt:urg:{value}"
+                )
+            ]
+            for value in (URGENCY_LOW, URGENCY_MEDIUM, URGENCY_HIGH, URGENCY_URGENT)
+        ]
+        rows.append([InlineKeyboardButton(text=texts.BTN_CANCEL, callback_data="nt:cancel")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     # Exceptional urgent (prod) level first, on its own row — it opens a warning
     # and is the only red marker, set apart from the ordinary levels below.
     rows = [
         [
             InlineKeyboardButton(
-                text=intake_texts.urgent_label() if unified else texts.URGENCY_URGENT_LABEL,
+                text=texts.URGENCY_URGENT_LABEL,
                 callback_data=f"nt:urg:{URGENCY_URGENT}",
             )
         ]
@@ -103,8 +114,23 @@ def _urgency_keyboard(*, unified: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _urgent_confirm_keyboard() -> InlineKeyboardMarkup:
+def _urgent_confirm_keyboard(*, unified: bool = False) -> InlineKeyboardMarkup:
     """Warning gate for the urgent (prod) level: confirm or go back to the choices."""
+    if unified:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=intake_texts.urgent_confirm_label(), callback_data="nt:urg_confirm"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=intake_texts.urgent_decline_label(), callback_data="nt:urg_decline"
+                    )
+                ],
+            ]
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -346,12 +372,16 @@ def build_new_ticket_router(
             return
         await state.update_data(category_id=cat_id, category_name=selected.completename)
         await state.set_state(NewTicket.choosing_urgency)
-        await cb.message.edit_text(texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard())
+        await cb.message.edit_text(
+            intake_texts.urgency_prompt() if intake else texts.NEW_CHOOSE_URGENCY,
+            reply_markup=_urgency_keyboard(unified=intake is not None),
+        )
         await cb.answer()
 
     async def _to_title_step(cb: CallbackQuery, state: FSMContext, urgency: int) -> None:
         await state.update_data(urgency=urgency)
         if intake is not None:
+            await state.update_data(intake_urgent_pending=False)
             await cb.answer()
             await _open_attach_step(cb.message, state)
             return
@@ -372,9 +402,11 @@ def build_new_ticket_router(
         if urgency == URGENCY_URGENT:
             # Gate the urgent (prod) level behind an explicit warning; the level
             # is NOT stored until the user confirms.
+            if intake is not None:
+                await state.update_data(intake_urgent_pending=True)
             await cb.message.edit_text(
                 intake_texts.urgent_warning() if intake else texts.URGENT_WARNING,
-                reply_markup=_urgent_confirm_keyboard(),
+                reply_markup=_urgent_confirm_keyboard(unified=intake is not None),
             )
             await cb.answer()
             return
@@ -382,13 +414,19 @@ def build_new_ticket_router(
 
     @router.callback_query(NewTicket.choosing_urgency, F.data == "nt:urg_confirm")
     async def on_urgent_confirm(cb: CallbackQuery, state: FSMContext) -> None:
+        if intake is not None and not (await state.get_data()).get("intake_urgent_pending"):
+            await cb.answer(texts.USE_BUTTONS)
+            return
         await _to_title_step(cb, state, URGENCY_URGENT)
 
     @router.callback_query(NewTicket.choosing_urgency, F.data == "nt:urg_decline")
     async def on_urgent_decline(cb: CallbackQuery, state: FSMContext) -> None:
         # Back to the urgency choices — nothing is created as urgent.
+        if intake is not None:
+            await state.update_data(intake_urgent_pending=False)
         await cb.message.edit_text(
-            texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard(unified=intake is not None)
+            intake_texts.urgency_prompt() if intake else texts.NEW_CHOOSE_URGENCY,
+            reply_markup=_urgency_keyboard(unified=intake is not None),
         )
         await cb.answer()
 
@@ -421,7 +459,7 @@ def build_new_ticket_router(
         if intake is not None:
             await state.set_state(NewTicket.choosing_urgency)
             await message.answer(
-                texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard(unified=True)
+                intake_texts.urgency_prompt(), reply_markup=_urgency_keyboard(unified=True)
             )
             return
         await _open_attach_step(message, state)
@@ -736,7 +774,7 @@ def build_new_ticket_router(
         if intake is not None:
             await state.set_state(NewTicket.choosing_urgency)
             await cb.message.edit_text(
-                texts.NEW_CHOOSE_URGENCY, reply_markup=_urgency_keyboard(unified=True)
+                intake_texts.urgency_prompt(), reply_markup=_urgency_keyboard(unified=True)
             )
             await cb.answer()
             return

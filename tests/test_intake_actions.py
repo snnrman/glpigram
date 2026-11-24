@@ -241,13 +241,22 @@ async def test_live_glpi_text_edit_invalidates_review_before_mutation(env, chang
     assert row["original_description"] == DESCRIPTION
 
 
-async def test_intake_handoff_urgent_development_is_not_labeled_production(env):
+@pytest.mark.parametrize(
+    ("urgency", "label"),
+    [
+        (2, "🟢 Могу продолжать работу"),
+        (3, "🟡 Работа затруднена"),
+        (4, "🟠 Работа заблокирована"),
+        (5, "🔴 Авария на проде"),
+    ],
+)
+async def test_intake_handoff_uses_requester_urgency_labels(env, urgency, label):
+    env.ticket.urgency = urgency
     await _review(env)
     await _click(env, "hto")
     target_messages = [text for chat, text, _ in env.bot.sent if chat == TECH2_ID]
     assert len(target_messages) == 1
-    assert "🔴 Срочно" in target_messages[0]
-    assert "прод" not in target_messages[0].lower()
+    assert label in target_messages[0]
     assert "№901" in target_messages[0]
 
 
@@ -289,7 +298,7 @@ def test_intake_handoff_copy_is_escaped_and_has_english_variant(monkeypatch):
     monkeypatch.setattr(texts, "_lang", "en")
     result = intake_texts.handoff_to_new(901, "Title <bad>&", 5)
     assert "Ticket #901" in result
-    assert "🔴 Urgent" in result and "prod" not in result
+    assert "🔴 Production incident" in result
     assert "Title &lt;bad&gt;&amp;" in result
     assert "First choose" in intake_texts.review_required()
 

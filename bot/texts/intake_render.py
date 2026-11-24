@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 import re
 
+from . import intake as intake_texts
+
 CATEGORY_NAMES = {
     "ru": {
         "accounts": "Доступы и учётные записи",
@@ -76,7 +78,9 @@ def render(
         head.append(f"{'Статус' if ru else 'Status'}: {status_label}")
     if urgency is not None:
         head.append(
-            "🔴 Срочно" if ru and urgency == 5 else "🔴 Urgent" if urgency == 5 else urgency_label
+            intake_texts.urgency_label(urgency, lang=lang)
+            if urgency in (2, 3, 4, 5)
+            else urgency_label
         )
     if approval_label:
         head.append(
