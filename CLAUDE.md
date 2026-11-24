@@ -182,9 +182,9 @@ never enables all users. Other employees keep their previous confirmations.
 After the real ticket number has been delivered, a bounded best-effort lookup may
 send one queue notice. Three to five other unassigned tickets produce the yellow
 warning; six or more produce orange. No green availability claim, ETA or FIFO
-position is shown. Urgency 5 alone produces the separate production-incident
-paragraph, distinguishing assigned and unassigned tickets. Category and AI
-environment never add weight. This reports queue state, not measured labour.
+position is shown. Notices mention only the queue: urgency never adds paragraphs
+or independently triggers a notice. Category and AI environment never add weight.
+Urgency breakdowns remain internal audit data. This reports queue state, not measured labour.
 
 All GLPI intake channels in `WORKLOAD_NOTICE_ENTITY_IDS` (default `[0]`) are read
 through a complete, sorted, paginated search with assignment IDs and validation

@@ -161,9 +161,7 @@ def test_only_exact_urgency_five_counts_as_production_incident(urgency):
     ("count", "prefix"), [(0, None), (1, None), (2, None), (3, "🟡"), (5, "🟡"), (6, "🟠")]
 )
 def test_queue_thresholds_never_issue_a_green_notice(count, prefix):
-    result = workload_texts.notice(
-        queue_count=count, urgent_unassigned_count=0, urgent_assigned_count=0
-    )
+    result = workload_texts.notice(queue_count=count)
     if prefix is None:
         assert result is None
     else:
@@ -173,15 +171,16 @@ def test_queue_thresholds_never_issue_a_green_notice(count, prefix):
     assert "🟢" not in (result or "")
 
 
-def test_incidents_have_distinct_paragraphs_and_do_not_claim_everyone_is_busy():
-    result = workload_texts.notice(
-        queue_count=3, urgent_unassigned_count=2, urgent_assigned_count=1
-    )
-    paragraphs = result.split("\n\n")
-    assert len(paragraphs) == 3
-    assert "Аварийных заявок без исполнителя: 2" in paragraphs[1]
-    assert "Аварийных заявок, назначенных техникам: 1" in paragraphs[2]
-    assert "Обычные обращения могут обрабатываться дольше" in paragraphs[2]
+async def test_incidents_do_not_change_queue_notice(env):
+    env.client.list_workload_tickets.return_value = [
+        row(1, urgency=5),
+        row(2, urgency=5),
+        row(3),
+        row(4, urgency=5, assignees=(9,)),
+    ]
+    result = await notice(service(env))
+    assert result == workload_texts.notice(queue_count=3)
+    assert "авари" not in result.lower() and "🚨" not in result
     assert "вся команда" not in result
     assert "все техники" not in result
     assert "перед вами" not in result
@@ -189,26 +188,20 @@ def test_incidents_have_distinct_paragraphs_and_do_not_claim_everyone_is_busy():
 
 
 @pytest.mark.parametrize(("unassigned", "assigned"), [(1, 0), (0, 1)])
-def test_incident_only_notice_does_not_invent_a_large_queue(unassigned, assigned):
-    result = workload_texts.notice(
-        queue_count=unassigned,
-        urgent_unassigned_count=unassigned,
-        urgent_assigned_count=assigned,
+async def test_incidents_alone_do_not_trigger_a_notice(env, unassigned, assigned):
+    env.client.list_workload_tickets.return_value = (
+        [row(1, urgency=5)] if unassigned else [row(2, urgency=5, assignees=(9,))]
     )
-    assert result.startswith("🚨")
-    assert "Сейчас" not in result
-    assert "очереди ещё" not in result
+    assert await notice(service(env)) is None
+    assert observation(env)["notice_prepared"] is False
 
 
 def test_copy_supports_english(monkeypatch):
     monkeypatch.setattr(texts, "_lang", "en")
-    result = workload_texts.notice(
-        queue_count=6, urgent_unassigned_count=1, urgent_assigned_count=2
-    )
+    result = workload_texts.notice(queue_count=6)
     assert result.startswith("🟠")
     assert "6 other tickets" in result
-    assert "Unassigned production incident tickets: 1" in result
-    assert "assigned to technicians: 2" in result
+    assert "incident" not in result and "technicians" not in result
 
 
 @pytest.mark.parametrize(
@@ -280,7 +273,8 @@ async def test_observation_contains_counts_and_ids_without_titles_or_assignee_na
 
     result = await notice(service(env))
 
-    assert "назначенных техникам: 1" in result
+    assert "В очереди ещё 3 заявки" in result
+    assert "авари" not in result.lower()
     env.client.list_workload_tickets.assert_awaited_once_with(entity_ids={0})
     data = observation(env)
     assert data["queue_count"] == 3

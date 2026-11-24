@@ -172,11 +172,7 @@ class WorkloadService:
                     excluded_ticket_ids=self._excluded_ids,
                     entity_ids=self._entity_ids,
                 )
-                notice = workload_texts.notice(
-                    queue_count=len(snapshot.queue_ids),
-                    urgent_unassigned_count=len(snapshot.urgent_unassigned_ids),
-                    urgent_assigned_count=len(snapshot.urgent_assigned_ids),
-                )
+                notice = workload_texts.notice(queue_count=len(snapshot.queue_ids))
                 source_ids = {ticket.id for ticket in tickets}
                 data = {
                     "status": "ok",

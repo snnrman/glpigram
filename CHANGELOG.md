@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Workload notices now describe queue size only, without incident-related messages.
+
 - Pilot intake now asks how the issue affects work: can continue, disrupted, blocked,
   or a production incident. Cards and handoff messages share these labels; the incident
   choice requires confirmation before it can bypass quiet hours.
@@ -52,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Optional personal-pilot queue notices after successful ticket creation: warn at
-  three unassigned tickets and report production incidents separately. The bounded
+  three unassigned tickets. The bounded
   GLPI snapshot covers all intake channels in explicit entities, excludes the new
   ticket, configured tests and waiting/planned/completed work, and retains a
   30-day calculation audit. Lookup failures never invalidate ticket creation;
