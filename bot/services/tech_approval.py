@@ -16,6 +16,7 @@ from .. import texts
 from ..glpi.client import GlpiError
 from . import notify
 from .access_target import classify_access_target
+from .approval_rejection import ApprovalRejectionService
 from .intake_snapshot import refresh_intake_snapshot
 
 log = logging.getLogger(__name__)
@@ -330,6 +331,9 @@ class TechApprovalService:
         return "done"
 
     async def tick(self, bot):
+        await ApprovalRejectionService(
+            self.client, self.repo, cards=self.cards, front_base=self.front_base
+        ).tick(bot)
         for tid in await self.repo.pending_tech_approvals():
             try:
                 async with self.repo.ticket_action_lock(tid):

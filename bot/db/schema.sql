@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS ticket_reminders (
 -- the start of the next work day. Survives restarts.
 CREATE TABLE IF NOT EXISTS deferred_notifications (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind       TEXT    NOT NULL,   -- 'new' (new-ticket card) | 'remind'
+    kind       TEXT    NOT NULL,   -- 'new' quiet-hours | 'card_retry' | 'urgent_retry' | 'remind'
     ticket_id  INTEGER NOT NULL,
     created_at INTEGER NOT NULL    -- unix seconds when queued
 );
@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS ticket_cards (
     urgency           INTEGER NOT NULL DEFAULT 0,
     requester_name    TEXT    NOT NULL DEFAULT '',
     requester_tg_id   INTEGER,
+    requester_glpi_id INTEGER,
     attachments_count INTEGER NOT NULL DEFAULT 0,
     status            INTEGER NOT NULL DEFAULT 1,
     taken_by          TEXT    NOT NULL DEFAULT '',
@@ -193,6 +194,19 @@ CREATE TABLE IF NOT EXISTS access_approvals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_access_pending ON access_approvals (status);
+
+-- Explicit ordinary-lead refusals, persisted before PUT. Unknown outcomes are
+-- reconciled only by our marker on the same validation, never by global status.
+CREATE TABLE IF NOT EXISTS approval_rejection_closures (
+    ticket_id INTEGER PRIMARY KEY,
+    validation_id INTEGER NOT NULL,
+    lead_glpi_id INTEGER NOT NULL,
+    lead_tg_id INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    token TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'posting',
+    created_at INTEGER NOT NULL
+);
 
 -- Durable registration of approvals initiated by technicians on existing tickets.
 -- A POST of unknown outcome is reconciled by its marker, never blindly repeated.

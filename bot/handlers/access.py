@@ -46,6 +46,7 @@ from ..glpi.client import (
 from ..services import notify
 from ..services.access_target import classify_access_target
 from ..services.ai_shadow import ShadowClassifier
+from ..services.approval_rejection import ApprovalRejectionService
 from ..services.cards import CardService
 from ..services.claude_approval import CLAUDE_POLICY_MARKER, ClaudeApprovalService
 from .new_ticket import main_menu_keyboard
@@ -166,6 +167,7 @@ def build_access_router(
     router = Router(name="access")
     router.message.filter(F.chat.type == "private")
     send_locks: dict[int, asyncio.Lock] = {}
+    rejections = ApprovalRejectionService(client, repo, cards=cards, front_base=ticket_front_base)
 
     async def decision_lock(handler, event, data):
         ticket_id = None
@@ -455,7 +457,7 @@ def build_access_router(
         user = await client.get_user(row["lead_glpi_id"])
         return user is not None and user.is_usable
 
-    async def _own_pending(cb: CallbackQuery, ticket_id: int):
+    async def _own_pending(cb: CallbackQuery, ticket_id: int, *, rejection_resume=False):
         row = await repo.get_approval(ticket_id)
         if row is None or row["status"] != 0 or row["lead_tg_id"] != cb.from_user.id:
             await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
@@ -464,7 +466,7 @@ def build_access_router(
             if not await _manual_lead_identity(row, cb.from_user.id):
                 await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
                 return None
-            if not await _ordinary_approval_live(ticket_id):
+            if not await _ordinary_approval_live(ticket_id, rejection_resume=rejection_resume):
                 await cb.answer(texts.ACC_ANSWERED_STALE, show_alert=True)
                 return None
         except GlpiError:
@@ -473,7 +475,12 @@ def build_access_router(
             return None
         return row
 
-    async def _ordinary_approval_live(ticket_id: int) -> bool:
+    async def _ordinary_approval_live(ticket_id: int, *, rejection_resume: bool = False) -> bool:
+        closing = await repo.get_rejection_closure(ticket_id)
+        if closing is not None and closing["phase"] in ("posting", "refused"):
+            # An explicit refusal is already in progress. It cannot be replaced
+            # by an approve click, and global=refused is not an external decision.
+            return rejection_resume
         ticket = await client.get_ticket(ticket_id)
         if (
             ticket is None
@@ -607,7 +614,7 @@ def build_access_router(
         if await repo.get_claude_approval(ticket_id) is not None:
             await _claude_reject_prompt(cb, state, ticket_id, "lead")
             return
-        if await _own_pending(cb, ticket_id) is None:
+        if await _own_pending(cb, ticket_id, rejection_resume=True) is None:
             return
         await state.set_state(LeadReject.entering_reason)
         await state.update_data(reject_ticket_id=ticket_id, reject_role="lead")
@@ -650,7 +657,7 @@ def build_access_router(
             try:
                 still_live = await _manual_lead_identity(
                     row, message.from_user.id
-                ) and await _ordinary_approval_live(ticket_id)
+                ) and await _ordinary_approval_live(ticket_id, rejection_resume=True)
             except GlpiError:
                 log.warning("access_live_check_failed ticket=%s", ticket_id)
                 await message.answer(texts.GLPI_ACTION_ERROR)
@@ -693,41 +700,24 @@ def build_access_router(
             return
         lead = row["lead_name"]
         try:
-            await client.answer_validation(
-                row["validation_id"],
-                accepted=False,
-                comment=texts.acc_validation_comment_rejected(lead, reason),
-            )
-            await client.set_ticket_status(ticket_id, TICKET_STATUS_CLOSED)
+            result = await rejections.reject(bot, row, reason)
         except GlpiError as exc:
             log.exception("access_reject_failed ticket=%s error=%s raw=%s", ticket_id, exc, exc.raw)
             await message.answer(texts.GLPI_ACTION_ERROR)
             return
+        if result != "done":
+            if result == "cancelled":
+                await state.clear()
+            await message.answer(
+                texts.ACC_ANSWERED_STALE if result == "cancelled" else texts.GLPI_ACTION_ERROR
+            )
+            return
         await state.clear()
-        await repo.set_approval_status(ticket_id, status=-1)
-        await repo.set_ticket_status(ticket_id, status=TICKET_STATUS_CLOSED, active=False)
-        manual = await repo.get_tech_approval(ticket_id) is not None
-        await _add_followup_quiet(
-            ticket_id,
-            texts.acc_validation_comment_rejected(lead, reason)
-            if manual
-            else texts.acc_followup_rejected(lead, reason),
-        )
+        saved = await repo.get_rejection_closure(ticket_id)
         await message.answer(
-            texts.acc_decision_rejected(lead, reason),
+            texts.acc_decision_rejected(lead, saved["reason"]),
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
         )
-        await notify.send_text(
-            bot,
-            row["requester_tg_id"],
-            texts.tech_approval_decision(ticket_id, lead, False, reason, _url(ticket_id))
-            if manual
-            else texts.acc_requester_rejected(ticket_id, lead, reason, _url(ticket_id)),
-        )
-        if cards is not None:
-            await cards.record_event(
-                bot, ticket_id, texts.hist_rejected(lead), status=TICKET_STATUS_CLOSED
-            )
 
     async def _add_followup_quiet(ticket_id: int, text: str) -> None:
         """Followup into the GLPI timeline; cursor bumped so sync won't echo it."""

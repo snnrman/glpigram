@@ -132,7 +132,7 @@ def build_dispatcher(
     )
     # Order matters: tech_actions and my_tickets must precede new_ticket so their
     # FSM-state and menu-button handlers win over the /new free-text fallback.
-    cards = CardService(repo, front_base=settings.glpi_front_base)
+    cards = CardService(repo, front_base=settings.glpi_front_base, client=client)
     tech = build_tech_actions_router(
         client,
         tech_group_chat_id=settings.tech_group_chat_id,

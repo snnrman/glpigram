@@ -671,10 +671,13 @@ def _ticket_ref(ticket_id: int, url: str | None) -> str:
     return f'<a href="{url}">{ref}</a>' if url else ref
 
 
-def user_mention(name: str, tg_id: int | None) -> str:
-    """A safe display name, as a clickable Telegram mention when the id is known."""
-    safe = html.escape(name)
-    return f'<a href="tg://user?id={tg_id}">{safe}</a>' if tg_id else safe
+def user_mention(
+    name: str, tg_id: int | None, *, glpi_id: int | None = None, ticket_url: str | None = None
+) -> str:
+    """A safe name linked to the known Telegram or GLPI requester profile."""
+    from .profile import mention
+
+    return mention(name, tg_id, glpi_id=glpi_id, ticket_url=ticket_url)
 
 
 def notify_new_ticket(
@@ -686,6 +689,7 @@ def notify_new_ticket(
     urgency: int | None = None,
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
+    requester_glpi_id: int | None = None,
     attachments_count: int = 0,
     history: list[str] | None = None,
     assignee: str | None = None,
@@ -713,6 +717,7 @@ def notify_new_ticket(
             urgency_label=urgency_card_line(urgency) if urgency is not None else "",
             requester_name=requester_name,
             requester_tg_id=requester_tg_id,
+            requester_glpi_id=requester_glpi_id,
             assignee=assignee,
             url=url,
             intake=intake,
@@ -738,7 +743,10 @@ def notify_new_ticket(
     if desc:
         body.append(desc)
     if requester_name:
-        body.append(f"👤 {user_mention(requester_name, requester_tg_id)}")
+        linked_name = user_mention(
+            requester_name, requester_tg_id, glpi_id=requester_glpi_id, ticket_url=url
+        )
+        body.append(f"👤 {linked_name}")
     if attachments_count:
         body.append(attachments_note(attachments_count))
     if url:
@@ -856,6 +864,7 @@ def ticket_detail(
     description: str | None = None,
     requester: str | None = None,
     requester_tg_id: int | None = None,
+    requester_glpi_id: int | None = None,
     intake: dict | None = None,
 ) -> str:
     if intake is not None:
@@ -872,6 +881,7 @@ def ticket_detail(
             urgency_label=urgency_line(urgency) if urgency is not None else "",
             requester_name=requester,
             requester_tg_id=requester_tg_id,
+            requester_glpi_id=requester_glpi_id,
             assignee=assignee,
             url=url,
             intake=intake,
@@ -886,7 +896,10 @@ def ticket_detail(
     # Linked to their Telegram profile when known, so a tech can DM them directly.
     requester_row = ""
     if requester:
-        requester_row = f"✍️ Заявитель: {user_mention(requester, requester_tg_id)}\n"
+        linked_name = user_mention(
+            requester, requester_tg_id, glpi_id=requester_glpi_id, ticket_url=url
+        )
+        requester_row = f"✍️ Заявитель: {linked_name}\n"
     return (
         f"<b>Заявка {_ticket_ref(ticket_id, url)}</b>\n"
         f"<b>{html.escape(title)}</b>\n"

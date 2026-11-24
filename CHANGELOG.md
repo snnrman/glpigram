@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Requester actions recheck GLPI ownership. Reopening ticket details during a close dialog no longer waits on a lock already held by that dialog.
+- Group review cards survive a temporary Telegram send failure. Cards can link to the requester’s GLPI profile when no Telegram account is linked.
+- Resume closing a ticket after its lead refusal when GLPI temporarily fails. Opening an approval from the technician group preserves concurrent private drafts.
+- Validate the ticket number returned by GLPI. A failed Telegram confirmation retries delivery of the result without submitting a second ticket.
+
 - Remove the duplicate emoji from routine technician review history.
 
 - Trashed GLPI tickets are treated as unavailable, so stale tracked rows cannot trigger requester reminders.

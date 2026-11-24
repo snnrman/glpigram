@@ -142,6 +142,9 @@ def build_tech_approval_router(service, lead_directory):
         dm = FSMContext(storage=state.storage, key=key)
         if await dm.get_state() is not None:
             raise ApprovalUnavailable(texts.TECH_APPROVAL_BUSY)
+        previous_data = await dm.get_data()
+        if previous_data.get("description"):
+            raise ApprovalUnavailable(texts.TECH_APPROVAL_BUSY)
         if data["service"] == "unclear":
             next_state = TechApproval.service
             text, markup = texts.CLAUDE_SERVICE_ASK, keyboard(data)
@@ -159,9 +162,19 @@ def build_tech_approval_router(service, lead_directory):
                 next_state = TechApproval.lead
                 text, markup = texts.tech_approval_pick(ticket_id), keyboard(data, leads=leads)
         try:
-            await bot.send_message(link.tg_id, text, reply_markup=markup)
+            prompt = await bot.send_message(link.tg_id, text, reply_markup=markup)
         except Exception as exc:
             raise ApprovalUnavailable(texts.TECH_DM_FAILED) from exc
+        # Group and private updates have different event-isolation keys. A
+        # private draft may have appeared while directory/Telegram I/O awaited.
+        if await dm.get_state() is not None or await dm.get_data() != previous_data:
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=link.tg_id, message_id=prompt.message_id, reply_markup=None
+                )
+            except Exception:
+                pass  # The nonce was never stored, so even old buttons are inert.
+            raise ApprovalUnavailable(texts.TECH_APPROVAL_BUSY)
         await dm.set_data(data)
         await dm.set_state(next_state)
         if callback:

@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 import aiosqlite
 
@@ -95,6 +96,7 @@ class TicketCard:
     taken_by: str
     history: str  # JSON array of rendered lines
     last_followup_id: int
+    requester_glpi_id: int | None = None
 
     @classmethod
     def _from_row(cls, row: aiosqlite.Row) -> TicketCard:
@@ -112,6 +114,7 @@ class TicketCard:
             taken_by=row["taken_by"],
             history=row["history"],
             last_followup_id=row["last_followup_id"],
+            requester_glpi_id=row["requester_glpi_id"],
         )
 
 
@@ -130,12 +133,17 @@ class Repo:
         self._db: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
         self._ticket_locks: dict[int, asyncio.Lock] = {}
+        self._card_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
         self.intake_category_ids: dict[str, int] = {}
         self.intake_recovery_filter: Callable[[int], Awaitable[bool]] | None = None
 
     def ticket_action_lock(self, ticket_id: int) -> asyncio.Lock:
         """Serialize approval registration and technician mutations in this process."""
         return self._ticket_locks.setdefault(ticket_id, asyncio.Lock())
+
+    def card_lock(self, ticket_id: int) -> asyncio.Lock:
+        """Serialize a card's registration, history updates and Telegram edits across services."""
+        return self._card_locks.setdefault(ticket_id, asyncio.Lock())
 
     async def get_workload_waiting_ticket_ids(self) -> set[int]:
         """Bulk approval exclusions, including rejections still being closed in GLPI."""
@@ -367,6 +375,7 @@ class Repo:
         # Idempotent column additions for DBs created before the column existed
         # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
         await self._ensure_column("ticket_cards", "description", "TEXT NOT NULL DEFAULT ''")
+        await self._ensure_column("ticket_cards", "requester_glpi_id", "INTEGER")
         await self._ensure_column("ticket_ratings", "glpi_pushed", "INTEGER NOT NULL DEFAULT 0")
         await self._ensure_column(
             "claude_approvals", "lead_approved_at", "INTEGER NOT NULL DEFAULT 0"
@@ -737,8 +746,10 @@ class Repo:
     async def enqueue_deferred(self, kind: str, ticket_id: int, now: int) -> None:
         async with self._tx() as db:
             await db.execute(
-                "INSERT INTO deferred_notifications (kind, ticket_id, created_at) VALUES (?, ?, ?)",
-                (kind, ticket_id, now),
+                "INSERT INTO deferred_notifications (kind, ticket_id, created_at) "
+                "SELECT ?, ?, ? WHERE NOT EXISTS "
+                "(SELECT 1 FROM deferred_notifications WHERE kind=? AND ticket_id=?)",
+                (kind, ticket_id, now, kind, ticket_id),
             )
 
     async def list_deferred(self) -> list[tuple[int, str, int]]:
@@ -752,6 +763,13 @@ class Repo:
     async def delete_deferred(self, row_id: int) -> None:
         async with self._tx() as db:
             await db.execute("DELETE FROM deferred_notifications WHERE id = ?", (row_id,))
+
+    async def delete_deferred_ticket(self, kind: str, ticket_id: int) -> None:
+        async with self._tx() as db:
+            await db.execute(
+                "DELETE FROM deferred_notifications WHERE kind=? AND ticket_id=?",
+                (kind, ticket_id),
+            )
 
     # -- living cards (single evolving tech-group card per ticket) ---------
     async def save_card(
@@ -768,15 +786,18 @@ class Repo:
         attachments_count: int,
         status: int,
         now: int,
-    ) -> None:
-        """Remember the group card at the moment it was actually sent."""
+        requester_glpi_id: int | None = None,
+        history_limit: int = 10,
+    ) -> int:
+        """Register the receipt and consume buffered events in one transaction."""
         async with self._tx() as db:
             await db.execute(
                 """
                 INSERT INTO ticket_cards
                     (ticket_id, chat_id, message_id, title, description, urgency,
-                     requester_name, requester_tg_id, attachments_count, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     requester_name, requester_tg_id, attachments_count, status, created_at,
+                     requester_glpi_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ticket_id) DO UPDATE SET
                     chat_id = excluded.chat_id, message_id = excluded.message_id
                 """,
@@ -792,8 +813,38 @@ class Repo:
                     attachments_count,
                     status,
                     now,
+                    requester_glpi_id,
                 ),
             )
+            async with db.execute(
+                "SELECT line,status,taken_by FROM card_pending_events "
+                "WHERE ticket_id=? ORDER BY id",
+                (ticket_id,),
+            ) as cur:
+                pending = await cur.fetchall()
+            if pending:
+                async with db.execute(
+                    "SELECT history,status,taken_by FROM ticket_cards WHERE ticket_id=?",
+                    (ticket_id,),
+                ) as cur:
+                    card = await cur.fetchone()
+                history = (
+                    json.loads(card["history"]) + [row["line"] for row in pending if row["line"]]
+                )[-history_limit:]
+                status = next(
+                    (row["status"] for row in reversed(pending) if row["status"] is not None),
+                    card["status"],
+                )
+                taken = next(
+                    (row["taken_by"] for row in reversed(pending) if row["taken_by"] is not None),
+                    card["taken_by"],
+                )
+                await db.execute(
+                    "UPDATE ticket_cards SET status=?,taken_by=?,history=? WHERE ticket_id=?",
+                    (status, taken, json.dumps(history, ensure_ascii=False), ticket_id),
+                )
+                await db.execute("DELETE FROM card_pending_events WHERE ticket_id=?", (ticket_id,))
+            return len(pending)
 
     async def get_card(self, ticket_id: int) -> TicketCard | None:
         async with self._conn.execute(
@@ -801,6 +852,17 @@ class Repo:
         ) as cur:
             row = await cur.fetchone()
         return TicketCard._from_row(row) if row else None
+
+    async def update_card_requester(
+        self, ticket_id: int, *, name: str, tg_id: int | None, glpi_id: int
+    ) -> None:
+        """Lazily repair a stored card from a successful live GLPI relation lookup."""
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE ticket_cards SET requester_name=?,requester_tg_id=?,requester_glpi_id=? "
+                "WHERE ticket_id=?",
+                (name, tg_id, glpi_id, ticket_id),
+            )
 
     async def update_card(
         self,
@@ -952,6 +1014,49 @@ class Repo:
             "SELECT * FROM access_approvals WHERE ticket_id = ?", (ticket_id,)
         ) as cur:
             return await cur.fetchone()
+
+    async def get_rejection_closure(self, ticket_id: int):
+        async with self._conn.execute(
+            "SELECT * FROM approval_rejection_closures WHERE ticket_id=?", (ticket_id,)
+        ) as cur:
+            return await cur.fetchone()
+
+    async def reserve_rejection_closure(self, approval, reason: str, token: str, now: int):
+        async with self._tx() as db:
+            cur = await db.execute(
+                "INSERT INTO approval_rejection_closures "
+                "(ticket_id,validation_id,lead_glpi_id,lead_tg_id,reason,token,created_at) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(ticket_id) DO UPDATE SET "
+                "validation_id=excluded.validation_id,lead_glpi_id=excluded.lead_glpi_id,"
+                "lead_tg_id=excluded.lead_tg_id,reason=excluded.reason,token=excluded.token,"
+                "created_at=excluded.created_at,phase='posting' "
+                "WHERE approval_rejection_closures.phase='cancelled'",
+                (
+                    approval["ticket_id"],
+                    approval["validation_id"],
+                    approval["lead_glpi_id"],
+                    approval["lead_tg_id"],
+                    reason,
+                    token,
+                    now,
+                ),
+            )
+            return cur.rowcount == 1
+
+    async def set_rejection_closure_phase(self, ticket_id: int, phase: str):
+        if phase not in ("posting", "refused", "done", "cancelled"):
+            raise ValueError("Invalid rejection closure phase")
+        async with self._tx() as db:
+            await db.execute(
+                "UPDATE approval_rejection_closures SET phase=? WHERE ticket_id=?",
+                (phase, ticket_id),
+            )
+
+    async def pending_rejection_closures(self):
+        async with self._conn.execute(
+            "SELECT ticket_id FROM approval_rejection_closures WHERE phase IN ('posting','refused')"
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
 
     async def create_claude_approval(
         self,
@@ -1174,7 +1279,10 @@ class Repo:
 
     async def pending_approvals(self) -> list[aiosqlite.Row]:
         async with self._conn.execute(
-            "SELECT * FROM access_approvals WHERE status = 0 ORDER BY ticket_id"
+            "SELECT * FROM access_approvals WHERE status = 0 AND NOT EXISTS "
+            "(SELECT 1 FROM approval_rejection_closures c "
+            "WHERE c.ticket_id=access_approvals.ticket_id AND c.phase IN ('posting','refused')) "
+            "ORDER BY ticket_id"
         ) as cur:
             return list(await cur.fetchall())
 
@@ -1188,6 +1296,17 @@ class Repo:
     async def set_approval_status(self, ticket_id: int, *, status: int) -> None:
         """1 approved / -1 rejected (0 = still pending)."""
         async with self._tx() as db:
+            if status == -2:
+                # A reminder may have read its pending list before a lead's
+                # explicit refusal. Never overwrite that durable decision.
+                await db.execute(
+                    "UPDATE access_approvals SET status=-2 WHERE ticket_id=? AND status=0 "
+                    "AND NOT EXISTS (SELECT 1 FROM approval_rejection_closures c "
+                    "WHERE c.ticket_id=access_approvals.ticket_id "
+                    "AND c.phase IN ('posting','refused'))",
+                    (ticket_id,),
+                )
+                return
             await db.execute(
                 "UPDATE access_approvals SET status = ? WHERE ticket_id = ?",
                 (status, ticket_id),

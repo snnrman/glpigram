@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -311,3 +313,62 @@ async def test_buffered_status_and_assignee_apply_to_the_fresh_card(repo):
     card = await repo.get_card(TICKET)
     assert card.status == 2 and card.taken_by == "Техник"
     assert "Взял в работу: Техник" in card.history
+
+
+async def test_register_during_event_buffering_drains_the_event(repo, monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    add_pending = repo.add_pending_card_event
+
+    async def pause_before_insert(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        await add_pending(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "add_pending_card_event", pause_before_insert)
+    async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
+        recording = tasks.create_task(
+            _service(repo).record_event(FakeBot(), TICKET, "Taken", status=2)
+        )
+        await entered.wait()
+        tasks.create_task(_register(repo, _service(repo)))
+        await asyncio.sleep(0)  # Let registration run while the pending insert is paused.
+        release.set()
+
+    assert recording.result() is False
+    card = await repo.get_card(TICKET)
+    assert card.status == 2
+    assert json.loads(card.history) == ["Taken · 09:15"]
+    assert await repo.pop_pending_card_events(TICKET) == []
+
+
+@pytest.mark.parametrize("pause_at", ["update_card", "edit_message_text"])
+async def test_overlapping_events_preserve_history_and_edit_order(repo, monkeypatch, pause_at):
+    bot = FakeBot()
+    await _register(repo, _service(repo))
+    entered, release = asyncio.Event(), asyncio.Event()
+    target = repo if pause_at == "update_card" else bot
+    original = getattr(target, pause_at)
+
+    async def pause_first(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(target, pause_at, pause_first)
+    read = AsyncMock(wraps=repo.get_card)
+    monkeypatch.setattr(repo, "get_card", read)
+    async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
+        tasks.create_task(_service(repo).record_event(bot, TICKET, "First", status=2))
+        await entered.wait()
+        tasks.create_task(_service(repo).record_event(bot, TICKET, "Second"))
+        await asyncio.sleep(0)
+        read.assert_awaited_once_with(TICKET)
+        release.set()
+
+    card = await repo.get_card(TICKET)
+    assert card.status == 2
+    assert json.loads(card.history) == ["First · 09:15", "Second · 09:15"]
+    assert len(bot.edits) == 2
+    assert "Second" not in bot.edits[0][2]
+    assert "First · 09:15\nSecond · 09:15" in bot.edits[-1][2]

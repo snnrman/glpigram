@@ -190,6 +190,7 @@ async def notify_new_ticket(
     *,
     requester_name: str | None = None,
     requester_tg_id: int | None = None,
+    requester_glpi_id: int | None = None,
     attachments_count: int = 0,
     history: list[str] | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
@@ -212,6 +213,7 @@ async def notify_new_ticket(
             urgency=ticket.urgency or None,  # 0 = not provided by GLPI
             requester_name=requester_name,
             requester_tg_id=requester_tg_id,
+            requester_glpi_id=requester_glpi_id,
             attachments_count=attachments_count,
             history=history,
             awaiting_approval=(ticket.global_validation == 2 and approval_label is None),

@@ -21,6 +21,7 @@ from bot.glpi.client import (
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_NEW,
     GlpiDocumentRejected,
+    GlpiError,
     _parse_user_refs,
 )
 from bot.glpi.models import Ticket, TicketSummary
@@ -152,6 +153,7 @@ async def _inject_link(handler, event, data):
 
 def _make_client() -> AsyncMock:
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.get_ticket_assignees.return_value = ["Иван Петров"]
     client.add_followup.return_value = 555
     client.set_ticket_status.return_value = None
@@ -231,6 +233,33 @@ async def test_close_without_comment_button_closes_without_followup():
     assert tech and "без комментария" in tech[-1].lower()
 
 
+async def test_pending_requester_close_rechecks_owner_after_glpi_requester_changes():
+    bot, client = FakeBot(), _make_client()
+    dp, _ = await _closing_dispatcher(bot, client)
+    # The close dialog is already open when GLPI changes the requester.
+    client.is_ticket_requester.return_value = False
+    try:
+        await dp.feed_update(bot, _text_update(bot, 1, "Вопрос решён"))
+        client.set_ticket_status.assert_not_awaited()
+        client.add_followup.assert_not_awaited()
+    finally:
+        await dp.storage.close()
+
+
+async def test_glpi_requester_lookup_error_keeps_close_draft_without_writing():
+    bot, client = FakeBot(), _make_client()
+    dp, state = await _closing_dispatcher(bot, client)
+    client.is_ticket_requester.side_effect = GlpiError("unavailable")
+    try:
+        await dp.feed_update(bot, _text_update(bot, 1, "Решено"))
+        assert await state.get_state() == MyTickets.closing
+        assert (CHAT, texts.GLPI_ACTION_ERROR) in bot.sent
+        client.set_ticket_status.assert_not_awaited()
+        client.add_followup.assert_not_awaited()
+    finally:
+        await dp.storage.close()
+
+
 # --- remind about a ticket (cooldown) ---------------------------------------
 @pytest.fixture
 async def repo(tmp_path):
@@ -242,6 +271,7 @@ async def repo(tmp_path):
 
 def _remind_dispatcher(bot: FakeBot, repo: Repo, *, status: int = TICKET_STATUS_NEW):
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.get_ticket.return_value = Ticket(
         id=TICKET,
         name="Печать",
@@ -254,6 +284,7 @@ def _remind_dispatcher(bot: FakeBot, repo: Repo, *, status: int = TICKET_STATUS_
         client, repo, tech_group_chat_id=TECH_CHAT, remind_cooldown_hours=4
     )
     dp = Dispatcher(storage=MemoryStorage())
+    router.callback_query.middleware(_inject_link)
     dp.include_router(router)
     return dp
 
@@ -319,6 +350,7 @@ async def test_remind_blocked_when_ticket_taken(repo):
 async def test_remind_offhours_is_deferred_with_notice(repo):
     bot = FakeBot()
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.get_ticket.return_value = Ticket(
         id=TICKET,
         name="Печать",
@@ -336,6 +368,7 @@ async def test_remind_offhours_is_deferred_with_notice(repo):
         client, repo, tech_group_chat_id=TECH_CHAT, remind_cooldown_hours=4, schedule=sched
     )
     dp = Dispatcher(storage=MemoryStorage())
+    router.callback_query.middleware(_inject_link)
     dp.include_router(router)
 
     await dp.feed_update(bot, _cb_update(bot, 1, f"mt:remind:{TICKET}"))
@@ -349,6 +382,7 @@ async def test_remind_offhours_is_deferred_with_notice(repo):
 
 async def test_detail_view_contains_ticket_url(repo):
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.get_ticket.return_value = Ticket(
         id=TICKET, name="Печать", content="c", status=1, urgency=3
     )
@@ -367,8 +401,21 @@ async def test_detail_view_contains_ticket_url(repo):
     assert any(f"https://glpi.local/front/ticket.form.php?id={TICKET}" in t for t in texts_sent)
 
 
+async def test_requester_can_reopen_details_while_deciding_whether_to_close(repo):
+    bot = FakeBot()
+    dp = _remind_dispatcher(bot, repo)
+    await dp.feed_update(bot, _cb_update(bot, 1, f"mt:close:{TICKET}"))
+    try:
+        async with asyncio.timeout(2):
+            await dp.feed_update(bot, _cb_update(bot, 2, f"mt:open:{TICKET}"))
+    finally:
+        await dp.storage.close()
+    assert any(text and "Печать" in text for _, text in bot.sent)
+
+
 async def test_detail_view_shows_urgency(repo):
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.get_ticket.return_value = Ticket(
         id=TICKET, name="Печать", content="c", status=1, urgency=3
     )
@@ -421,6 +468,7 @@ def _photo_update(bot: FakeBot, uid: int) -> Update:
 async def test_requester_comment_photo_reaches_tech_group(repo):
     bot = MediaFakeBot()
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.attach_document_to_ticket.return_value = 1
     client.add_followup.return_value = 555
     client.get_ticket.return_value = Ticket(
@@ -451,6 +499,7 @@ async def test_requester_comment_rejected_file_tells_user_and_keeps_dialog(repo)
     """GLPI refused the type: no followup, no forward, a specific hint, state kept."""
     bot = MediaFakeBot()
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.attach_document_to_ticket.side_effect = GlpiDocumentRejected(
         "id_ed25519.pub", "Тип файла не разрешен"
     )
@@ -505,6 +554,7 @@ async def test_reply_to_followup_notification_posts_comment(repo):
     )
     bot = FakeBot()
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     client.add_followup.return_value = 900
     client.get_ticket.return_value = Ticket(
         id=TICKET, name="Печать", content="c", status=2, urgency=3
@@ -531,6 +581,7 @@ async def test_reply_to_someone_elses_ticket_is_refused(repo):
     )
     bot = FakeBot()
     client = AsyncMock()
+    client.is_ticket_requester.return_value = True
     router = build_my_tickets_router(client, repo, tech_group_chat_id=TECH_CHAT)
     router.message.middleware(_inject_link)
     dp = Dispatcher(storage=MemoryStorage())

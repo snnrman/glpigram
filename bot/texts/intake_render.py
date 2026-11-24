@@ -6,6 +6,7 @@ import html
 import re
 
 from . import intake as intake_texts
+from .profile import mention
 
 CATEGORY_NAMES = {
     "ru": {
@@ -70,6 +71,7 @@ def render(
     history: list[str] | None = None,
     attachments_count: int = 0,
     followups: list[str] | None = None,
+    requester_glpi_id: int | None = None,
 ) -> str:
     """Keep original description once, metadata readable, total under Telegram's cap."""
     ru = lang == "ru"
@@ -100,11 +102,13 @@ def render(
     }
     metadata.append(f"🏷 {environment.get(env, environment['unknown'])}")
     if requester_name:
-        safe = escaped_clip(requester_name, 180)
-        mention = (
-            f'<a href="tg://user?id={requester_tg_id}">{safe}</a>' if requester_tg_id else safe
+        linked_name = mention(
+            html.unescape(escaped_clip(requester_name, 180)),
+            requester_tg_id,
+            glpi_id=requester_glpi_id,
+            ticket_url=url,
         )
-        metadata.append(f"👤 {mention}")
+        metadata.append(f"👤 {linked_name}")
     if assignee:
         metadata.append(f"🙋 {escaped_clip(assignee, 150)}")
     if attachments_count:

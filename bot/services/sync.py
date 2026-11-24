@@ -24,6 +24,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from weakref import WeakValueDictionary
 
 from aiogram import Bot
 
@@ -79,13 +80,17 @@ class SyncService:
         self._front_base = front_base
         self._recent_page = recent_page
         self._now = now_provider or schedule.now
-        self._cards = cards or CardService(repo, front_base=front_base)
+        self._cards = cards or CardService(repo, front_base=front_base, client=client)
         self._unassigned_after = unassigned_remind_hours * 3600
         self._remind_interval = remind_interval_hours * 3600
         self._approval_remind = approval_remind_hours * 3600
         self._claude_approvals = claude_approvals
         self._tech_approvals = tech_approvals
         self._solution_remind = solution_remind_minutes * 60
+        # Retain known Telegram receipts if the following SQLite registration
+        # fails. Retrying registration must not send a second group message.
+        self._pending_card_registrations: dict[int, dict] = {}
+        self._card_send_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
     def _ticket_url(self, ticket_id: int) -> str | None:
         if not self._front_base:
@@ -209,13 +214,29 @@ class SyncService:
             log.warning("sync_new_tickets_page_full count=%s", len(fresh))
         working = self._schedule.is_working(self._now())
         for ticket in fresh:
+            # Persist intent before sending or advancing the discovery cursor.
+            kind = (
+                "urgent_retry"
+                if ticket.urgency >= URGENCY_URGENT
+                else "card_retry"
+                if working
+                else "new"
+            )
+            await self._repo.enqueue_deferred(kind, ticket.id, int(time.time()))
             # Only the dedicated urgent (prod) level breaks through quiet hours;
             # ordinary urgency — including HIGH — waits until the next work day.
             if working or ticket.urgency >= URGENCY_URGENT:
-                await self._send_new_card(ticket)
+                try:
+                    sent = await self._send_new_card(ticket)
+                except Exception as exc:
+                    log.warning(
+                        "sync_card_retry id=%s error_type=%s", ticket.id, type(exc).__name__
+                    )
+                    sent = False
+                if sent:
+                    await self._repo.delete_deferred_ticket(kind, ticket.id)
             else:
                 # Off-hours, non-urgent: hold until the next work day.
-                await self._repo.enqueue_deferred("new", ticket.id, int(time.time()))
                 log.info("sync_deferred_new id=%s urgency=%s", ticket.id, ticket.urgency)
         await self._repo.set_cursor(_CURSOR_LAST_TICKET, max(t.id for t in fresh))
 
@@ -223,8 +244,20 @@ class SyncService:
     _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
     async def _send_new_card(self, ticket) -> bool:
+        async with self._card_send_locks.setdefault(ticket.id, asyncio.Lock()):
+            return await self._send_new_card_once(ticket)
+
+    async def _send_new_card_once(self, ticket) -> bool:
         if self._tech_chat is None:
             return True  # nowhere to send is not a delivery failure
+        if await self._repo.get_card(ticket.id) is not None:
+            self._pending_card_registrations.pop(ticket.id, None)
+            return True
+        receipt = self._pending_card_registrations.get(ticket.id)
+        if receipt is not None:
+            await self._cards.register(**receipt)
+            self._pending_card_registrations.pop(ticket.id, None)
+            return True
         async with self._repo.ticket_action_lock(ticket.id):
             intake = await self._repo.get_ticket_intake(ticket.id)
             if (
@@ -238,7 +271,7 @@ class SyncService:
                     return True
                 ticket = current
                 intake = await refresh_intake_snapshot(self._repo, ticket)
-        name, tg_id = await self._requester_card_info(ticket.id)
+        name, tg_id, glpi_id = await self._requester_card_info(ticket.id)
         docs = await self._ticket_documents(ticket.id)
         workflow = await self._repo.get_claude_approval(ticket.id)
         approval_label = None
@@ -254,6 +287,7 @@ class SyncService:
             self._ticket_url(ticket.id),
             requester_name=name,
             requester_tg_id=tg_id,
+            requester_glpi_id=glpi_id,
             attachments_count=len(docs),
             approval_label=approval_label,
             intake=intake,
@@ -262,16 +296,20 @@ class SyncService:
         if sent:
             # Register the living card NOW — the moment of the real send — so
             # deferred (quiet-hours) cards get their message_id in the morning.
-            await self._cards.register(
-                ticket,
+            receipt = dict(
+                ticket=ticket,
                 chat_id=self._tech_chat,
                 message_id=msg.message_id,
                 requester_name=name,
                 requester_tg_id=tg_id,
+                requester_glpi_id=glpi_id,
                 attachments_count=len(docs),
                 now=int(time.time()),
                 bot=self._bot,
             )
+            self._pending_card_registrations[ticket.id] = receipt
+            await self._cards.register(**receipt)
+            self._pending_card_registrations.pop(ticket.id, None)
         if sent and docs:
             # Images ride along under the card; everything else (pdf, oversized)
             # is covered by the 📎 line + the GLPI link. Sent in the same pass as
@@ -341,53 +379,72 @@ class SyncService:
 
     # -- deferred (quiet-hours) flush -------------------------------------
     async def _flush_deferred_if_working(self) -> None:
-        """Deliver the overnight backlog once work resumes.
+        """Deliver due quiet-hours items and failed sends; urgent retries run at night.
 
         A queue row is deleted only after its notification was actually sent
         (or became moot) — a Telegram flood limit / outage keeps the rest
         queued for the next tick instead of silently dropping cards. The
-        header is sent lazily, before the first real card, so a total outage
-        doesn't spam a lone header every 45 s.
+        Only actual quiet-hours items get a batch header; daytime failures do not.
         """
-        if self._tech_chat is None or not self._schedule.is_working(self._now()):
+        if self._tech_chat is None:
             return
+        working = self._schedule.is_working(self._now())
         queued = await self._repo.list_deferred()
+        if not working:
+            queued = [row for row in queued if row[1] == "urgent_retry"]
         if not queued:
             return
         header_sent = False
 
         async def _ensure_header() -> bool:
             nonlocal header_sent
+            if not working:
+                return True  # Urgent retries bypass quiet hours without a batch header.
             if not header_sent:
                 header_sent = await notify.send_text(
-                    self._bot, self._tech_chat, texts.deferred_batch_header(len(queued))
+                    self._bot,
+                    self._tech_chat,
+                    texts.deferred_batch_header(
+                        sum(kind in ("new", "remind") for _, kind, _ in queued)
+                    ),
                 )
             return header_sent
 
         for row_id, kind, ticket_id in queued:
             try:
                 delivered = await self._flush_one(kind, ticket_id, _ensure_header)
-            except GlpiError as exc:
+            except Exception as exc:
                 # GLPI hiccup: keep the row, retry next tick.
-                log.warning("sync_flush_failed id=%s kind=%s error=%s", ticket_id, kind, exc)
+                log.warning(
+                    "sync_flush_failed id=%s kind=%s error_type=%s",
+                    ticket_id,
+                    kind,
+                    type(exc).__name__,
+                )
                 continue
             if delivered:
                 await self._repo.delete_deferred(row_id)
-            else:
+            elif delivered is False:
                 # Telegram send failed -> keep the whole tail for the next tick
                 # (sending further cards now would only hit the same limit).
                 break
 
-    async def _flush_one(self, kind: str, ticket_id: int, ensure_header) -> bool:
+    async def _flush_one(self, kind: str, ticket_id: int, ensure_header) -> bool | None:
         """Deliver one queued item; True when it may leave the queue."""
+        if kind != "remind" and await self._repo.get_card(ticket_id) is not None:
+            return True
         ticket = await self._client.get_ticket(ticket_id)
         if ticket is None:  # deleted in GLPI meanwhile -> moot
             return True
+        if not self._schedule.is_working(self._now()) and (
+            kind != "urgent_retry" or ticket.urgency < URGENCY_URGENT
+        ):
+            return None  # Keep ordinary work queued without blocking a later urgent retry.
         if kind == "remind" and ticket.status != TICKET_STATUS_NEW:
             # Taken/solved overnight -> the nudge is moot, drop it silently.
             log.info("sync_flush_remind_skipped id=%s status=%s", ticket_id, ticket.status)
             return True
-        if not await ensure_header():
+        if kind in ("new", "remind") and not await ensure_header():
             return False
         if kind == "remind":
             return await notify.notify_reminder(
@@ -465,22 +522,27 @@ class SyncService:
         cache[user_id] = name
         return name
 
-    async def _requester_card_info(self, ticket_id: int) -> tuple[str | None, int | None]:
+    async def _requester_card_info(
+        self, ticket_id: int
+    ) -> tuple[str | None, int | None, int | None]:
         """Requester name for the card, plus their Telegram id if linked in the bot.
 
-        The requester is a Ticket_User relation (not a ticket column), so it needs
-        its own lookup; failure just omits the author rather than losing the card.
+        The requester is a Ticket_User relation (not a ticket column). A failed
+        live lookup keeps delivery queued rather than displaying a stale owner.
         """
         try:
             requester = await self._client.get_ticket_requester(ticket_id)
         except GlpiError as exc:
-            log.warning("sync_requester_lookup_failed id=%s error=%s", ticket_id, exc)
-            return None, None
+            log.warning(
+                "sync_requester_lookup_failed id=%s error_type=%s", ticket_id, type(exc).__name__
+            )
+            # Ownership may have changed in GLPI; never substitute a stale mapping.
+            raise
         if requester is None:
-            return None, None
+            return None, None, None
         glpi_id, name = requester
         link = await self._repo.get_by_glpi(glpi_id)
-        return name, (link.tg_id if link else None)
+        return name or f"GLPI #{glpi_id}", (link.tg_id if link else None), glpi_id
 
     # -- 2 & 3. tracked tickets: status + followups -----------------------
     # -- unassigned-tickets reminder (working hours only) ------------------

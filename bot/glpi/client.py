@@ -537,9 +537,22 @@ class GlpiClient:
             data = resp.json()
             # GLPI may return a single object or a list of {id, message}.
             if isinstance(data, list):
+                if len(data) != 1:
+                    raise ValueError("Expected one created ticket")
                 data = data[0]
-            ticket_id = int(data["id"])
-            if ticket_id <= 0:
+            raw_id = data["id"]
+            if type(raw_id) is int:
+                ticket_id = raw_id
+            elif (
+                isinstance(raw_id, str)
+                and raw_id.isascii()
+                and raw_id.isdecimal()
+                and len(raw_id) <= 19
+            ):
+                ticket_id = int(raw_id)
+            else:
+                raise ValueError("Expected integer ticket id")
+            if not 0 < ticket_id <= 2**63 - 1:
                 raise ValueError("Invalid ticket id")
             return ticket_id
         except (IndexError, KeyError, TypeError, ValueError) as exc:
@@ -983,6 +996,30 @@ class GlpiClient:
         )
         return _extract_id(resp)
 
+    async def get_validation_decision(self, validation_id: int) -> dict:
+        """Read exact validation evidence for recovery of an ambiguous decision PUT."""
+        response = await self._request("GET", f"/TicketValidation/{validation_id}", idempotent=True)
+        try:
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError
+            ident = _workload_integer(data["id"], minimum=1)
+            if ident != validation_id:
+                raise ValueError
+            comment = data.get("comment_validation")
+            if comment is None:
+                comment = ""
+            if not isinstance(comment, str):
+                raise ValueError
+            return {
+                "id": ident,
+                "tickets_id": _workload_integer(data["tickets_id"], minimum=1),
+                "status": _workload_integer(data["status"], minimum=1, maximum=4),
+                "comment_validation": comment,
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GlpiHTTPError("Invalid validation decision response", response=response) from exc
+
     async def answer_validation(self, validation_id: int, *, accepted: bool, comment: str) -> None:
         """Answer a validation (the bot's own — see get_session_user_id)."""
         await self._request(
@@ -1284,6 +1321,41 @@ class GlpiClient:
             if uid:
                 names.append(await self._user_name(uid, cache))
         return names
+
+    async def is_ticket_requester(self, ticket_id: int, user_id: int) -> bool:
+        """Check current GLPI requester relationships, including co-requesters."""
+        if ticket_id <= 0 or user_id <= 0:
+            return False
+        offset = 0
+        while True:
+            response = await self._request(
+                "GET",
+                f"/Ticket/{ticket_id}/Ticket_User",
+                params={"range": f"{offset}-{offset + 99}"},
+                idempotent=True,
+            )
+            try:
+                links = response.json()
+            except ValueError as exc:
+                raise GlpiHTTPError("Invalid ticket user list", response=response) from exc
+            if not isinstance(links, list):
+                raise GlpiHTTPError("Invalid ticket user list", response=response)
+            for link in links:
+                if (
+                    isinstance(link, dict)
+                    and str(link.get("type")) == str(TICKET_USER_REQUESTER)
+                    and str(link.get("users_id")) == str(user_id)
+                ):
+                    return True
+            if response.status_code != 206 or not links:
+                return False
+            header = response.headers.get("Content-Range", "")
+            match = re.fullmatch(r"(?:items )?(\d+)-(\d+)/(\d+)", header)
+            if not match or int(match[1]) != offset or int(match[2]) + 1 != offset + len(links):
+                raise GlpiHTTPError("Incomplete ticket user list", response=response)
+            offset += len(links)
+            if offset >= int(match[3]):
+                return False
 
     async def get_ticket_requester(self, ticket_id: int) -> tuple[int, str] | None:
         """The ticket's requester as ``(glpi_users_id, display_name)``, or None.

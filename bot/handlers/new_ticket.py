@@ -58,6 +58,7 @@ from ..texts import intake as intake_texts
 log = logging.getLogger(__name__)
 
 MAX_TITLE_LEN = 250
+_POST_CREATE_SEND_TIMEOUT = 5.0
 
 # Ordinary levels (descending), shown below the exceptional urgent (prod) level.
 _URGENCY_CHOICES = (
@@ -617,6 +618,59 @@ def build_new_ticket_router(
             )
             await _create_ticket_once(message, state, link, bot)
 
+    async def _send_post_creation_notice(
+        message: Message,
+        text: str,
+        *,
+        ticket_id: int | None,
+        reply_markup: ReplyKeyboardMarkup | None = None,
+        attempts: int = 1,
+    ) -> bool:
+        """Retry only a Telegram notice; the GLPI write must never be repeated here."""
+        for attempt in range(1, attempts + 1):
+            try:
+                async with asyncio.timeout(_POST_CREATE_SEND_TIMEOUT):
+                    await message.answer(text, reply_markup=reply_markup)
+                return True
+            except Exception as exc:  # noqa: BLE001 - delivery cannot undo a GLPI POST
+                log.warning(
+                    "new_ticket_notice_failed ticket_id=%s attempt=%s error_type=%s",
+                    ticket_id,
+                    attempt,
+                    type(exc).__name__,
+                )
+        return False
+
+    async def _deliver_creation_result(
+        message: Message,
+        bot: Bot,
+        text: str,
+        *,
+        ticket_id: int | None,
+        reply_markup: ReplyKeyboardMarkup | None = None,
+    ) -> bool:
+        delivered = await _send_post_creation_notice(
+            message, text, ticket_id=ticket_id, reply_markup=reply_markup, attempts=2
+        )
+        if delivered:
+            return True
+        # A callback originated from our attachment prompt. Editing that prompt
+        # can still work when new messages are unavailable. User-authored text
+        # submissions cannot be edited by the bot.
+        if message.from_user is not None and message.from_user.id == bot.id:
+            try:
+                async with asyncio.timeout(_POST_CREATE_SEND_TIMEOUT):
+                    await message.edit_text(text, reply_markup=None)
+                return True
+            except Exception as exc:  # noqa: BLE001 - best effort, no generic retry advice
+                log.warning(
+                    "new_ticket_result_edit_failed ticket_id=%s error_type=%s",
+                    ticket_id,
+                    type(exc).__name__,
+                )
+        log.warning("new_ticket_result_undelivered ticket_id=%s", ticket_id)
+        return False
+
     async def _create_ticket_once(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
@@ -661,7 +715,9 @@ def build_new_ticket_router(
             ):
                 # A timeout/5xx/malformed 201 can hide a successful POST. Never
                 # retry it automatically or claim that no ticket was created.
-                await message.answer(intake_texts.creation_uncertain())
+                await _deliver_creation_result(
+                    message, bot, intake_texts.creation_uncertain(), ticket_id=None
+                )
             else:
                 await message.answer(texts.GLPI_ERROR)
             return
@@ -697,19 +753,32 @@ def build_new_ticket_router(
         files = data.get("attachments", [])
         uploaded, rejected = await _upload_attachments(bot, ticket_id, files)
         await state.clear()
-        await message.answer(
+        confirmed = await _deliver_creation_result(
+            message,
+            bot,
             texts.ticket_created(ticket_id, _ticket_url(ticket_id)),
+            ticket_id=ticket_id,
             reply_markup=main_menu_keyboard(is_tech=link.is_tech),
         )
+        if not confirmed:
+            # The ticket and tracking already exist. Do not obscure a missing
+            # confirmation with optional messages or encourage another POST.
+            return
         if rejected:
             # Forbidden type: the user can act on this (rename / paste as text).
-            await message.answer(texts.attachments_rejected(rejected))
+            await _send_post_creation_notice(
+                message, texts.attachments_rejected(rejected), ticket_id=ticket_id
+            )
         if files and uploaded + len(rejected) < len(files):
-            await message.answer(texts.attachments_partial_failure(uploaded, len(files)))
+            await _send_post_creation_notice(
+                message,
+                texts.attachments_partial_failure(uploaded, len(files)),
+                ticket_id=ticket_id,
+            )
         # Off-hours: tell the requester when support will actually see it.
         notice = _quiet_notice(data["urgency"])
         if notice:
-            await message.answer(notice)
+            await _send_post_creation_notice(message, notice, ticket_id=ticket_id)
         if workload is not None:
             # The ticket number is already delivered. An optional queue lookup
             # or Telegram notice must never turn success into a creation error.

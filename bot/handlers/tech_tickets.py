@@ -236,8 +236,9 @@ def build_tech_tickets_router(
             followups=lines,
             url=_ticket_url(ticket_id),
             urgency=ticket.urgency or None,
-            requester=req[1] if req else None,
+            requester=(req[1] or f"GLPI #{req[0]}") if req else None,
             requester_tg_id=req_tg,
+            requester_glpi_id=req[0] if req else None,
             intake=intake,
         )
         return text, ticket.status

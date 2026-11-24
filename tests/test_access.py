@@ -429,6 +429,12 @@ async def test_glpi_failure_keeps_rejection_open_for_retry(env):
     await _run_dialog_to_sent(dp, bot)
     await dp.feed_update(bot, _cb(bot, 10, LEAD_ID, f"ap:no:{TICKET}"))
     client.answer_validation.side_effect = [GlpiError("temporary failure"), None]
+    client.get_validation_decision.return_value = {
+        "id": 5,
+        "tickets_id": TICKET,
+        "status": 2,
+        "comment_validation": "",
+    }
     bot.sent.clear()
 
     await dp.feed_update(bot, _dm(bot, 11, LEAD_ID, "Нет бюджета", reply_to=_reply_prompt(bot)))

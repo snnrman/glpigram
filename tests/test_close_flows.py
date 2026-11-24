@@ -71,6 +71,7 @@ def _client() -> AsyncMock:
     client.add_followup.return_value = 7
     client.get_ticket_assignees.return_value = []
     client.get_ticket.return_value = Ticket(TICKET, "t", "c", 5, 3)
+    client.is_ticket_requester.return_value = True
     client.get_ticket_requester.return_value = (8, "Заявитель")
     return client
 

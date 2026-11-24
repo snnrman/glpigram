@@ -67,6 +67,7 @@ class FakeBot:
 
 def _client() -> AsyncMock:
     client = AsyncMock()
+    client.get_ticket_requester.return_value = (8, "Заявитель")
     client.get_ticket_assignees.return_value = ["Техник"]
     client.get_ticket.return_value = Ticket(
         id=TICKET, name="Принтер", content="c", status=2, urgency=4

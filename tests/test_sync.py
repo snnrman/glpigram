@@ -206,6 +206,17 @@ async def test_new_ticket_card_requester_not_linked_no_mention(repo):
     assert "tg://user" not in text  # unknown requester -> plain name, no mention
 
 
+async def test_card_for_glpi_requester_without_telegram_links_to_their_glpi_profile(repo):
+    ticket = _ticket(2)
+    client = FakeClient(recent=[ticket], requesters={ticket.id: (42, "Пётр")})
+    bot = FakeBot()
+    await _service(bot, client, repo, front_base="https://glpi.local").tick()
+    assert any(
+        '<a href="https://glpi.local/front/user.form.php?id=42">Пётр</a>' in message
+        for message in _tech(bot)
+    )
+
+
 # --- 2. status changes -> requester -----------------------------------------
 async def test_status_change_notifies_requester_and_closes(repo):
     bot = FakeBot()
@@ -518,6 +529,23 @@ class DownBot:
 
     async def send_message(self, chat_id, text, **kwargs):
         raise RuntimeError("tg down")
+
+
+async def test_review_card_delivered_after_working_hours_send_temporarily_fails(repo):
+    ticket = _ticket(2)
+    ticket.itilcategories_id = 16
+    repo.intake_category_ids = {"accounts": 16}
+    client = FakeClient(recent=[ticket], tickets={ticket.id: ticket})
+    await repo.set_cursor("last_ticket_id", 1)
+    await _service(DownBot(), client, repo, now=WORKING).tick()
+    assert await repo.get_card(ticket.id) is None
+
+    bot = FakeBot()
+    service = _service(bot, client, repo, now=WORKING)
+    await service.tick()
+    await service.tick()
+    assert sum("Заявка №2" in message for message in _tech(bot)) == 1
+    assert await repo.get_card(ticket.id) is not None
 
 
 async def test_flush_keeps_queue_when_telegram_down(repo):

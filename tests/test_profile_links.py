@@ -268,3 +268,111 @@ async def test_cancellation_propagates(harness):
     with pytest.raises(asyncio.CancelledError):
         await bot.send_message(-100, MENTION)
     assert session.messages == []
+
+
+@pytest.mark.parametrize("module", [ru, en])
+@pytest.mark.parametrize("view", ["card", "detail"])
+@pytest.mark.parametrize("intake", [None, {"category": "accounts", "review_state": "pending"}])
+async def test_unlinked_requester_has_glpi_profile_without_preview(harness, module, view, intake):
+    bot, session, _, _, _ = harness
+    common = {
+        "ticket_id": 7,
+        "url": "https://glpi.local/helpdesk/front/ticket.form.php?id=7",
+        "title": "Request",
+        "status": 1,
+        "requester_glpi_id": 88,
+        "intake": intake,
+    }
+    if view == "card":
+        rendered = module.notify_new_ticket(**common, requester_name="New <Owner>")
+    else:
+        rendered = module.ticket_detail(
+            **common, requester="New <Owner>", assignee=None, followups=[]
+        )
+    await bot.send_message(-100, rendered)
+    await bot.edit_message_text(rendered, chat_id=-100, message_id=123)
+
+    assert not session.lookups
+    for method in session.messages:
+        assert (
+            '<a href="https://glpi.local/helpdesk/front/user.form.php?id=88">New &lt;Owner&gt;</a>'
+        ) in method.text
+        assert method.link_preview_options.is_disabled is True
+
+
+async def test_unlinked_card_profile_survives_storage_and_edits(harness):
+    bot, session, _, repo, _ = harness
+    cards = CardService(repo, front_base="https://glpi.local")
+    await cards.register(
+        Ticket(id=7, name="Request", content="Description", status=1, urgency=3),
+        chat_id=-100,
+        message_id=123,
+        requester_name="New Owner",
+        requester_tg_id=None,
+        requester_glpi_id=88,
+        attachments_count=0,
+        now=0,
+    )
+    await repo.close()
+    await repo.connect()
+    await CardService(repo, front_base="https://glpi.local").record_event(bot, 7, "Taken", status=2)
+    assert (await repo.get_card(7)).requester_glpi_id == 88
+    assert "front/user.form.php?id=88" in session.messages[-1].text
+    assert session.messages[-1].link_preview_options.is_disabled is True
+
+
+async def test_old_card_lazily_repairs_missing_glpi_id_from_live_requester(harness):
+    bot, session, _, repo, _ = harness
+    client = SimpleNamespace(get_ticket_requester=AsyncMock(return_value=(88, "New Owner")))
+    cards = CardService(repo, front_base="https://glpi.local", client=client)
+    await cards.register(
+        Ticket(id=7, name="Request", content="Description", status=1, urgency=3),
+        chat_id=-100,
+        message_id=123,
+        requester_name="Old Owner",
+        requester_tg_id=TG_ID,
+        attachments_count=0,
+        now=0,
+    )
+
+    await cards.record_event(bot, 7, "Taken", status=2)
+    await cards.record_event(bot, 7, "Updated")
+
+    client.get_ticket_requester.assert_awaited_once_with(7)
+    card = await repo.get_card(7)
+    assert card.requester_glpi_id == 88 and card.requester_tg_id is None
+    assert card.requester_name == "New Owner"
+    assert all("front/user.form.php?id=88" in method.text for method in session.messages)
+    assert all(method.link_preview_options.is_disabled for method in session.messages)
+    assert not session.lookups
+
+
+@pytest.mark.parametrize("lookup_error", [None, TimeoutError()])
+async def test_old_card_updates_history_while_waiting_for_live_requester(harness, lookup_error):
+    bot, session, _, repo, _ = harness
+    client = SimpleNamespace(
+        get_ticket_requester=AsyncMock(return_value=None, side_effect=lookup_error)
+    )
+    cards = CardService(repo, front_base="https://glpi.local", client=client)
+    await cards.register(
+        Ticket(id=7, name="Request", content="Description", status=1, urgency=3),
+        chat_id=-100,
+        message_id=123,
+        requester_name="Old Owner",
+        requester_tg_id=TG_ID,
+        attachments_count=0,
+        now=0,
+    )
+    await cards.record_event(bot, 7, "Taken", status=2)
+    assert "Taken" in session.messages[-1].text
+    assert "Old Owner" not in session.messages[-1].text
+    assert "front/user.form.php" not in session.messages[-1].text
+    assert not session.lookups
+    assert (await repo.get_card(7)).requester_glpi_id is None
+    client.get_ticket_requester.side_effect = None
+    client.get_ticket_requester.return_value = (88, "New Owner")
+
+    await cards.record_event(bot, 7, "Updated")
+
+    assert "front/user.form.php?id=88" in session.messages[-1].text
+    assert "Taken" in session.messages[-1].text and "Updated" in session.messages[-1].text

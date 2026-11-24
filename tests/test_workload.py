@@ -406,6 +406,41 @@ async def test_concurrent_refreshes_share_one_glpi_request(env):
     assert env.repo.get_workload_waiting_ticket_ids.await_count == 2
 
 
+async def test_cancelled_refresh_does_not_strand_another_user_or_reuse_expired_cache(env):
+    env.settings.workload_notice_all_users = True
+    env.settings.workload_notice_pilot_tg_ids = set()
+    svc = service(env)
+    assert (await notice(svc)).startswith("🟡")
+    env.clock.now += timedelta(seconds=31)
+    env.client.list_workload_tickets.reset_mock()
+    env.repo.save_workload_observation.reset_mock()
+    started = asyncio.Event()
+
+    async def fetch(**kwargs):
+        if not started.is_set():
+            started.set()
+            await asyncio.Event().wait()
+        return [row(i) for i in range(1, 7)]
+
+    env.client.list_workload_tickets.side_effect = fetch
+    cancelled = asyncio.create_task(notice(svc))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    other_user = asyncio.create_task(notice(svc, ticket_id=CURRENT + 1, requester_tg_id=123))
+    await asyncio.sleep(0)
+    cancelled.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    assert (await asyncio.wait_for(other_user, timeout=1)).startswith("🟠")
+
+    assert env.client.list_workload_tickets.await_count == 2
+    env.repo.save_workload_observation.assert_awaited_once()
+    saved = env.repo.save_workload_observation.await_args.args
+    assert saved[:2] == (CURRENT + 1, 123)
+    assert saved[3]["queue_count"] == 6
+    assert saved[3]["cache_hit"] is False
+
+
 @pytest.mark.parametrize("failing_step", ["api", "local_approval"])
 async def test_total_timeout_is_bounded_and_audited_without_a_notice(env, failing_step):
     env.settings.workload_notice_timeout = 0.1

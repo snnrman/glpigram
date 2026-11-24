@@ -220,6 +220,16 @@ ticket text or staff names. `notice_prepared` records the calculation, not proof
 of Telegram delivery. Disabling only `WORKLOAD_NOTICE_ENABLED` stops the notices;
 no business data or SQLite restoration is needed.
 
+Group review cards enter the SQLite notification queue before the discovery cursor
+advances. Failed immediate sends can resume after restart. A saved Telegram card
+receipt prevents re-sending an already registered card. The requester link uses
+the GLPI user ID when the requester has no Telegram binding.
+
+For ordinary lead refusals, the bot records the ticket, validation, lead and
+decision intent before writing to GLPI. Recovery checks the validation identity
+and its decision marker before closing the ticket. Keep the current SQLite
+database during code rollback so outstanding notification and refusal work survives.
+
 ### Existing workflows
 
 1. **Core client + /new dialog.** FSM: category (inline buttons from GLPI ITILCategory list,

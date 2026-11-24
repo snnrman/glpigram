@@ -612,6 +612,41 @@ async def test_get_ticket_assignees_only_type_2(mock):
     await client.close()
 
 
+async def test_live_requester_check_respects_roles_and_co_requesters(mock):
+    await _init_route(mock)
+    path = f"{BASE}/Ticket/23/Ticket_User"
+    mock.get(path, params={"range": "0-99"}).mock(
+        return_value=httpx.Response(
+            206,
+            headers={"Content-Range": "0-1/3"},
+            json=[{"users_id": 42, "type": 1}, {"users_id": 99, "type": 2}],
+        )
+    )
+    mock.get(path, params={"range": "2-101"}).mock(
+        return_value=httpx.Response(200, json=[{"users_id": "43", "type": "1"}])
+    )
+    client = make_client()
+    try:
+        assert await client.is_ticket_requester(23, 42)
+        assert await client.is_ticket_requester(23, 43)
+        assert not await client.is_ticket_requester(23, 99)
+    finally:
+        await client.close()
+
+
+async def test_requester_check_surfaces_unreadable_glpi_response(mock):
+    await _init_route(mock)
+    mock.get(f"{BASE}/Ticket/23/Ticket_User").mock(
+        return_value=httpx.Response(200, content=b"broken response")
+    )
+    client = make_client()
+    try:
+        with pytest.raises(GlpiHTTPError):
+            await client.is_ticket_requester(23, 42)
+    finally:
+        await client.close()
+
+
 async def test_get_ticket_requester_type_1(mock):
     await _init_route(mock)
     mock.get(f"{BASE}/Ticket/23/Ticket_User").mock(

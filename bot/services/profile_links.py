@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 _MENTION = re.compile(r'href="tg://user\?id=([1-9][0-9]*)"')
 _USERNAME = re.compile(r"[A-Za-z0-9_]+\Z")
+_GLPI_PROFILE = re.compile(r'href="https?://[^"<>]+/front/user\.form\.php\?id=[1-9][0-9]*"')
 
 
 class ProfileLinksMiddleware(BaseRequestMiddleware):
@@ -105,7 +106,7 @@ class ProfileLinksMiddleware(BaseRequestMiddleware):
             if mode == "HTML":
                 ids = dict.fromkeys(int(match[1]) for match in _MENTION.finditer(method.text))
                 urls = {tg_id: await self.profile_url(bot, tg_id) for tg_id in ids}
-                if urls:
+                if urls or _GLPI_PROFILE.search(method.text):
                     text = _MENTION.sub(
                         lambda match: f'href="{html.escape(urls[int(match[1])], quote=True)}"',
                         method.text,

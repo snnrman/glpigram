@@ -279,3 +279,16 @@ async def test_detail_survives_requester_lookup_failure(env):
     text, _kb = bot.edits[-1]
     assert "Принтер" in text  # detail still renders
     assert "Заявитель:" not in text  # just without the requester row
+
+
+async def test_detail_links_the_live_unlinked_glpi_requester(env):
+    dp, client = env
+    client.get_ticket_requester.return_value = (88, "New <Owner>")
+    bot = FakeBot()
+
+    await dp.feed_update(bot, _dm_cb(bot, 1, TECH_ID, "tt:open:5"))
+
+    text, _ = bot.edits[-1]
+    assert 'href="http://127.0.0.1/front/user.form.php?id=88"' in text
+    assert "New &lt;Owner&gt;" in text
+    assert f"tg://user?id={USER_ID}" not in text

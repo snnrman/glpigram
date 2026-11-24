@@ -114,9 +114,9 @@ def build_my_tickets_router(
     cards: CardService | None = None,
 ) -> Router:
     router = Router(name="my_tickets")
-    # Dialogs and menu buttons are private-chat only: in groups the bot
-    # must not react to free text (callbacks are not affected).
+    # Requester details and actions belong in the requester's private chat.
     router.message.filter(F.chat.type == "private")
+    router.callback_query.filter(F.message.chat.type == "private")
 
     async def solution_lock(handler, event, data):
         ticket_id = None
@@ -124,7 +124,12 @@ def build_my_tickets_router(
             parts = event.data.split(":")
             if len(parts) >= 3 and parts[2].isdigit():
                 ticket_id = int(parts[2])
-        if ticket_id is None and data.get("state") is not None:
+        # Opening a card takes its own lock. Only serialize submissions that
+        # actually act on the current close/return dialog.
+        submitting = isinstance(event, Message) or (
+            isinstance(event, CallbackQuery) and event.data == "mt:close_empty"
+        )
+        if ticket_id is None and submitting and data.get("state") is not None:
             current = await data["state"].get_state()
             values = await data["state"].get_data()
             if current == MyTickets.returning.state:
@@ -138,6 +143,26 @@ def build_my_tickets_router(
 
     router.callback_query.middleware(solution_lock)
     router.message.middleware(solution_lock)
+
+    async def requester_allowed(
+        event: CallbackQuery | Message,
+        ticket_id: int,
+        link: LinkedUser,
+        state: FSMContext | None = None,
+    ) -> bool:
+        try:
+            if await client.is_ticket_requester(ticket_id, link.glpi_users_id):
+                return True
+            error = texts.STALE_BUTTON
+            if state is not None:
+                await state.clear()
+        except GlpiError:
+            error = texts.GLPI_ACTION_ERROR
+        if isinstance(event, CallbackQuery):
+            await event.answer(error, show_alert=True)
+        else:
+            await event.answer(error)
+        return False
 
     def _ticket_url(ticket_id: int) -> str | None:
         if not ticket_front_base:
@@ -238,9 +263,11 @@ def build_my_tickets_router(
 
     # -- detail ------------------------------------------------------------
     @router.callback_query(F.data.startswith("mt:open:"))
-    async def on_open(cb: CallbackQuery) -> None:
-        await cb.answer()  # heavy N+1 rendering below; see on_back_to_list
+    async def on_open(cb: CallbackQuery, link: LinkedUser) -> None:
         ticket_id = int(cb.data.split(":")[2])
+        if not await requester_allowed(cb, ticket_id, link):
+            return
+        await cb.answer()
         try:
             text, closable, remindable = await _render_detail(ticket_id)
         except GlpiError as exc:
@@ -273,8 +300,10 @@ def build_my_tickets_router(
 
     # -- add comment -------------------------------------------------------
     @router.callback_query(F.data.startswith("mt:comment:"))
-    async def on_comment(cb: CallbackQuery, state: FSMContext) -> None:
+    async def on_comment(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
         ticket_id = int(cb.data.split(":")[2])
+        if not await requester_allowed(cb, ticket_id, link):
+            return
         await state.set_state(MyTickets.commenting)
         await state.update_data(ticket_id=ticket_id)
         await cb.message.answer(
@@ -306,6 +335,8 @@ def build_my_tickets_router(
         if tracked is None or tracked.requester_tg_id != message.from_user.id:
             await message.answer(texts.REPLY_NOT_YOUR_TICKET)
             return
+        if not await requester_allowed(message, ticket_id, link, state):
+            return
         content = f"{link.display_name}:\n{message.text.strip()}"
         await _finish_comment(message, state, bot, link, ticket_id, content=content)
 
@@ -314,6 +345,8 @@ def build_my_tickets_router(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
         data = await state.get_data()
+        if not await requester_allowed(message, data["ticket_id"], link, state):
+            return
         content = f"{link.display_name}:\n{message.text.strip()}"
         await _finish_comment(message, state, bot, link, data["ticket_id"], content=content)
 
@@ -333,6 +366,8 @@ def build_my_tickets_router(
         caption = (message.caption or "").strip() or texts.COMMENT_ATTACHMENT_PLACEHOLDER
         try:
             content = await attachments.download(bot, pending.file_id)
+            if not await requester_allowed(message, ticket_id, link, state):
+                return
             await client.attach_document_to_ticket(
                 ticket_id, pending.filename, content, mime=pending.mime
             )
@@ -413,8 +448,10 @@ def build_my_tickets_router(
 
     # -- close own ticket --------------------------------------------------
     @router.callback_query(F.data.startswith("mt:close:"))
-    async def on_close_start(cb: CallbackQuery, state: FSMContext) -> None:
+    async def on_close_start(cb: CallbackQuery, state: FSMContext, link: LinkedUser) -> None:
         ticket_id = int(cb.data.split(":")[2])
+        if not await requester_allowed(cb, ticket_id, link):
+            return
         await state.set_state(MyTickets.closing)
         await state.update_data(close_ticket_id=ticket_id)
         await cb.message.answer(texts.MYT_CLOSE_PROMPT, reply_markup=_close_prompt_keyboard())
@@ -470,6 +507,8 @@ def build_my_tickets_router(
         message: Message, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
         ticket_id = (await state.get_data())["close_ticket_id"]
+        if not await requester_allowed(message, ticket_id, link, state):
+            return
         if await _do_close(ticket_id, message.text.strip(), link, bot):
             await state.clear()
             await message.answer(texts.MYT_CLOSE_DONE)
@@ -481,6 +520,8 @@ def build_my_tickets_router(
         cb: CallbackQuery, state: FSMContext, link: LinkedUser, bot: Bot
     ) -> None:
         ticket_id = (await state.get_data())["close_ticket_id"]
+        if not await requester_allowed(cb, ticket_id, link, state):
+            return
         await cb.answer()
         if await _do_close(ticket_id, None, link, bot):
             await state.clear()
@@ -560,7 +601,7 @@ def build_my_tickets_router(
             await notify.send_text(bot, tech_group_chat_id, texts.reply_confirmed(ticket_id))
 
     @router.callback_query(F.data.startswith("rate:"))
-    async def on_rate(cb: CallbackQuery, bot: Bot) -> None:
+    async def on_rate(cb: CallbackQuery, bot: Bot, link: LinkedUser) -> None:
         _, tid, val = cb.data.split(":")
         ticket_id, rating = int(tid), int(val)
         if rating not in SATISFACTION_BY_RATE:
@@ -571,6 +612,8 @@ def build_my_tickets_router(
         tracked = await repo.get_tracked_ticket(ticket_id)
         if tracked is None or tracked.requester_tg_id != cb.from_user.id:
             await cb.answer(texts.RATE_STALE, show_alert=True)
+            return
+        if not await requester_allowed(cb, ticket_id, link):
             return
         await repo.set_rating(ticket_id, tg_id=cb.from_user.id, rating=rating, now=int(time.time()))
         # Swap the prompt line for the thank-you in place; the buttons go away.
@@ -666,11 +709,12 @@ def build_my_tickets_router(
 
     # -- remind about a ticket --------------------------------------------
     @router.callback_query(F.data.startswith("mt:remind:"))
-    async def on_remind(cb: CallbackQuery, bot: Bot) -> None:
+    async def on_remind(cb: CallbackQuery, bot: Bot, link: LinkedUser) -> None:
         ticket_id = int(cb.data.split(":")[2])
+        if not await requester_allowed(cb, ticket_id, link):
+            return
 
-        # Fast local checks first (SQLite / schedule), so their toasts are
-        # delivered before any slow GLPI round-trip can expire the callback.
+        # After checking ownership, decide cooldown before fetching full ticket details.
         now = int(time.time())
         cooldown = remind_cooldown_hours * 3600
         last = await repo.get_last_remind(ticket_id)
@@ -679,7 +723,7 @@ def build_my_tickets_router(
             await cb.answer(texts.myt_remind_cooldown(hours_left), show_alert=True)
             return
 
-        # Off-hours: defer without touching GLPI at all — the morning flush
+        # Off-hours: defer the status check — the morning flush
         # re-validates the status anyway. Cooldown counts from the tap.
         if schedule is not None and not schedule.is_working(schedule.now()):
             await repo.set_last_remind(ticket_id, now)
