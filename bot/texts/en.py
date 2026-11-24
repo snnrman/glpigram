@@ -56,6 +56,10 @@ def tech_approval_audit(tech: str, lead: str) -> str:
     return f"Approval requested by technician: {tech}. Approving lead: {lead} (via Telegram bot)."
 
 
+def intake_routine_history(tech: str) -> str:
+    return f"🛠 {html.escape(tech)}: Routine request"
+
+
 def tech_approval_history(tech: str, lead: str) -> str:
     return f"📨 Approval: {html.escape(lead)} · requested by {html.escape(tech)}"
 

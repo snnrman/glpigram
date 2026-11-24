@@ -117,7 +117,7 @@ def build_intake_review_router(client, repo, *, intake, cards=None):
                     await refresh(
                         bot,
                         tid,
-                        f"🛠 {html.escape(link.display_name)}: {texts.INTAKE_ROUTINE_BUTTON}",
+                        texts.intake_routine_history(link.display_name),
                     )
                 elif action == "category":
                     rows = [

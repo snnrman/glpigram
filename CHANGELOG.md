@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remove the duplicate emoji from routine technician review history.
+
 - Trashed GLPI tickets are treated as unavailable, so stale tracked rows cannot trigger requester reminders.
 
 - Shadow classification applies the approval policy to all external SaaS, including

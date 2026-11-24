@@ -60,6 +60,10 @@ def tech_approval_audit(tech: str, lead: str) -> str:
     )
 
 
+def intake_routine_history(tech: str) -> str:
+    return f"🛠 {html.escape(tech)}: Обычная заявка"
+
+
 def tech_approval_history(tech: str, lead: str) -> str:
     return f"📨 На согласование: {html.escape(lead)} · направил {html.escape(tech)}"
 

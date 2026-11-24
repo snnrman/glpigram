@@ -106,6 +106,7 @@ callbacks remain routed. There is no additional requester confirmation screen.
 One AI response supplies a short factual title, work category, environment and
 approval recommendation. Full original text remains GLPI content; the generated
 title is used in GLPI/lists. New Telegram cards show the description once.
+Review history uses its own localized formatter rather than emoji-bearing button labels.
 
 For a limited pilot, set `AI_INTAKE_PILOT_TG_IDS` to a JSON array of trusted numeric
 Telegram IDs and `AI_INTAKE_LEGACY_CATEGORY_IDS` to the existing category IDs.
