@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Explicit `WORKLOAD_NOTICE_ALL_USERS` scope for rolling queue notices out to all
+  authenticated new-form requesters, including newly linked employees. Pilot
+  allowlists and independent feature disabling remain available for rollback.
+
 - Optional personal-pilot queue notices after successful ticket creation: warn at
   three unassigned tickets. The bounded
   GLPI snapshot covers all intake channels in explicit entities, excludes the new

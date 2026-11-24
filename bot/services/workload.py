@@ -1,4 +1,4 @@
-"""A bounded, read-only view of the current support queue for an explicit pilot."""
+"""A bounded, read-only view of the support queue for an explicitly configured audience."""
 
 from __future__ import annotations
 
@@ -92,6 +92,7 @@ class WorkloadService:
         self._client = client
         self._repo = repo
         self._enabled = settings.workload_notice_enabled
+        self._all_users = settings.workload_notice_all_users
         self._pilot_ids = frozenset(settings.workload_notice_pilot_tg_ids)
         self._excluded_ids = frozenset(settings.workload_excluded_ticket_ids)
         self._entity_ids = frozenset(settings.workload_notice_entity_ids)
@@ -142,14 +143,15 @@ class WorkloadService:
     async def notice_for(self, *, ticket_id: int, requester_tg_id: int) -> str | None:
         """Return only a supported warning; any unavailable evidence suppresses it.
 
-        An empty allowlist enables nobody. The operation, including best-effort
-        audit, has one deadline. Cancellation from the caller always propagates.
+        An empty allowlist enables nobody unless all-users mode is explicitly
+        configured. The operation, including best-effort audit, has one deadline.
+        Cancellation from the caller always propagates.
         """
         if (
             not self._enabled
             or type(requester_tg_id) is not int
             or requester_tg_id <= 0
-            or requester_tg_id not in self._pilot_ids
+            or (not self._all_users and requester_tg_id not in self._pilot_ids)
         ):
             return None
         now = self._now()

@@ -172,12 +172,23 @@ tables so existing intake review buttons and records remain usable. Do not resto
 an old SQLite snapshot over newer tickets or decisions. Merely installing this
 code does not create GLPI categories, rewrite old tickets or turn on AI intake.
 
-### Optional queue notice pilot
+### Optional queue notices
 
-`WORKLOAD_NOTICE_ENABLED=false` by default. When enabled it requires a nonempty
-`WORKLOAD_NOTICE_PILOT_TG_IDS`; the dispatcher attaches it only to the new intake
-router and the service checks the authenticated requester again. An empty list
-never enables all users. Other employees keep their previous confirmations.
+`WORKLOAD_NOTICE_ENABLED=false` by default. When enabled it requires either
+`WORKLOAD_NOTICE_ALL_USERS=true` or a nonempty `WORKLOAD_NOTICE_PILOT_TG_IDS`.
+The explicit all-users flag defaults to false; an empty pilot list alone never
+enables all users. The dispatcher attaches notices only to the new intake router
+and the service checks the authenticated requester again. Global intake plus
+global notices includes employees linked after startup, without maintaining an ID
+list. For a full rollout set `AI_INTAKE_ENABLED=true`, `AI_INTAKE_PILOT_TG_IDS=[]`,
+`WORKLOAD_NOTICE_ENABLED=true` and `WORKLOAD_NOTICE_ALL_USERS=true`.
+After a global rollout, safe rollback disables `AI_INTAKE_ENABLED` and
+`WORKLOAD_NOTICE_ENABLED`, retaining the empty intake pilot list, category mappings
+and persisted review/approval data. This keeps recovery available for all reserved
+category tickets, including a successful GLPI creation whose local metadata write
+failed. Do not narrow intake recovery back to a pilot until those tickets have been
+reconciled. Workload scope alone can return to its pilot by setting
+`WORKLOAD_NOTICE_ALL_USERS=false` with a nonempty workload pilot list.
 
 After the real ticket number has been delivered, a bounded best-effort lookup may
 send one queue notice. Three to five other unassigned tickets produce the yellow

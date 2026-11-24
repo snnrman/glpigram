@@ -59,6 +59,7 @@ def classify(tickets, *, waiting=(), excluded=()):
 def env():
     settings = SimpleNamespace(
         workload_notice_enabled=True,
+        workload_notice_all_users=False,
         workload_notice_pilot_tg_ids={PILOT},
         workload_excluded_ticket_ids=set(),
         workload_notice_entity_ids={0},
@@ -225,6 +226,41 @@ async def test_pilot_eligibility_is_explicit_and_strict(env, enabled, pilots, re
     env.repo.save_workload_observation.assert_not_awaited()
 
 
+@pytest.mark.parametrize("pilots", [set(), {PILOT}])
+async def test_explicit_global_audience_includes_requesters_outside_pilot(env, pilots):
+    env.settings.workload_notice_all_users = True
+    env.settings.workload_notice_pilot_tg_ids = pilots
+
+    assert (await notice(service(env), requester_tg_id=123)).startswith("🟡")
+
+    env.client.list_workload_tickets.assert_awaited_once_with(entity_ids={0})
+    assert env.repo.save_workload_observation.await_args.args[1] == 123
+
+
+@pytest.mark.parametrize("requester", [0, -1, True, False, "123", 123.0, None])
+async def test_global_audience_still_rejects_invalid_requester_ids(env, requester):
+    env.settings.workload_notice_all_users = True
+    env.settings.workload_notice_pilot_tg_ids = set()
+
+    assert await notice(service(env), requester_tg_id=requester) is None
+
+    env.client.list_workload_tickets.assert_not_awaited()
+    env.repo.get_workload_waiting_ticket_ids.assert_not_awaited()
+    env.repo.save_workload_observation.assert_not_awaited()
+
+
+async def test_global_audience_does_not_override_disabled_feature(env):
+    env.settings.workload_notice_enabled = False
+    env.settings.workload_notice_all_users = True
+    env.settings.workload_notice_pilot_tg_ids = set()
+
+    assert await notice(service(env), requester_tg_id=123) is None
+
+    env.client.list_workload_tickets.assert_not_awaited()
+    env.repo.get_workload_waiting_ticket_ids.assert_not_awaited()
+    env.repo.save_workload_observation.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "moment",
     [
@@ -234,8 +270,10 @@ async def test_pilot_eligibility_is_explicit_and_strict(env, enabled, pilots, re
         datetime(2026, 11, 24, 16, tzinfo=UTC),
     ],
 )
-async def test_outside_working_hours_never_fetches_or_notifies(env, moment):
+@pytest.mark.parametrize("all_users", [False, True])
+async def test_outside_working_hours_never_fetches_or_notifies(env, moment, all_users):
     env.clock.now = moment
+    env.settings.workload_notice_all_users = all_users
 
     assert await notice(service(env)) is None
 

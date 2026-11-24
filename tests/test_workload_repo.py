@@ -216,6 +216,7 @@ def _settings(**overrides):
 def test_workload_defaults_are_disabled_and_explicitly_scoped():
     settings = _settings()
     assert settings.workload_notice_enabled is False
+    assert settings.workload_notice_all_users is False
     assert settings.workload_notice_pilot_tg_ids == set()
     assert settings.workload_notice_entity_ids == {0}
     assert settings.workload_excluded_ticket_ids == set()
@@ -223,11 +224,25 @@ def test_workload_defaults_are_disabled_and_explicitly_scoped():
     assert settings.workload_notice_cache_ttl == 30.0
 
 
-def test_enabling_workload_requires_its_own_nonempty_pilot_list():
+def test_enabling_workload_requires_its_own_explicit_audience():
     with pytest.raises(ValidationError, match="WORKLOAD_NOTICE_PILOT_TG_IDS"):
         _settings(workload_notice_enabled=True, ai_intake_pilot_tg_ids={990948})
     settings = _settings(workload_notice_enabled=True, workload_notice_pilot_tg_ids={990948})
     assert settings.workload_notice_enabled and not settings.ai_intake_enabled
+
+
+def test_explicit_global_workload_mode_accepts_an_empty_pilot_list():
+    settings = _settings(workload_notice_enabled=True, workload_notice_all_users=True)
+    assert settings.workload_notice_enabled
+    assert settings.workload_notice_all_users
+    assert settings.workload_notice_pilot_tg_ids == set()
+    assert not settings.ai_intake_enabled
+
+
+def test_selecting_global_audience_does_not_enable_workload_by_itself():
+    settings = _settings(workload_notice_all_users=True)
+    assert settings.workload_notice_all_users
+    assert not settings.workload_notice_enabled
 
 
 @pytest.mark.parametrize("field", ["workload_notice_pilot_tg_ids", "workload_excluded_ticket_ids"])
@@ -271,6 +286,7 @@ def test_workload_deadline_and_cache_boundaries_are_valid(timeout, cache_ttl):
 
 def test_workload_json_environment_configuration(monkeypatch):
     monkeypatch.setenv("WORKLOAD_NOTICE_ENABLED", "true")
+    monkeypatch.setenv("WORKLOAD_NOTICE_ALL_USERS", "false")
     monkeypatch.setenv("WORKLOAD_NOTICE_PILOT_TG_IDS", "[990948]")
     monkeypatch.setenv("WORKLOAD_EXCLUDED_TICKET_IDS", "[714,713]")
     monkeypatch.setenv("WORKLOAD_NOTICE_ENTITY_IDS", "[0,2]")
@@ -278,8 +294,21 @@ def test_workload_json_environment_configuration(monkeypatch):
     monkeypatch.setenv("WORKLOAD_NOTICE_CACHE_TTL", "0")
     settings = _settings()
     assert settings.workload_notice_enabled
+    assert not settings.workload_notice_all_users
     assert settings.workload_notice_pilot_tg_ids == {990948}
     assert settings.workload_excluded_ticket_ids == {713, 714}
     assert settings.workload_notice_entity_ids == {0, 2}
     assert settings.workload_notice_timeout == 2.5
     assert settings.workload_notice_cache_ttl == 0
+
+
+def test_workload_global_audience_can_be_selected_explicitly_in_environment(monkeypatch):
+    monkeypatch.setenv("WORKLOAD_NOTICE_ENABLED", "true")
+    monkeypatch.setenv("WORKLOAD_NOTICE_ALL_USERS", "true")
+    monkeypatch.setenv("WORKLOAD_NOTICE_PILOT_TG_IDS", "[]")
+
+    settings = _settings()
+
+    assert settings.workload_notice_enabled
+    assert settings.workload_notice_all_users
+    assert settings.workload_notice_pilot_tg_ids == set()

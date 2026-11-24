@@ -126,11 +126,15 @@ class Settings(BaseSettings):
         description="JSON mapping of all seven intake category keys to distinct GLPI IDs.",
     )
 
-    # Requester workload notice is an independent, explicitly scoped pilot.
+    # Requester workload notices need an explicit audience, independently of intake.
     workload_notice_enabled: bool = False
+    workload_notice_all_users: bool = Field(
+        default=False,
+        description="Explicitly allow workload notices for every authenticated requester.",
+    )
     workload_notice_pilot_tg_ids: set[StrictInt] = Field(
         default_factory=set,
-        description="JSON array of Telegram IDs; must be nonempty when workload notice is enabled.",
+        description="JSON array of Telegram IDs; required unless workload all-users mode is set.",
     )
     workload_excluded_ticket_ids: set[StrictInt] = Field(
         default_factory=set,
@@ -151,8 +155,15 @@ class Settings(BaseSettings):
         ):
             if any(value <= 0 for value in values):
                 raise ValueError(f"{name} must contain positive IDs")
-        if self.workload_notice_enabled and not self.workload_notice_pilot_tg_ids:
-            raise ValueError("Enabled workload notice requires WORKLOAD_NOTICE_PILOT_TG_IDS")
+        if (
+            self.workload_notice_enabled
+            and not self.workload_notice_all_users
+            and not self.workload_notice_pilot_tg_ids
+        ):
+            raise ValueError(
+                "Enabled workload notice requires WORKLOAD_NOTICE_PILOT_TG_IDS "
+                "or WORKLOAD_NOTICE_ALL_USERS=true"
+            )
         if not self.workload_notice_entity_ids or any(
             value < 0 for value in self.workload_notice_entity_ids
         ):
