@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Russian ticket form now asks for a detailed description and emphasizes the word “Подробно” in bold.
 - Workload notices now describe queue size only, without incident-related messages.
 
 - Pilot intake now asks how the issue affects work: can continue, disrupted, blocked,

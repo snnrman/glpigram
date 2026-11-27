@@ -29,7 +29,7 @@ def _choose(ru: str, en: str) -> str:
 
 def description_prompt() -> str:
     return _choose(
-        "Опиши проблему или что нужно сделать одним сообщением:",
+        "<b>Подробно</b> опишите проблему или что нужно сделать.",
         "Describe the problem or what needs to be done in one message:",
     )
 

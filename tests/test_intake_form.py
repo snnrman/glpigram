@@ -84,7 +84,7 @@ async def test_single_description_to_glpi_without_title_or_category_prompt(monke
     h = _harness()
     await h.dp.feed_update(h.bot, _text_update(h.bot, 1, "/new"))
     assert await h.ctx.get_state() == NewTicket.entering_description
-    assert _last_text(h.bot) == intake_texts.description_prompt()
+    assert _last_text(h.bot) == "<b>Подробно</b> опишите проблему или что нужно сделать."
     await h.dp.feed_update(h.bot, _text_update(h.bot, 2, DESCRIPTION))
     assert await h.ctx.get_state() == NewTicket.choosing_urgency
     keyboard = h.bot.sent[-1][1]
