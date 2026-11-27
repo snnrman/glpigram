@@ -22,7 +22,7 @@ intake_env = test_intake_integration.intake_env
 
 async def _ready(dp, bot):
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, "/new"))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Офисный ПК недоступен"))
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Офисный ПК снова недоступен"))
     await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "nt:urg:3"))
 
 

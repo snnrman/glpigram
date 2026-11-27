@@ -196,8 +196,10 @@ async def test_free_text_offer_uses_each_senders_workflow(pilot_env):
     for user_id in (PILOT, OTHER):
         await _message(env, user_id, "ПК недоступен")
         await _callback(env, user_id, "nt:offer:yes")
-    assert await _state(env, PILOT).get_state() == NewTicket.choosing_urgency
+    assert await _state(env, PILOT).get_state() == NewTicket.entering_description
     assert await _state(env, OTHER).get_state() == NewTicket.choosing_category
+    await _message(env, PILOT, "Офисный ПК снова недоступен")
+    assert await _state(env, PILOT).get_state() == NewTicket.choosing_urgency
     await _callback(env, PILOT, "nt:urg:3")
     await _callback(env, PILOT, "nt:send")
     await _callback(env, OTHER, "nt:cat:11")
@@ -205,7 +207,7 @@ async def test_free_text_offer_uses_each_senders_workflow(pilot_env):
     await _message(env, OTHER, "Подключение к ПК")
     assert await _state(env, OTHER).get_state() == NewTicket.attaching
     await _callback(env, OTHER, "nt:send")
-    env.intake.classify.assert_awaited_once_with("ПК недоступен")
+    env.intake.classify.assert_awaited_once_with("Офисный ПК снова недоступен")
     assert env.client.create_ticket.await_args.kwargs["content"] == "ПК недоступен"
     assert await env.repo.get_ticket_intake(78) is None
 
@@ -319,7 +321,7 @@ async def test_concurrent_pilot_submission_does_not_change_another_users_menu(pi
 
     env.intake.classify.side_effect = wait_for_release
     await _message(env, PILOT, "/new")
-    await _message(env, PILOT, "Офисный ПК недоступен")
+    await _message(env, PILOT, "Офисный ПК снова недоступен")
     await _callback(env, PILOT, "nt:urg:3")
     submitting = asyncio.create_task(_callback(env, PILOT, "nt:send"))
     try:

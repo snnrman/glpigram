@@ -68,6 +68,10 @@ _URGENCY_CHOICES = (
 )
 
 
+def _has_four_words(description: str) -> bool:
+    return sum(any(char.isalnum() for char in word) for word in description.split()) >= 4
+
+
 class NewTicket(StatesGroup):
     choosing_category = State()
     choosing_urgency = State()
@@ -454,6 +458,9 @@ def build_new_ticket_router(
 
     @router.message(NewTicket.entering_description, F.text)
     async def on_description(message: Message, state: FSMContext) -> None:
+        if intake is not None and not _has_four_words(message.text):
+            await message.answer(intake_texts.description_too_short())
+            return
         if not message.text.strip():
             await message.answer(texts.NEW_EXPECT_TEXT)
             return
@@ -855,6 +862,14 @@ def build_new_ticket_router(
             await cb.answer()
             return
         if intake is not None:
+            if not _has_four_words(description):
+                await state.clear()
+                await state.set_state(NewTicket.entering_description)
+                await cb.message.edit_text(
+                    intake_texts.description_too_short(), reply_markup=_cancel_keyboard()
+                )
+                await cb.answer()
+                return
             await state.set_state(NewTicket.choosing_urgency)
             await cb.message.edit_text(
                 intake_texts.urgency_prompt(), reply_markup=_urgency_keyboard(unified=True)

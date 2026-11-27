@@ -20,6 +20,7 @@ from bot.texts import intake as intake_texts
 from tests.test_access import FakeBot, _cb, _dm
 from tests.test_intake_pilot import CATEGORY_IDS, OTHER, PILOT, _settings
 
+DESCRIPTION = "VPN keeps disconnecting today"
 GLOBAL_SETTINGS = {
     "ai_intake_pilot_tg_ids": set(),
     "workload_notice_all_users": True,
@@ -90,7 +91,7 @@ async def submit(env, tg=PILOT):
         await env.dp.feed_update(env.bot, _cb(env.bot, 2, tg, "nt:cat:10"))
         await env.dp.feed_update(env.bot, _cb(env.bot, 3, tg, "nt:urg:3"))
         await env.dp.feed_update(env.bot, _dm(env.bot, 4, tg, "VPN problem"))
-    await env.dp.feed_update(env.bot, _dm(env.bot, 5, tg, "VPN keeps disconnecting"))
+    await env.dp.feed_update(env.bot, _dm(env.bot, 5, tg, DESCRIPTION))
     if new_form:
         await env.dp.feed_update(env.bot, _cb(env.bot, 6, tg, "nt:urg:3"))
     await env.dp.feed_update(env.bot, _cb(env.bot, 7, tg, "nt:send"))
@@ -122,12 +123,12 @@ async def test_nonpilot_creates_legacy_ticket_without_workload_access(env):
 def _assert_global_intake_confirmation(env, tg, glpi_id):
     env.client.create_ticket.assert_awaited_once_with(
         name="VPN connection problem",
-        content="VPN keeps disconnecting",
+        content=DESCRIPTION,
         urgency=3,
         itilcategories_id=CATEGORY_IDS["network"],
         requester_users_id=glpi_id,
     )
-    env.intake.classify.assert_awaited_once_with("VPN keeps disconnecting")
+    env.intake.classify.assert_awaited_once_with(DESCRIPTION)
     env.workload.notice_for.assert_awaited_once_with(ticket_id=77, requester_tg_id=tg)
     user_messages = [(text, markup) for chat, text, markup in env.bot.sent if chat == tg]
     assert any(text == intake_texts.description_prompt() for text, _ in user_messages)
@@ -180,7 +181,7 @@ async def test_global_rollout_does_not_allow_unlinked_user_to_create(env):
 @pytest.mark.parametrize("env", [GLOBAL_SETTINGS], indirect=True)
 async def test_global_rollout_rechecks_link_before_submitting_existing_draft(env):
     await env.dp.feed_update(env.bot, _dm(env.bot, 1, OTHER, "/new"))
-    await env.dp.feed_update(env.bot, _dm(env.bot, 2, OTHER, "VPN keeps disconnecting"))
+    await env.dp.feed_update(env.bot, _dm(env.bot, 2, OTHER, DESCRIPTION))
     await env.dp.feed_update(env.bot, _cb(env.bot, 3, OTHER, "nt:urg:3"))
     state = FSMContext(env.dp.storage, StorageKey(bot_id=env.bot.id, chat_id=OTHER, user_id=OTHER))
     assert await state.get_state() == NewTicket.attaching

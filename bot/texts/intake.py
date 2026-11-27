@@ -34,6 +34,12 @@ def description_prompt() -> str:
     )
 
 
+def description_too_short() -> str:
+    return _choose(
+        "опишите проблему чуть подробнее", "Please describe the problem in a little more detail"
+    )
+
+
 def urgency_label(value: int, *, lang: str | None = None) -> str:
     """Requester-selected impact; never infer the AI service environment from it."""
     if lang is None:

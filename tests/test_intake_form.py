@@ -33,6 +33,8 @@ from tests.test_new_ticket import (
 pytestmark = pytest.mark.asyncio
 
 DESCRIPTION = "  VPN подключается, но офисный ПК недоступен.\nОшибка появилась вчера. 🔎  "
+FOUR_WORD_DESCRIPTION = "  Не открывается\nофисная почта!  "
+SHORT_DESCRIPTION_REPLY = "опишите проблему чуть подробнее"
 CATEGORY_IDS = {key: 100 + i for i, key in enumerate(CATEGORY_NAMES)}
 
 
@@ -138,6 +140,44 @@ async def test_free_text_reused_without_retyping():
     assert h.client.create_ticket.await_args.kwargs["content"] == DESCRIPTION
     assert h.client.create_ticket.await_args.kwargs["urgency"] == 2
     assert intake_texts.description_prompt() not in [text for text, _ in h.bot.sent]
+
+
+@pytest.mark.parametrize(
+    "short", [" \n ", "🔎 ❗ ... —", "Помогите", "Нет сети", "Не работает VPN 🔎 !!!"]
+)
+async def test_short_description_requires_retry_and_four_words_advance(short):
+    h = _harness()
+    await h.dp.feed_update(h.bot, _text_update(h.bot, 1, "/new"))
+    await h.dp.feed_update(h.bot, _text_update(h.bot, 2, short))
+    assert _last_text(h.bot) == SHORT_DESCRIPTION_REPLY
+    assert await h.ctx.get_state() == NewTicket.entering_description
+    assert not (await h.ctx.get_data()).get("description")
+    h.intake.classify.assert_not_awaited()
+    h.client.create_ticket.assert_not_awaited()
+
+    await h.dp.feed_update(h.bot, _text_update(h.bot, 3, FOUR_WORD_DESCRIPTION))
+    assert await h.ctx.get_state() == NewTicket.choosing_urgency
+    assert _last_text(h.bot) == intake_texts.urgency_prompt()
+    assert (await h.ctx.get_data())["description"] == FOUR_WORD_DESCRIPTION
+
+
+async def test_confirming_short_free_text_requests_new_description():
+    h = _harness()
+    await h.dp.feed_update(h.bot, _text_update(h.bot, 1, "Не работает VPN"))
+    assert _last_text(h.bot) == texts.FREETEXT_OFFER
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 2, "nt:offer:yes"))
+    assert _last_text(h.bot) == SHORT_DESCRIPTION_REPLY
+    assert await h.ctx.get_state() == NewTicket.entering_description
+    assert not (await h.ctx.get_data()).get("description")
+    h.intake.classify.assert_not_awaited()
+    h.client.create_ticket.assert_not_awaited()
+
+    await h.dp.feed_update(h.bot, _text_update(h.bot, 3, FOUR_WORD_DESCRIPTION))
+    assert await h.ctx.get_state() == NewTicket.choosing_urgency
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 4, "nt:urg:3"))
+    await h.dp.feed_update(h.bot, _cb_update(h.bot, 5, "nt:send"))
+    h.intake.classify.assert_awaited_once_with(FOUR_WORD_DESCRIPTION)
+    assert h.client.create_ticket.await_args.kwargs["content"] == FOUR_WORD_DESCRIPTION
 
 
 @pytest.mark.parametrize(
@@ -345,13 +385,11 @@ async def test_uncertain_glpi_post_is_not_retried_or_reported_as_definite_failur
     assert texts.GLPI_ERROR not in [text for text, _ in h.bot.sent]
 
 
-async def test_blank_description_and_invalid_urgency_do_not_advance():
+async def test_invalid_urgency_does_not_advance():
     h = _harness()
     await h.dp.feed_update(h.bot, _text_update(h.bot, 1, "/new"))
-    await h.dp.feed_update(h.bot, _text_update(h.bot, 2, " \n "))
-    assert await h.ctx.get_state() == NewTicket.entering_description
-    await h.dp.feed_update(h.bot, _text_update(h.bot, 3, DESCRIPTION))
-    for n, value in enumerate(["0", "99", "bad"], 4):
+    await h.dp.feed_update(h.bot, _text_update(h.bot, 2, DESCRIPTION))
+    for n, value in enumerate(["0", "99", "bad"], 3):
         await h.dp.feed_update(h.bot, _cb_update(h.bot, n, f"nt:urg:{value}"))
     assert await h.ctx.get_state() == NewTicket.choosing_urgency
     assert "urgency" not in await h.ctx.get_data()

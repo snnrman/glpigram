@@ -129,11 +129,12 @@ async def test_one_text_reaches_glpi_and_sync_card_without_title_duplication(int
 
 async def test_free_text_is_reused_by_enabled_dispatcher(intake_env):
     dp, bot, client, _, intake, _ = intake_env
-    await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, "Офисный ПК недоступен"))
+    description = "Офисный ПК снова недоступен"
+    await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, description))
     await dp.feed_update(bot, _cb(bot, 2, REQUESTER_ID, "nt:offer:yes"))
     await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "nt:urg:4"))
     await dp.feed_update(bot, _cb(bot, 4, REQUESTER_ID, "nt:send"))
-    intake.classify.assert_awaited_once_with("Офисный ПК недоступен")
+    intake.classify.assert_awaited_once_with(description)
     assert client.create_ticket.await_args.kwargs["urgency"] == 4
     ctx = FSMContext(
         storage=dp.storage,
@@ -147,7 +148,7 @@ async def test_unknown_create_outcome_and_failed_telegram_reply_leave_no_submitt
 ):
     dp, bot, client, _, _, _ = intake_env
     await dp.feed_update(bot, _dm(bot, 1, REQUESTER_ID, "/new"))
-    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Офисный ПК недоступен"))
+    await dp.feed_update(bot, _dm(bot, 2, REQUESTER_ID, "Офисный ПК снова недоступен"))
     await dp.feed_update(bot, _cb(bot, 3, REQUESTER_ID, "nt:urg:3"))
     client.create_ticket.side_effect = GlpiHTTPError(
         "ticket created but no id returned", response=httpx.Response(201, content=b"[]")
